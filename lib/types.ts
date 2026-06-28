@@ -44,6 +44,7 @@ export interface Role {
   job_url: string;
   location: string;
   seniority: Seniority | string;
+  salary_range: string;
   description_summary: string;
   fit_signal: string;
 }

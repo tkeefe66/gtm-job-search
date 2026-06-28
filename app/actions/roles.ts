@@ -2,7 +2,8 @@
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { supabase } from "@/lib/supabase";
-import { addJob } from "./jobs";
+import { addJob, updateJob } from "./jobs";
+import { scoreFit } from "./parse-role";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 
 const SYSTEM =
@@ -51,7 +52,7 @@ export async function findAndSaveRoles(
       ? ` Their careers page may be: ${startup.careers_url}.`
       : "";
 
-    const prompt = `Search for open product leadership roles at "${startup.company}".${hint} Look for VP of Product, CPO, Head of Product, Director of Product, and Senior PM positions. Return a JSON array where each object has these exact fields: role_title (string), job_url (string or empty), location (string), seniority (string, one of: "VP/CPO", "Director", "Senior PM", "PM"), description_summary (string, 1-2 sentences), fit_signal (string, 1 sentence on why a VP of Product with B2B SaaS and AI product background might fit). If no roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`;
+    const prompt = `Search for open product leadership roles at "${startup.company}".${hint} Look for VP of Product, CPO, Head of Product, Director of Product, and Senior PM positions. Visit each job posting URL if available to extract the full details. Return a JSON array where each object has these exact fields: role_title (string), job_url (string or empty), location (string), seniority (string, one of: "VP/CPO", "Director", "Senior PM", "PM"), salary_range (string, exact salary or range from the job posting — e.g. "$160,000 - $210,000" — or empty string if not listed), description_summary (string, 1-2 sentences about the role), fit_signal (string, 1 sentence on why a VP of Product with B2B SaaS and AI product background might fit). If no roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`;
 
     const raw = await callWithWebSearch({
       system: SYSTEM,
@@ -80,24 +81,46 @@ export async function findAndSaveRoles(
       { onConflict: "company" }
     );
 
-    // Add each role to the jobs table with status "New".
-    for (const role of roles) {
-      await addJob({
-        company: startup.company,
-        role_title: role.role_title,
-        status: "New",
-        seniority: role.seniority || null,
-        location: role.location || null,
-        job_url: role.job_url || null,
-        careers_url: startup.careers_url || null,
-        category: startup.category || null,
-        raised: startup.raised || null,
-        stage: startup.stage || null,
-        traction: startup.traction || null,
-        fit_summary: role.fit_signal || null,
-        source: "Discover",
-      });
-    }
+    // Add each role to the jobs table, then score fit in parallel.
+    const companyDescription = `${startup.tagline}. ${startup.traction ?? ""}`.trim();
+    await Promise.all(
+      roles.map(async (role) => {
+        const jobRes = await addJob({
+          company: startup.company,
+          role_title: role.role_title,
+          status: "New",
+          seniority: role.seniority || null,
+          location: role.location || null,
+          job_url: role.job_url || null,
+          careers_url: startup.careers_url || null,
+          category: startup.category || null,
+          raised: startup.raised || null,
+          stage: startup.stage || null,
+          traction: startup.traction || null,
+          salary_range: role.salary_range || null,
+          fit_summary: role.fit_signal || null,
+          source: "Discover",
+        });
+
+        if (jobRes.job) {
+          const scored = await scoreFit({
+            company: startup.company,
+            role_title: role.role_title,
+            company_description: companyDescription,
+            key_skills: role.description_summary,
+            fit_summary: role.fit_signal,
+            department: "",
+            location: role.location,
+          });
+          if (scored.score > 0) {
+            await updateJob(jobRes.job.id, {
+              fit_score: scored.score,
+              fit_summary: scored.rationale || role.fit_signal || null,
+            });
+          }
+        }
+      })
+    );
 
     return { roles, message };
   } catch (err) {
