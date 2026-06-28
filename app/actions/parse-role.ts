@@ -11,6 +11,8 @@ export interface ParsedRole {
   job_url: string;
   company_url: string;
   company_description: string;
+  stage: string;
+  category: string;
   fit_summary: string;
   key_skills: string;
   recruiter_name: string;
@@ -36,6 +38,8 @@ Return a JSON object with these exact fields:
 - job_url (string, any job listing URL found in the text or empty)
 - company_url (string, the hiring company's main website URL found via web search or empty)
 - company_description (string, 1-2 sentence description of what the hiring company does, from their website or web search)
+- stage (string, funding stage or ownership type of the hiring company based on web search: e.g. "Series B", "Series C", "PE-backed", "Public", "Late Stage" — or empty if unknown)
+- category (string, industry or sector of the hiring company: e.g. "AI Infra", "FinTech", "Dev Tools", "Vertical SaaS", "MarTech" — or empty if unknown)
 - fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
 - key_skills (string, comma-separated list of skills mentioned)
 - recruiter_name (string, the name of the recruiter or person who sent this message or empty)

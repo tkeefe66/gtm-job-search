@@ -17,6 +17,17 @@ const STATUS_STYLES: Record<string, string> = {
 
 const FUNNEL: JobStatus[] = ["New", "Reviewing", "Applied", "Offer"];
 
+type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category";
+type SortDir = "asc" | "desc";
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  return (
+    <span className={`ml-1 inline-block text-[10px] ${active ? "text-ink" : "text-ink/30"}`}>
+      {active ? (dir === "asc" ? "↑" : "↓") : "↕"}
+    </span>
+  );
+}
+
 export default function RolesTable() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,6 +37,8 @@ export default function RolesTable() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showRecruiter, setShowRecruiter] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("company");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   async function load() {
     setLoading(true);
@@ -45,18 +58,42 @@ export default function RolesTable() {
     return c;
   }, [jobs]);
 
-  const filtered = jobs.filter((j) => {
-    if (statusFilter !== "All" && j.status !== statusFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      return (
-        j.company.toLowerCase().includes(q) ||
-        j.role_title.toLowerCase().includes(q) ||
-        (j.location ?? "").toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  }
+
+  const filtered = useMemo(() => {
+    let list = jobs.filter((j) => {
+      if (statusFilter !== "All" && j.status !== statusFilter) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return (
+          j.company.toLowerCase().includes(q) ||
+          j.role_title.toLowerCase().includes(q) ||
+          (j.location ?? "").toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    list = [...list].sort((a, b) => {
+      let av: string | number = "";
+      let bv: string | number = "";
+      if (sortKey === "fit_score") {
+        av = a.fit_score ?? 0;
+        bv = b.fit_score ?? 0;
+        return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
+      }
+      av = ((a[sortKey as keyof Job] as string | null) ?? "").toLowerCase();
+      bv = ((b[sortKey as keyof Job] as string | null) ?? "").toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [jobs, search, statusFilter, sortKey, sortDir]);
 
   async function handleStatus(job: Job, status: JobStatus) {
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
@@ -71,6 +108,19 @@ export default function RolesTable() {
   async function handleFieldSave(id: string, field: keyof Job, value: string) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
     await updateJob(id, { [field]: value } as Partial<Job>);
+  }
+
+  function Th({ label, sortable, col }: { label: string; sortable?: SortKey; col?: string }) {
+    const active = sortable && sortKey === sortable;
+    return (
+      <th
+        className={`px-4 py-3 font-medium text-ink/60 whitespace-nowrap text-left ${sortable ? "cursor-pointer select-none hover:text-ink" : ""} ${col ?? ""}`}
+        onClick={sortable ? () => toggleSort(sortable) : undefined}
+      >
+        {label}
+        {sortable && <SortIcon active={!!active} dir={sortDir} />}
+      </th>
+    );
   }
 
   return (
@@ -155,15 +205,17 @@ export default function RolesTable() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate bg-canvas text-left">
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Company</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Job Title</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Department</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Location</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Salary Range</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Fit Score</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Status</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap">Source</th>
-                <th className="px-4 py-3 font-medium text-ink/60 whitespace-nowrap"></th>
+                <Th label="Company" sortable="company" />
+                <Th label="Job Title" sortable="role_title" />
+                <Th label="Stage" sortable="stage" />
+                <Th label="Industry" sortable="category" />
+                <Th label="Department" sortable="department" />
+                <Th label="Location" sortable="location" />
+                <Th label="Salary Range" sortable="salary_range" />
+                <Th label="Fit Score" sortable="fit_score" />
+                <Th label="Status" sortable="status" />
+                <Th label="Source" sortable="source" />
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="bg-white">
@@ -191,6 +243,12 @@ export default function RolesTable() {
                       ) : (
                         job.role_title
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
+                      {job.stage ? <StageBadge stage={job.stage} /> : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
+                      {job.category ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
                       {job.department ?? job.seniority ?? "—"}
@@ -227,10 +285,11 @@ export default function RolesTable() {
 
                   {expandedId === job.id && (
                     <tr key={`${job.id}-expanded`} className="border-b border-slate">
-                      <td colSpan={9} className="bg-canvas px-4 py-4">
+                      <td colSpan={11} className="bg-canvas px-4 py-4">
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
                           {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
+                          {job.company_description && <Detail label="About company">{job.company_description}</Detail>}
                           {job.traction && <Detail label="Traction">{job.traction}</Detail>}
                           <Detail label="Notes">
                             <InlineEdit value={job.notes ?? ""} onSave={(v) => handleFieldSave(job.id, "notes", v)} placeholder="Add notes…" />
@@ -240,6 +299,12 @@ export default function RolesTable() {
                           </Detail>
                           <Detail label="Department">
                             <InlineEdit value={job.department ?? ""} onSave={(v) => handleFieldSave(job.id, "department", v)} placeholder="e.g. Product" />
+                          </Detail>
+                          <Detail label="Stage">
+                            <InlineEdit value={job.stage ?? ""} onSave={(v) => handleFieldSave(job.id, "stage", v)} placeholder="e.g. Series B, PE-backed, Public" />
+                          </Detail>
+                          <Detail label="Industry">
+                            <InlineEdit value={job.category ?? ""} onSave={(v) => handleFieldSave(job.id, "category", v)} placeholder="e.g. AI Infra, FinTech, Dev Tools" />
                           </Detail>
                           {(job.recruiter_name || job.recruiter_email || job.recruiter_company || job.recruiter_notes) && (
                             <div className="col-span-full rounded-lg border border-[#EDE9FE] bg-[#F5F3FF] p-3">
@@ -257,6 +322,9 @@ export default function RolesTable() {
                             </div>
                           )}
                           <div className="flex gap-3">
+                            {job.company_url && (
+                              <a href={job.company_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Company site →</a>
+                            )}
                             {job.job_url && (
                               <a href={job.job_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Job listing →</a>
                             )}
@@ -282,6 +350,21 @@ export default function RolesTable() {
         <RecruiterPanel onClose={() => setShowRecruiter(false)} onAdded={() => { setShowRecruiter(false); void load(); }} />
       )}
     </div>
+  );
+}
+
+function StageBadge({ stage }: { stage: string }) {
+  const s = stage.toLowerCase();
+  let cls = "bg-[#F3F4F6] text-[#6B7280]";
+  if (s.includes("public") || s.includes("ipo")) cls = "bg-[#DCFCE7] text-[#14532D]";
+  else if (s.includes("pe") || s.includes("private equity")) cls = "bg-[#FEF3C7] text-[#92400E]";
+  else if (s.includes("series d") || s.includes("series e") || s.includes("late") || s.includes("growth")) cls = "bg-[#EDE9FE] text-[#5B21B6]";
+  else if (s.includes("series c")) cls = "bg-[#DBEAFE] text-[#1E40AF]";
+  else if (s.includes("series b")) cls = "bg-[#E0F2FE] text-[#0369A1]";
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
+      {stage}
+    </span>
   );
 }
 
@@ -342,7 +425,7 @@ function InlineEdit({ value, onSave, placeholder }: { value: string; onSave: (v:
 const EMPTY_FORM = {
   company: "", role_title: "", status: "New" as JobStatus,
   seniority: "", location: "", job_url: "", careers_url: "",
-  category: "", salary_range: "", source: "", department: "",
+  category: "", salary_range: "", source: "", department: "", stage: "",
 };
 
 function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
@@ -363,6 +446,7 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
       job_url: form.job_url || null, careers_url: form.careers_url || null,
       category: form.category || null, salary_range: form.salary_range || null,
       source: form.source || null, department: form.department || null,
+      stage: form.stage || null,
     });
     setSaving(false);
     if (res.error) { setError(res.error); return; }
@@ -371,6 +455,7 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
 
   const fields: [keyof typeof EMPTY_FORM, string][] = [
     ["company", "Company *"], ["role_title", "Role title *"], ["department", "Department"],
+    ["stage", "Stage (e.g. Series B, PE-backed, Public)"], ["category", "Industry"],
     ["location", "Location"], ["salary_range", "Salary range"], ["source", "Source"],
     ["job_url", "Job URL"], ["careers_url", "Careers URL"],
   ];
