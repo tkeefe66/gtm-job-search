@@ -16,6 +16,36 @@ const DATE_RANGE_LABELS: Record<DateRange, string> = {
   "6m": "the past 6 months",
 };
 
+// Returns all saved startups across every date range, deduped by company name.
+export async function getAllDiscoveredStartups(): Promise<{
+  startups: Startup[];
+  fetchedAt: string | null;
+  error?: string;
+}> {
+  const { data, error } = await supabase
+    .from("discovered_startups")
+    .select("startups, fetched_at")
+    .order("fetched_at", { ascending: false });
+
+  if (error) return { startups: [], fetchedAt: null, error: error.message };
+  if (!data || data.length === 0) return { startups: [], fetchedAt: null };
+
+  // Flatten all startups, dedupe by company name (keep first occurrence = most recent fetch).
+  const seen = new Set<string>();
+  const all: Startup[] = [];
+  for (const row of data) {
+    for (const s of row.startups as Startup[]) {
+      const key = s.company.toLowerCase().trim();
+      if (!seen.has(key)) {
+        seen.add(key);
+        all.push(s);
+      }
+    }
+  }
+
+  return { startups: all, fetchedAt: data[0].fetched_at };
+}
+
 export async function getDiscoveredStartups(
   dateRange: DateRange,
   searchTerm?: string

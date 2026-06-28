@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { discoverStartups, getDiscoveredStartups, type DateRange } from "@/app/actions/discover";
+import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
@@ -24,26 +24,29 @@ export default function Discover() {
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
 
+  // Load all saved results across every date range once on mount.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingCached(true);
       setError(null);
-      const res = await getDiscoveredStartups(dateRange);
+      const res = await getAllDiscoveredStartups();
       if (cancelled) return;
       setStartups(res.startups);
       setFetchedAt(res.fetchedAt);
       setLoadingCached(false);
     })();
     return () => { cancelled = true; };
-  }, [dateRange]);
+  }, []);
 
   async function run() {
     setLoading(true);
     setError(null);
     const res = await discoverStartups(undefined, dateRange);
     if (res.error) setError(res.error);
-    setStartups(res.startups);
+    // After refresh, reload all results so new ones merge in.
+    const all = await getAllDiscoveredStartups();
+    setStartups(all.startups);
     setFetchedAt(new Date().toISOString());
     setLoading(false);
   }
