@@ -108,11 +108,17 @@ Key skills required: ${opts.key_skills}
 Summary: ${opts.fit_summary}
 
 SCORING GUIDE:
-1 = Poor fit — wrong level, wrong industry, or missing core requirements
-2 = Weak fit — some overlap but significant gaps or mismatches
-3 = Moderate fit — relevant background but not a standout match
-4 = Strong fit — clear alignment on most dimensions
-5 = Exceptional fit — almost tailor-made, would be a top candidate
+1 = Poor fit — wrong industry, no relevant overlap, or clearly too junior/unrelated
+2 = Weak fit — some domain overlap but significant gaps, or a narrow IC PM role with no strategic scope
+3 = Moderate fit — relevant domain and background but a standard PM role without broad ownership or leadership scope
+4 = Strong fit — clear domain alignment AND (broad ownership across multiple surfaces, lead/principal/head-level scope, or explicit cross-functional leadership even without a VP title)
+5 = Exceptional fit — almost tailor-made: VP/CPO/Head-level title OR a lead role with VP-equivalent scope at a company where the domain is a direct match
+
+TITLE SCOPE SIGNALS (use these to adjust score):
+- "Core", "Lead", "Principal", "Head of", "Staff" in the title = broader scope, score higher than a standard PM
+- "VP of Product", "CPO", "Director" = leadership level, eligible for 4-5 if domain matches
+- "Product Manager - [specific feature]" = narrow IC scope, cap at 3 unless domain is exceptional
+- Ignore seniority level for scoring — a Lead PM at the right company beats a VP title at a bad fit
 
 Return a JSON object with:
 - score (integer 1-5)
