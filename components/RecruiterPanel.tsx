@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { parseRecruiterText } from "@/app/actions/parse-role";
+import { parseRecruiterText, scoreFit } from "@/app/actions/parse-role";
 import { addJob } from "@/app/actions/jobs";
 import { JOB_STATUSES, type JobStatus } from "@/lib/types";
 import { Spinner } from "./ui";
@@ -12,16 +12,16 @@ interface Props {
 }
 
 const EMPTY = {
-  // Parsed from AI
   company: "",
   role_title: "",
   location: "",
   salary_range: "",
   department: "",
   job_url: "",
+  company_url: "",
+  company_description: "",
   fit_summary: "",
   key_skills: "",
-  // Recruiter info
   recruiter_name: "",
   recruiter_email: "",
   recruiter_company: "",
@@ -36,6 +36,7 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
   const [parseError, setParseError] = useState<string | null>(null);
   const [form, setForm] = useState({ ...EMPTY });
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   function set(k: keyof typeof EMPTY, v: string) {
@@ -49,9 +50,7 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
     const res = await parseRecruiterText(pasteText);
     setParsing(false);
     if (res.error) { setParseError(res.error); return; }
-    if (res.role) {
-      setForm((f) => ({ ...f, ...res.role }));
-    }
+    if (res.role) setForm((f) => ({ ...f, ...res.role }));
     setStep("review");
   }
 
@@ -61,25 +60,54 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
       return;
     }
     setSaving(true);
-    const res = await addJob({
-      company: form.company,
-      role_title: form.role_title,
-      status: form.status,
-      location: form.location || null,
-      salary_range: form.salary_range || null,
-      department: form.department || null,
-      job_url: form.job_url || null,
-      fit_summary: form.fit_summary || null,
-      key_skills: form.key_skills || null,
-      recruiter_name: form.recruiter_name || null,
-      recruiter_email: form.recruiter_email || null,
-      recruiter_company: form.recruiter_company || null,
-      recruiter_notes: form.recruiter_notes || null,
-      notes: pasteText || null,
-      source: "Recruiter",
-    });
+    setSaveError(null);
+
+    // Score fit in parallel with saving.
+    setSaveStatus("Scoring fit…");
+    const [scoreRes, jobRes] = await Promise.all([
+      scoreFit({
+        company: form.company,
+        role_title: form.role_title,
+        company_description: form.company_description,
+        key_skills: form.key_skills,
+        fit_summary: form.fit_summary,
+        department: form.department,
+        location: form.location,
+      }),
+      addJob({
+        company: form.company,
+        role_title: form.role_title,
+        status: form.status,
+        location: form.location || null,
+        salary_range: form.salary_range || null,
+        department: form.department || null,
+        job_url: form.job_url || null,
+        company_url: form.company_url || null,
+        company_description: form.company_description || null,
+        fit_summary: form.fit_summary || null,
+        key_skills: form.key_skills || null,
+        recruiter_name: form.recruiter_name || null,
+        recruiter_email: form.recruiter_email || null,
+        recruiter_company: form.recruiter_company || null,
+        recruiter_notes: form.recruiter_notes || null,
+        notes: pasteText || null,
+        source: "Recruiter",
+      }),
+    ]);
+
+    if (jobRes.error) { setSaving(false); setSaveError(jobRes.error); return; }
+
+    // If we got a fit score, patch it onto the saved job.
+    if (jobRes.job && scoreRes.score > 0) {
+      const { updateJob } = await import("@/app/actions/jobs");
+      await updateJob(jobRes.job.id, {
+        fit_score: scoreRes.score,
+        fit_summary: scoreRes.rationale || form.fit_summary || null,
+      });
+    }
+
     setSaving(false);
-    if (res.error) { setSaveError(res.error); return; }
+    setSaveStatus(null);
     onAdded();
   }
 
@@ -90,7 +118,9 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
           <div>
             <h3 className="text-lg font-heading font-semibold">Add recruiter role</h3>
             <p className="text-xs text-ink/50">
-              {step === "paste" ? "Paste the recruiter message or job description" : "Review and edit the extracted details"}
+              {step === "paste"
+                ? "Paste the recruiter message or job description"
+                : "Review and edit the extracted details"}
             </p>
           </div>
           <button onClick={onClose} className="text-ink/50 hover:text-ink">✕</button>
@@ -109,7 +139,7 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
             {parseError && (
               <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{parseError}</div>
             )}
-            {parsing && <Spinner label="Extracting role details…" />}
+            {parsing && <Spinner label="Extracting role details and looking up company…" />}
             <div className="flex gap-3">
               <button
                 onClick={handleParse}
@@ -128,13 +158,41 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         {/* Step 2 — Review */}
         {step === "review" && (
           <div className="flex flex-col gap-4">
+            {/* Company info */}
+            <div className="rounded-lg border border-slate p-4">
+              <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink/50">Company</h4>
+              <div className="flex flex-col gap-3">
+                {(
+                  [
+                    ["company", "Company name *"],
+                    ["company_url", "Company website"],
+                  ] as [keyof typeof EMPTY, string][]
+                ).map(([key, label]) => (
+                  <Field key={key} label={label}>
+                    <input
+                      value={form[key] as string}
+                      onChange={(e) => set(key, e.target.value)}
+                      className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
+                    />
+                  </Field>
+                ))}
+                <Field label="Company description">
+                  <textarea
+                    value={form.company_description}
+                    onChange={(e) => set("company_description", e.target.value)}
+                    rows={2}
+                    className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
+                  />
+                </Field>
+              </div>
+            </div>
+
             {/* Role details */}
             <div className="rounded-lg border border-slate p-4">
               <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink/50">Role details</h4>
               <div className="flex flex-col gap-3">
                 {(
                   [
-                    ["company", "Company *"],
                     ["role_title", "Role title *"],
                     ["department", "Department"],
                     ["location", "Location"],
@@ -205,6 +263,8 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
             {saveError && (
               <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{saveError}</div>
             )}
+
+            {saving && <Spinner label={saveStatus ?? "Saving…"} />}
 
             <div className="flex gap-3">
               <button

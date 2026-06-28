@@ -1,6 +1,6 @@
 "use server";
 
-import { anthropic, MODEL, parseJson } from "@/lib/anthropic";
+import { callWithWebSearch, anthropic, MODEL, parseJson } from "@/lib/anthropic";
 
 export interface ParsedRole {
   company: string;
@@ -9,6 +9,8 @@ export interface ParsedRole {
   salary_range: string;
   department: string;
   job_url: string;
+  company_url: string;
+  company_description: string;
   fit_summary: string;
   key_skills: string;
   recruiter_name: string;
@@ -20,31 +22,99 @@ export async function parseRecruiterText(
   text: string
 ): Promise<{ role?: ParsedRole; error?: string }> {
   try {
-    const message = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1000,
+    const raw = await callWithWebSearch({
       system:
-        "You are a recruiting assistant. Extract structured job details from recruiter messages, job descriptions, or any pasted text about a role. Return ONLY valid JSON, no markdown, no preamble.",
-      messages: [
-        {
-          role: "user",
-          content: `Extract all details from this recruiter message or job description. Return a JSON object with these exact fields:
+        "You are a recruiting assistant with web search access. Extract structured job and recruiter details from pasted text, then search the web to find the hiring company's website and a short description of what they do. Return ONLY valid JSON, no markdown, no preamble.",
+      prompt: `Extract all details from this recruiter message or job description, then search the web for the hiring company to find their website URL and a short description.
+
+Return a JSON object with these exact fields:
 - company (string, the hiring company name or empty)
 - role_title (string, job title or empty)
 - location (string, city/remote/hybrid or empty)
 - salary_range (string, any salary or compensation info mentioned or empty)
 - department (string, team or department or empty)
-- job_url (string, any job listing URL found or empty)
-- fit_summary (string, 1-2 sentences on what makes this role interesting)
+- job_url (string, any job listing URL found in the text or empty)
+- company_url (string, the hiring company's main website URL found via web search or empty)
+- company_description (string, 1-2 sentence description of what the hiring company does, from their website or web search)
+- fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
 - key_skills (string, comma-separated list of skills mentioned)
 - recruiter_name (string, the name of the recruiter or person who sent this message or empty)
 - recruiter_email (string, any email address belonging to the recruiter or empty)
-- recruiter_company (string, the recruiter's agency or staffing firm name — NOT the hiring company — or empty)
+- recruiter_company (string, the recruiter's agency or staffing firm — NOT the hiring company — or empty)
 
-If a field is not present, use an empty string. Return ONLY the JSON object.
+If a field is not present or not found, use an empty string. Return ONLY the JSON object.
 
 Text to parse:
 ${text}`,
+      maxTokens: 1500,
+    });
+
+    const role = parseJson<ParsedRole>(raw);
+    return { role };
+  } catch (err) {
+    console.error("parseRecruiterText error:", err);
+    return {
+      error: err instanceof Error ? err.message : "Failed to parse role details.",
+    };
+  }
+}
+
+// Chad's background used for ruthless fit scoring.
+const CHAD_BACKGROUND = `
+Chad Holdorf is a VP of Product / CPO-level candidate with this background:
+- 10+ years in B2B SaaS product leadership (VP/CPO level)
+- Deep experience: Demandbase (AI-powered ABM platform), Salesforce (SDK, Hyperforce, developer platform)
+- Expertise: AI/agentic products, developer platforms, enterprise B2B SaaS, multi-agent systems, platform integrations
+- Strong: go-to-market, 0-to-1 product builds, technical PM work with engineers and researchers
+- Weaker fit: pure consumer products, hardware, non-tech industries, roles that don't need a senior leader
+- Looking for: VP of Product, CPO, Head of Product, Director of Product at AI-first or B2B SaaS companies
+- Not interested in: IC roles (Senior PM or below), companies with no AI angle
+`.trim();
+
+export async function scoreFit(opts: {
+  company: string;
+  role_title: string;
+  company_description: string;
+  key_skills: string;
+  fit_summary: string;
+  department: string;
+  location: string;
+}): Promise<{ score: number; rationale: string; error?: string }> {
+  try {
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 500,
+      system:
+        "You are a ruthless career coach scoring job fit for a specific candidate. Be honest and harsh — most roles should score 2-3. Only give 4-5 for genuinely strong matches. A 5 is rare. Return ONLY valid JSON.",
+      messages: [
+        {
+          role: "user",
+          content: `Score how well this role fits this candidate on a scale of 1-5. Be ruthless.
+
+CANDIDATE:
+${CHAD_BACKGROUND}
+
+ROLE:
+Company: ${opts.company}
+Company description: ${opts.company_description}
+Title: ${opts.role_title}
+Department: ${opts.department}
+Location: ${opts.location}
+Key skills required: ${opts.key_skills}
+Summary: ${opts.fit_summary}
+
+SCORING GUIDE:
+1 = Poor fit — wrong level, wrong industry, or missing core requirements
+2 = Weak fit — some overlap but significant gaps or mismatches
+3 = Moderate fit — relevant background but not a standout match
+4 = Strong fit — clear alignment on most dimensions
+5 = Exceptional fit — almost tailor-made, would be a top candidate
+
+Return a JSON object with:
+- score (integer 1-5)
+- rationale (string, 1-2 blunt sentences explaining the score)
+
+Return ONLY the JSON object.`,
         },
       ],
     });
@@ -54,12 +124,10 @@ ${text}`,
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("");
 
-    const role = parseJson<ParsedRole>(raw);
-    return { role };
+    const result = parseJson<{ score: number; rationale: string }>(raw);
+    return { score: Math.min(5, Math.max(1, Math.round(result.score))), rationale: result.rationale };
   } catch (err) {
-    console.error("parseRecruiterText error:", err);
-    return {
-      error: err instanceof Error ? err.message : "Failed to parse role details.",
-    };
+    console.error("scoreFit error:", err);
+    return { score: 0, rationale: "", error: err instanceof Error ? err.message : "Failed to score fit." };
   }
 }

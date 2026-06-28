@@ -77,6 +77,8 @@ export interface Job {
   recruiter_email: string | null;
   recruiter_company: string | null;
   recruiter_notes: string | null;
+  company_url: string | null;
+  company_description: string | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;
