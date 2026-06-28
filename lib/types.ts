@@ -73,6 +73,10 @@ export interface Job {
   notes: string | null;
   fit_score: number | null;
   fit_summary: string | null;
+  recruiter_name: string | null;
+  recruiter_email: string | null;
+  recruiter_company: string | null;
+  recruiter_notes: string | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;

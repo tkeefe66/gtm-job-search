@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
 import { JOB_STATUSES, type Job, type JobStatus } from "@/lib/types";
 import { Spinner } from "./ui";
+import RecruiterPanel from "./RecruiterPanel";
 
 const STATUS_STYLES: Record<string, string> = {
   New: "bg-[#DBEAFE] text-[#1E40AF]",
@@ -24,6 +25,7 @@ export default function RolesTable() {
   const [statusFilter, setStatusFilter] = useState<JobStatus | "All">("All");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [showRecruiter, setShowRecruiter] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -81,12 +83,20 @@ export default function RolesTable() {
             {jobs.length} role{jobs.length !== 1 ? "s" : ""} tracked. Find new ones from the Discover tab.
           </p>
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90"
-        >
-          + Add role manually
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowRecruiter(true)}
+            className="rounded-md border border-ink px-4 py-2 text-sm font-medium transition hover:bg-ink hover:text-white"
+          >
+            + Recruiter role
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90"
+          >
+            + Add manually
+          </button>
+        </div>
       </div>
 
       {/* Funnel summary */}
@@ -196,7 +206,15 @@ export default function RolesTable() {
                     <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
                     </td>
-                    <td className="px-4 py-3 text-ink/50 whitespace-nowrap">{job.source ?? "—"}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {job.source === "Recruiter" ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[#EDE9FE] px-2.5 py-0.5 text-xs font-medium text-[#5B21B6]">
+                          Recruiter
+                        </span>
+                      ) : (
+                        <span className="text-ink/50">{job.source ?? "—"}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => handleDelete(job.id)}
@@ -223,6 +241,21 @@ export default function RolesTable() {
                           <Detail label="Department">
                             <InlineEdit value={job.department ?? ""} onSave={(v) => handleFieldSave(job.id, "department", v)} placeholder="e.g. Product" />
                           </Detail>
+                          {(job.recruiter_name || job.recruiter_email || job.recruiter_company || job.recruiter_notes) && (
+                            <div className="col-span-full rounded-lg border border-[#EDE9FE] bg-[#F5F3FF] p-3">
+                              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#5B21B6]">Recruiter</div>
+                              <div className="flex flex-wrap gap-4 text-sm">
+                                {job.recruiter_name && <span><span className="text-ink/50">Name: </span>{job.recruiter_name}</span>}
+                                {job.recruiter_company && <span><span className="text-ink/50">Agency: </span>{job.recruiter_company}</span>}
+                                {job.recruiter_email && (
+                                  <span><span className="text-ink/50">Email: </span>
+                                    <a href={`mailto:${job.recruiter_email}`} className="underline underline-offset-2">{job.recruiter_email}</a>
+                                  </span>
+                                )}
+                              </div>
+                              {job.recruiter_notes && <p className="mt-2 text-sm text-ink/70">{job.recruiter_notes}</p>}
+                            </div>
+                          )}
                           <div className="flex gap-3">
                             {job.job_url && (
                               <a href={job.job_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Job listing →</a>
@@ -244,6 +277,9 @@ export default function RolesTable() {
 
       {showAdd && (
         <AddPanel onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); void load(); }} />
+      )}
+      {showRecruiter && (
+        <RecruiterPanel onClose={() => setShowRecruiter(false)} onAdded={() => { setShowRecruiter(false); void load(); }} />
       )}
     </div>
   );
