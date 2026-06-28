@@ -29,7 +29,7 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body className="min-h-screen bg-canvas text-ink antialiased">
         <Nav />
-        <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6">
           {children}
         </main>
       </body>
