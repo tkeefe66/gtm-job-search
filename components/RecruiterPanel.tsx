@@ -78,6 +78,9 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         fit_summary: form.fit_summary,
         department: form.department,
         location: form.location,
+        arr: form.arr || undefined,
+        exit_signal: form.exit_signal || undefined,
+        backer: form.backer || undefined,
       }),
       addJob({
         company: form.company,

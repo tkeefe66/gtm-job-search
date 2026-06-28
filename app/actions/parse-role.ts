@@ -89,6 +89,9 @@ export async function scoreFit(opts: {
   fit_summary: string;
   department: string;
   location: string;
+  arr?: string;
+  exit_signal?: string;
+  backer?: string;
 }): Promise<{ score: number; rationale: string; error?: string }> {
   try {
     const message = await anthropic.messages.create({
@@ -110,6 +113,9 @@ Company description: ${opts.company_description}
 Title: ${opts.role_title}
 Department: ${opts.department}
 Location: ${opts.location}
+ARR: ${opts.arr || "unknown"}
+Backer / investor: ${opts.backer || "unknown"}
+Exit signal: ${opts.exit_signal || "none mentioned"}
 Key skills required: ${opts.key_skills}
 Summary: ${opts.fit_summary}
 
@@ -125,6 +131,13 @@ TITLE SCOPE SIGNALS (use these to adjust score):
 - "VP of Product", "CPO", "Director" = leadership level, eligible for 4-5 if domain matches
 - "Product Manager - [specific feature]" = narrow IC scope, cap at 3 unless domain is exceptional
 - Ignore seniority level for scoring — a Lead PM at the right company beats a VP title at a bad fit
+
+FINANCIAL SIGNALS (use these to adjust score up or down):
+- High ARR ($100M+) with a clear exit signal (PE exit, IPO path) = strong upward signal — equity likely meaningful, role has real scope
+- PE-backed with exit planned = structured liquidity event coming, high upside if the fit is there — bump score +0.5 if other signals are strong
+- Top-tier backer (a16z, Sequoia, Benchmark, General Catalyst, etc.) = legitimacy signal, bump slightly
+- Unknown backer or pre-revenue = neutral, don't penalize unless other signals are weak
+- Very high ARR ($500M+) at a PE-backed company heading to exit = rare opportunity signal, weight positively
 
 Return a JSON object with:
 - score (integer 1-5)
