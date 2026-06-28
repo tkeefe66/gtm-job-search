@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
 
 const SYSTEM =
-  "You are a startup funding analyst. Search for the most notable AI and tech startup funding rounds. Focus on seed through Series B companies. Return ONLY valid JSON, no markdown, no preamble.";
+  "You are a startup funding analyst. Search for the most notable AI and tech startup funding rounds. Focus exclusively on Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Exclude seed, pre-seed, and Series A rounds entirely. Return ONLY valid JSON, no markdown, no preamble.";
 
 export type DateRange = "7d" | "30d" | "3m" | "6m";
 
@@ -46,7 +46,7 @@ export async function discoverStartups(
       : "";
 
     const period = DATE_RANGE_LABELS[dateRange];
-    const prompt = `${focus}Find the 5-10 most notable AI and tech startup funding rounds announced in ${period} (seed through Series B). For each, return a JSON array of objects with these exact fields: company (string), tagline (string), raised (string e.g. "$12M"), stage (string e.g. "Series A"), lead_investor (string), founded (string e.g. "2023"), traction (string, one line on momentum), careers_url (string, best guess careers page URL or empty string), category (string e.g. "AI Infra", "Dev Tools"). Return ONLY the JSON array.`;
+    const prompt = `${focus}Find the 5-10 most notable AI and tech startup funding rounds announced in ${period}. Only include Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Do NOT include seed, pre-seed, or Series A rounds. For each, return a JSON array of objects with these exact fields: company (string), tagline (string), raised (string e.g. "$12M"), stage (string e.g. "Series A"), lead_investor (string), founded (string e.g. "2023"), traction (string, one line on momentum), careers_url (string, best guess careers page URL or empty string), category (string e.g. "AI Infra", "Dev Tools"). Return ONLY the JSON array.`;
 
     const raw = await callWithWebSearch({
       system: SYSTEM,
