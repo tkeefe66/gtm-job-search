@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
+import Nav from "@/components/Nav";
 import "./globals.css";
 
 const inter = Inter({
@@ -27,7 +28,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body className="min-h-screen bg-canvas text-ink antialiased">
-        {children}
+        <Nav />
+        <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+          {children}
+        </main>
       </body>
     </html>
   );

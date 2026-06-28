@@ -1,11 +1,23 @@
 export type JobStatus =
-  | "Tracking"
+  | "New"
+  | "Reviewing"
   | "Applied"
-  | "Interviewing"
-  | "Offer"
-  | "Passed";
+  | "Not Interested"
+  | "Rejected"
+  | "Offer";
 
 export const JOB_STATUSES: JobStatus[] = [
+  "New",
+  "Reviewing",
+  "Applied",
+  "Not Interested",
+  "Rejected",
+  "Offer",
+];
+
+// Legacy pipeline statuses for Tracker funnel view
+export type PipelineStatus = "Tracking" | "Applied" | "Interviewing" | "Offer" | "Passed";
+export const PIPELINE_STATUSES: PipelineStatus[] = [
   "Tracking",
   "Applied",
   "Interviewing",
@@ -45,8 +57,9 @@ export interface Job {
   id: string;
   company: string;
   role_title: string;
-  status: JobStatus;
+  status: JobStatus | string;
   seniority: string | null;
+  department: string | null;
   location: string | null;
   job_url: string | null;
   careers_url: string | null;
@@ -54,6 +67,9 @@ export interface Job {
   raised: string | null;
   stage: string | null;
   traction: string | null;
+  key_skills: string | null;
+  salary_range: string | null;
+  source: string | null;
   notes: string | null;
   fit_score: number | null;
   fit_summary: string | null;

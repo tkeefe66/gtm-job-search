@@ -2,19 +2,20 @@
 
 import type { JobStatus, Seniority } from "@/lib/types";
 
-const STATUS_STYLES: Record<JobStatus, string> = {
-  Tracking: "bg-[#FEF3C7] text-[#92400E]",
-  Applied: "bg-[#DBEAFE] text-[#1E40AF]",
-  Interviewing: "bg-[#EDE9FE] text-[#5B21B6]",
+const STATUS_STYLES: Record<string, string> = {
+  New: "bg-[#DBEAFE] text-[#1E40AF]",
+  Reviewing: "bg-[#FEF3C7] text-[#92400E]",
+  Applied: "bg-[#EDE9FE] text-[#5B21B6]",
+  "Not Interested": "bg-[#F3F4F6] text-[#6B7280]",
+  Rejected: "bg-[#FEE2E2] text-[#991B1B]",
   Offer: "bg-[#DCFCE7] text-[#14532D]",
-  Passed: "bg-[#F3F4F6] text-[#6B7280]",
 };
 
 export function StatusBadge({ status }: { status: JobStatus }) {
   return (
     <span
       className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
-        STATUS_STYLES[status] ?? STATUS_STYLES.Tracking
+        STATUS_STYLES[status] ?? "bg-[#F3F4F6] text-[#6B7280]"
       }`}
     >
       {status}

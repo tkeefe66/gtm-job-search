@@ -7,6 +7,23 @@ import type { Insights } from "@/lib/types";
 const SYSTEM =
   "You are a product leadership career coach. Analyze this person's tracked job pipeline and the current market for product roles at AI startups. Return ONLY valid JSON, no markdown.";
 
+export async function getCachedInsights(): Promise<{
+  insights?: Insights;
+  fetchedAt?: string;
+  error?: string;
+}> {
+  const { data, error } = await supabase
+    .from("insights_cache")
+    .select("insights, fetched_at")
+    .order("fetched_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  if (!data) return {};
+  return { insights: data.insights as Insights, fetchedAt: data.fetched_at };
+}
+
 export async function analyzePipeline(): Promise<{
   insights?: Insights;
   error?: string;
@@ -24,7 +41,7 @@ export async function analyzePipeline(): Promise<{
     if (pipeline.length === 0) {
       return {
         error:
-          "No jobs in your pipeline yet. Add some roles from Discover or Tracker first.",
+          "No jobs in your pipeline yet. Add some roles from Discover first.",
       };
     }
 
@@ -41,6 +58,14 @@ export async function analyzePipeline(): Promise<{
     });
 
     const insights = parseJson<Insights>(raw);
+
+    // Persist to cache — delete old, insert new.
+    await supabase.from("insights_cache").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    await supabase.from("insights_cache").insert({
+      insights,
+      fetched_at: new Date().toISOString(),
+    });
+
     return { insights };
   } catch (err) {
     console.error("analyzePipeline error:", err);

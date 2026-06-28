@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { discoverStartups, getDiscoveredStartups, type DateRange } from "@/app/actions/discover";
+import { findAndSaveRoles } from "@/app/actions/roles";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
 
@@ -12,62 +14,51 @@ const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
   { value: "6m", label: "6 months" },
 ];
 
-export default function Discover({
-  onFindRoles,
-  pendingSearch,
-  onConsumeSearch,
-}: {
-  onFindRoles: (startup: Startup) => void;
-  pendingSearch?: string | null;
-  onConsumeSearch?: () => void;
-}) {
+export default function Discover() {
+  const router = useRouter();
   const [startups, setStartups] = useState<Startup[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingCached, setLoadingCached] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastTerm, setLastTerm] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
 
-  // Load cached results whenever date range changes.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingCached(true);
       setError(null);
-      const res = await getDiscoveredStartups(dateRange, lastTerm ?? undefined);
+      const res = await getDiscoveredStartups(dateRange);
       if (cancelled) return;
       setStartups(res.startups);
       setFetchedAt(res.fetchedAt);
       setLoadingCached(false);
     })();
     return () => { cancelled = true; };
-  }, [dateRange, lastTerm]);
+  }, [dateRange]);
 
-  async function run(term?: string, range?: DateRange) {
-    const activeRange = range ?? dateRange;
+  async function run() {
     setLoading(true);
     setError(null);
-    setLastTerm(term ?? null);
-    const res = await discoverStartups(term, activeRange);
+    const res = await discoverStartups(undefined, dateRange);
     if (res.error) setError(res.error);
     setStartups(res.startups);
     setFetchedAt(new Date().toISOString());
     setLoading(false);
   }
 
-  // Trigger from Insights "recommended next searches" chips.
-  if (pendingSearch && onConsumeSearch && !loading && !loadingCached) {
-    const term = pendingSearch;
-    onConsumeSearch();
-    void run(term);
+  async function handleFindRoles(startup: Startup) {
+    setSearchingRoles(startup.company);
+    await findAndSaveRoles(startup);
+    setSearchingRoles(null);
+    router.push("/roles");
   }
 
   const busy = loading || loadingCached;
 
   function formatFetchedAt(iso: string) {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(undefined, {
       month: "short",
       day: "numeric",
       hour: "numeric",
@@ -79,13 +70,9 @@ export default function Discover({
     <div>
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-heading font-semibold">
-            Startup discovery
-          </h2>
+          <h2 className="text-xl font-heading font-semibold">Startup discovery</h2>
           <p className="text-sm text-ink/60">
-            {lastTerm
-              ? `Showing results for "${lastTerm}"`
-              : "Notable AI/tech funding rounds."}
+            Notable AI/tech funding rounds.
             {fetchedAt && !busy && (
               <span className="ml-2 text-ink/40">
                 · Last fetched {formatFetchedAt(fetchedAt)}
@@ -99,6 +86,7 @@ export default function Discover({
               <button
                 key={opt.value}
                 onClick={() => setDateRange(opt.value)}
+                disabled={busy}
                 className={`px-3 py-1.5 text-sm transition ${
                   dateRange === opt.value
                     ? "bg-ink text-white"
@@ -110,7 +98,7 @@ export default function Discover({
             ))}
           </div>
           <button
-            onClick={() => run()}
+            onClick={run}
             disabled={busy}
             className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
           >
@@ -162,10 +150,11 @@ export default function Discover({
 
             <div className="mt-auto flex items-center gap-3 pt-2">
               <button
-                onClick={() => onFindRoles(s)}
-                className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white"
+                onClick={() => handleFindRoles(s)}
+                disabled={searchingRoles === s.company}
+                className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
               >
-                Find product roles →
+                {searchingRoles === s.company ? "Searching…" : "Find product roles →"}
               </button>
               {s.careers_url && (
                 <a
