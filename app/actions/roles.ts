@@ -30,8 +30,22 @@ export async function getAllSavedRoles(): Promise<{
 }
 
 export async function findAndSaveRoles(
-  startup: Startup
-): Promise<RolesResult & { error?: string }> {
+  startup: Startup,
+  force = false
+): Promise<RolesResult & { error?: string; cached?: boolean }> {
+  // Return cached result if available and not forcing a refresh.
+  if (!force) {
+    const { data } = await supabase
+      .from("discovered_roles")
+      .select("roles")
+      .eq("company", startup.company)
+      .maybeSingle();
+
+    if (data) {
+      return { roles: data.roles as Role[], cached: true };
+    }
+  }
+
   try {
     const hint = startup.careers_url
       ? ` Their careers page may be: ${startup.careers_url}.`
