@@ -16,6 +16,7 @@ export interface ParsedRole {
   arr: string;
   exit_signal: string;
   backer: string;
+  ic_flag: boolean;
   fit_summary: string;
   key_skills: string;
   recruiter_name: string;
@@ -46,6 +47,7 @@ Return a JSON object with these exact fields:
 - arr (string, annual recurring revenue if mentioned or found via web search: e.g. "$380M+ ARR" — or empty)
 - exit_signal (string, any mention of exit plans, IPO path, acquisition interest, or liquidity event: e.g. "PE exit planned", "IPO path", "M&A target" — or empty)
 - backer (string, key investor or PE firm backing the company: e.g. "Centerbridge Partners", "a16z", "Sequoia" — or empty)
+- ic_flag (boolean — true ONLY when ALL of these are true: (1) the role is IC-level with no people management, meaning a PM or Senior PM title, AND (2) there is a clear signal the product function is early or nascent, such as "founding PM", "first PM", "building the product function", "nascent product team", "you'll define what product looks like here", or very few PMs suggesting a leadership vacuum. The logic: this is an IC role you might apply to as a foot in the door to a future leadership role. Set to false for VP/Director/Head roles and IC roles at mature product orgs with no leadership upside signal)
 - fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
 - key_skills (string, comma-separated list of skills mentioned)
 - recruiter_name (string, the name of the recruiter or person who sent this message or empty)
