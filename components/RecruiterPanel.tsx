@@ -22,6 +22,9 @@ const EMPTY = {
   company_description: "",
   stage: "",
   category: "",
+  arr: "",
+  exit_signal: "",
+  backer: "",
   fit_summary: "",
   key_skills: "",
   recruiter_name: "",
@@ -88,6 +91,9 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         company_description: form.company_description || null,
         stage: form.stage || null,
         category: form.category || null,
+        arr: form.arr || null,
+        exit_signal: form.exit_signal || null,
+        backer: form.backer || null,
         fit_summary: form.fit_summary || null,
         key_skills: form.key_skills || null,
         recruiter_name: form.recruiter_name || null,
@@ -170,6 +176,9 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
                   [
                     ["company", "Company name *"],
                     ["company_url", "Company website"],
+                    ["arr", "ARR (e.g. $380M+)"],
+                    ["backer", "Investor / Backer"],
+                    ["exit_signal", "Exit signal (e.g. PE exit planned, IPO path)"],
                   ] as [keyof typeof EMPTY, string][]
                 ).map(([key, label]) => (
                   <Field key={key} label={label}>

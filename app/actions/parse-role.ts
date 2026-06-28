@@ -13,6 +13,9 @@ export interface ParsedRole {
   company_description: string;
   stage: string;
   category: string;
+  arr: string;
+  exit_signal: string;
+  backer: string;
   fit_summary: string;
   key_skills: string;
   recruiter_name: string;
@@ -38,8 +41,11 @@ Return a JSON object with these exact fields:
 - job_url (string, any job listing URL found in the text or empty)
 - company_url (string, the hiring company's main website URL found via web search or empty)
 - company_description (string, 1-2 sentence description of what the hiring company does, from their website or web search)
-- stage (string, funding stage or ownership type of the hiring company based on web search: e.g. "Series B", "Series C", "PE-backed", "Public", "Late Stage" — or empty if unknown)
-- category (string, industry or sector of the hiring company: e.g. "AI Infra", "FinTech", "Dev Tools", "Vertical SaaS", "MarTech" — or empty if unknown)
+- stage (string, funding stage or ownership type: e.g. "Series B", "PE-backed", "Public" — or empty if unknown)
+- category (string, industry or sector: e.g. "AI Infra", "FinTech", "Vertical SaaS" — or empty if unknown)
+- arr (string, annual recurring revenue if mentioned or found via web search: e.g. "$380M+ ARR" — or empty)
+- exit_signal (string, any mention of exit plans, IPO path, acquisition interest, or liquidity event: e.g. "PE exit planned", "IPO path", "M&A target" — or empty)
+- backer (string, key investor or PE firm backing the company: e.g. "Centerbridge Partners", "a16z", "Sequoia" — or empty)
 - fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
 - key_skills (string, comma-separated list of skills mentioned)
 - recruiter_name (string, the name of the recruiter or person who sent this message or empty)

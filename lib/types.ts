@@ -81,6 +81,9 @@ export interface Job {
   recruiter_notes: string | null;
   company_url: string | null;
   company_description: string | null;
+  arr: string | null;
+  exit_signal: string | null;
+  backer: string | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;

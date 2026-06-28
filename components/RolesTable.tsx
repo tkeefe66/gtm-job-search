@@ -17,7 +17,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 const FUNNEL: JobStatus[] = ["New", "Reviewing", "Applied", "Offer"];
 
-type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category";
+type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category" | "arr" | "exit_signal" | "backer";
 type SortDir = "asc" | "desc";
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
@@ -208,8 +208,10 @@ export default function RolesTable() {
                 <Th label="Company" sortable="company" />
                 <Th label="Job Title" sortable="role_title" />
                 <Th label="Stage" sortable="stage" />
+                <Th label="Backer" sortable="backer" />
+                <Th label="ARR" sortable="arr" />
+                <Th label="Exit Signal" sortable="exit_signal" />
                 <Th label="Industry" sortable="category" />
-                <Th label="Department" sortable="department" />
                 <Th label="Location" sortable="location" />
                 <Th label="Salary Range" sortable="salary_range" />
                 <Th label="Fit Score" sortable="fit_score" />
@@ -246,6 +248,15 @@ export default function RolesTable() {
                     </td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
                       {job.stage ? <StageBadge stage={job.stage} /> : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap text-xs">{job.backer ?? "—"}</td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap text-xs font-medium">{job.arr ?? "—"}</td>
+                    <td className="px-4 py-3 whitespace-nowrap max-w-[160px]">
+                      {job.exit_signal ? (
+                        <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E]">
+                          {job.exit_signal}
+                        </span>
+                      ) : "—"}
                     </td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
                       {job.category ?? "—"}
@@ -285,7 +296,7 @@ export default function RolesTable() {
 
                   {expandedId === job.id && (
                     <tr key={`${job.id}-expanded`} className="border-b border-slate">
-                      <td colSpan={11} className="bg-canvas px-4 py-4">
+                      <td colSpan={14} className="bg-canvas px-4 py-4">
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
                           {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
@@ -302,6 +313,15 @@ export default function RolesTable() {
                           </Detail>
                           <Detail label="Stage">
                             <InlineEdit value={job.stage ?? ""} onSave={(v) => handleFieldSave(job.id, "stage", v)} placeholder="e.g. Series B, PE-backed, Public" />
+                          </Detail>
+                          <Detail label="Backer">
+                            <InlineEdit value={job.backer ?? ""} onSave={(v) => handleFieldSave(job.id, "backer", v)} placeholder="e.g. Centerbridge Partners, a16z" />
+                          </Detail>
+                          <Detail label="ARR">
+                            <InlineEdit value={job.arr ?? ""} onSave={(v) => handleFieldSave(job.id, "arr", v)} placeholder="e.g. $380M+" />
+                          </Detail>
+                          <Detail label="Exit signal">
+                            <InlineEdit value={job.exit_signal ?? ""} onSave={(v) => handleFieldSave(job.id, "exit_signal", v)} placeholder="e.g. PE exit planned, IPO path" />
                           </Detail>
                           <Detail label="Industry">
                             <InlineEdit value={job.category ?? ""} onSave={(v) => handleFieldSave(job.id, "category", v)} placeholder="e.g. AI Infra, FinTech, Dev Tools" />
