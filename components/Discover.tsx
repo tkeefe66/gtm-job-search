@@ -31,7 +31,7 @@ export default function Discover() {
   const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
-  const [sfOnly, setSfOnly] = useState(false);
+  const [sfOnly, setSfOnly] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
