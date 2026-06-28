@@ -11,6 +11,9 @@ export interface ParsedRole {
   job_url: string;
   fit_summary: string;
   key_skills: string;
+  recruiter_name: string;
+  recruiter_email: string;
+  recruiter_company: string;
 }
 
 export async function parseRecruiterText(
@@ -25,7 +28,20 @@ export async function parseRecruiterText(
       messages: [
         {
           role: "user",
-          content: `Extract job details from this recruiter message or job description. Return a JSON object with these exact fields: company (string, company name or empty), role_title (string, job title or empty), location (string, city/remote/hybrid or empty), salary_range (string, any salary info mentioned or empty), department (string, team or department or empty), job_url (string, any URL found or empty), fit_summary (string, 1-2 sentences on what makes this role interesting based on the description), key_skills (string, comma-separated list of skills mentioned). If a field is not mentioned, use an empty string.
+          content: `Extract all details from this recruiter message or job description. Return a JSON object with these exact fields:
+- company (string, the hiring company name or empty)
+- role_title (string, job title or empty)
+- location (string, city/remote/hybrid or empty)
+- salary_range (string, any salary or compensation info mentioned or empty)
+- department (string, team or department or empty)
+- job_url (string, any job listing URL found or empty)
+- fit_summary (string, 1-2 sentences on what makes this role interesting)
+- key_skills (string, comma-separated list of skills mentioned)
+- recruiter_name (string, the name of the recruiter or person who sent this message or empty)
+- recruiter_email (string, any email address belonging to the recruiter or empty)
+- recruiter_company (string, the recruiter's agency or staffing firm name — NOT the hiring company — or empty)
+
+If a field is not present, use an empty string. Return ONLY the JSON object.
 
 Text to parse:
 ${text}`,
