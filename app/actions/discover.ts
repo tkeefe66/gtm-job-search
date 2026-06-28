@@ -20,12 +20,14 @@ export async function getDiscoveredStartups(
   dateRange: DateRange,
   searchTerm?: string
 ): Promise<{ startups: Startup[]; fetchedAt: string | null; error?: string }> {
-  const term = searchTerm ?? null;
+  const term = searchTerm ?? "";
   const { data, error } = await supabase
     .from("discovered_startups")
     .select("startups, fetched_at")
     .eq("date_range", dateRange)
-    .eq("search_term", term ?? "")
+    .eq("search_term", term)
+    .order("fetched_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) return { startups: [], fetchedAt: null, error: error.message };

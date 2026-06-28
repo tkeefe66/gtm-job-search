@@ -125,51 +125,53 @@ export default function Discover() {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        {!busy && startups.map((s, i) => (
-          <div
-            key={`${s.company}-${i}`}
-            className="flex flex-col rounded-lg border border-slate bg-white p-5"
-          >
-            <div className="mb-1 flex items-start justify-between gap-2">
-              <h3 className="text-lg font-heading font-semibold">{s.company}</h3>
-              {s.stage && <Tag>{s.stage}</Tag>}
-            </div>
-            <p className="mb-3 text-sm text-ink/70">{s.tagline}</p>
+      {!busy && startups.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-slate bg-white">
+          {startups.map((s, i) => (
+            <div
+              key={`${s.company}-${i}`}
+              className={`flex flex-col gap-2 p-4 sm:flex-row sm:items-center ${
+                i > 0 ? "border-t border-slate" : ""
+              }`}
+            >
+              {/* Company + meta */}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-heading font-semibold">{s.company}</span>
+                  {s.stage && <Tag>{s.stage}</Tag>}
+                  {s.raised && <Tag>{s.raised}</Tag>}
+                  {s.category && <Tag>{s.category}</Tag>}
+                </div>
+                <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{s.tagline}</p>
+                {s.traction && (
+                  <p className="mt-0.5 text-xs text-ink/40 line-clamp-1">{s.traction}</p>
+                )}
+              </div>
 
-            <div className="mb-3 flex flex-wrap gap-2 text-xs">
-              {s.raised && <Tag>Raised {s.raised}</Tag>}
-              {s.category && <Tag>{s.category}</Tag>}
-              {s.founded && <Tag>Founded {s.founded}</Tag>}
-              {s.lead_investor && <Tag>Lead: {s.lead_investor}</Tag>}
-            </div>
-
-            {s.traction && (
-              <p className="mb-4 text-sm text-ink/60">{s.traction}</p>
-            )}
-
-            <div className="mt-auto flex items-center gap-3 pt-2">
-              <button
-                onClick={() => handleFindRoles(s)}
-                disabled={searchingRoles === s.company}
-                className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
-              >
-                {searchingRoles === s.company ? "Searching…" : "Find product roles →"}
-              </button>
-              {s.careers_url && (
-                <a
-                  href={s.careers_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm text-ink/60 underline-offset-2 hover:underline"
+              {/* Actions */}
+              <div className="flex shrink-0 items-center gap-3">
+                <button
+                  onClick={() => handleFindRoles(s)}
+                  disabled={searchingRoles === s.company}
+                  className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
                 >
-                  Careers
-                </a>
-              )}
+                  {searchingRoles === s.company ? "Searching…" : "Find roles →"}
+                </button>
+                {s.careers_url && (
+                  <a
+                    href={s.careers_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-ink/50 underline-offset-2 hover:underline"
+                  >
+                    Careers
+                  </a>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
