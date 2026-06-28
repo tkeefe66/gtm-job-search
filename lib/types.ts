@@ -48,6 +48,7 @@ export interface Role {
   salary_range: string;
   description_summary: string;
   fit_signal: string;
+  ic_flag: boolean;
 }
 
 export interface RolesResult {
@@ -84,6 +85,7 @@ export interface Job {
   arr: string | null;
   exit_signal: string | null;
   backer: string | null;
+  ic_flag: boolean | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;

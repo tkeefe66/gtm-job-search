@@ -276,13 +276,20 @@ export default function RolesTable() {
                       <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      {job.source === "Recruiter" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[#EDE9FE] px-2.5 py-0.5 text-xs font-medium text-[#5B21B6]">
-                          Recruiter
-                        </span>
-                      ) : (
-                        <span className="text-ink/50">{job.source ?? "—"}</span>
-                      )}
+                      <div className="flex flex-col gap-1">
+                        {job.source === "Recruiter" ? (
+                          <span className="inline-flex items-center rounded-full bg-[#EDE9FE] px-2.5 py-0.5 text-xs font-medium text-[#5B21B6]">
+                            Recruiter
+                          </span>
+                        ) : (
+                          <span className="text-ink/50">{job.source ?? "—"}</span>
+                        )}
+                        {job.ic_flag && (
+                          <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-xs font-medium text-[#92400E]">
+                            IC — apply anyway?
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <button
