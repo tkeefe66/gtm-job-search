@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
 
 const SYSTEM =
-  "You are a startup funding analyst. Search for the most notable AI and tech startup funding rounds. Focus exclusively on Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Exclude seed, pre-seed, and Series A rounds entirely. Return ONLY valid JSON, no markdown, no preamble.";
+  "You are a startup funding analyst. Your job is to find every significant AI and tech startup funding round for the given period — do not curate down to a short list, capture all notable rounds. Search multiple sources: TechCrunch, Crunchbase, The Information, Bloomberg, Forbes, VentureBeat, Reuters, WSJ, Business Insider, and X/Twitter funding announcements. Focus exclusively on Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Exclude seed, pre-seed, and Series A rounds. Prioritize completeness — it is better to return 20 results than to miss a major round. Return ONLY valid JSON, no markdown, no preamble.";
 
 export type DateRange = "7d" | "30d" | "3m" | "6m";
 
@@ -46,12 +46,12 @@ export async function discoverStartups(
       : "";
 
     const period = DATE_RANGE_LABELS[dateRange];
-    const prompt = `${focus}Find the 5-10 most notable AI and tech startup funding rounds announced in ${period}. Only include Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Do NOT include seed, pre-seed, or Series A rounds. For each, return a JSON array of objects with these exact fields: company (string), tagline (string), raised (string e.g. "$12M"), stage (string e.g. "Series A"), lead_investor (string), founded (string e.g. "2023"), traction (string, one line on momentum), careers_url (string, best guess careers page URL or empty string), category (string e.g. "AI Infra", "Dev Tools"). Return ONLY the JSON array.`;
+    const prompt = `${focus}Search TechCrunch, Crunchbase, The Information, Bloomberg, Forbes, VentureBeat, Reuters, and WSJ for ALL AI and tech startup funding rounds announced in ${period}. Only include Series B and above — exclude seed, pre-seed, and Series A. Do multiple searches to ensure completeness: search "Series B funding ${period}", "Series C funding ${period}", "startup raises millions ${period}", and category-specific searches like "AI startup funding ${period}". Return up to 20 results — do not cut the list short. For each, return a JSON array of objects with these exact fields: company (string), tagline (string), raised (string e.g. "$400M"), stage (string e.g. "Series D"), lead_investor (string), founded (string e.g. "2023"), traction (string, one concrete metric or momentum signal), careers_url (string, best guess careers page URL or empty string), category (string e.g. "AI Infra", "Dev Tools", "Voice AI", "Agentic AI"). Return ONLY the JSON array.`;
 
     const raw = await callWithWebSearch({
       system: SYSTEM,
       prompt,
-      maxTokens: 2000,
+      maxTokens: 4000,
     });
 
     const startups = parseJson<Startup[]>(raw);
