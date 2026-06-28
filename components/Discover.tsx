@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
@@ -14,6 +14,14 @@ const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
   { value: "6m", label: "6 months" },
 ];
 
+const SF_KEYWORDS = ["san francisco", "sf", "bay area", "palo alto", "menlo park", "mountain view", "santa clara", "san jose", "oakland", "berkeley", "redwood city", "remote"];
+
+function isSfOrRemote(hq: string | undefined): boolean {
+  if (!hq) return true; // no data — show by default
+  const lower = hq.toLowerCase();
+  return SF_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 export default function Discover() {
   const router = useRouter();
   const [startups, setStartups] = useState<Startup[]>([]);
@@ -23,8 +31,8 @@ export default function Discover() {
   const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
+  const [sfOnly, setSfOnly] = useState(false);
 
-  // Load all saved results across every date range once on mount.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -44,7 +52,6 @@ export default function Discover() {
     setError(null);
     const res = await discoverStartups(undefined, dateRange);
     if (res.error) setError(res.error);
-    // After refresh, reload all results so new ones merge in.
     const all = await getAllDiscoveredStartups();
     setStartups(all.startups);
     setFetchedAt(new Date().toISOString());
@@ -59,6 +66,11 @@ export default function Discover() {
   }
 
   const busy = loading || loadingCached;
+
+  const displayed = useMemo(() => {
+    if (!sfOnly) return startups;
+    return startups.filter((s) => isSfOrRemote(s.headquarters));
+  }, [startups, sfOnly]);
 
   function formatFetchedAt(iso: string) {
     return new Date(iso).toLocaleString(undefined, {
@@ -84,6 +96,20 @@ export default function Discover() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* SF filter toggle */}
+          <button
+            onClick={() => setSfOnly((v) => !v)}
+            disabled={busy}
+            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
+              sfOnly
+                ? "border-ink bg-ink text-white"
+                : "border-slate bg-white text-ink hover:border-ink"
+            }`}
+          >
+            SF + Remote
+          </button>
+
+          {/* Date range selector */}
           <div className="flex overflow-hidden rounded-md border border-slate">
             {DATE_RANGE_OPTIONS.map((opt) => (
               <button
@@ -100,12 +126,13 @@ export default function Discover() {
               </button>
             ))}
           </div>
+
           <button
             onClick={run}
             disabled={busy}
             className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
           >
-            {loading ? "Searching…" : "Refresh"}
+            {loading ? "Discovering…" : "Discover"}
           </button>
         </div>
       </div>
@@ -122,15 +149,17 @@ export default function Discover() {
         </div>
       )}
 
-      {!busy && !error && startups.length === 0 && (
+      {!busy && !error && displayed.length === 0 && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
-          No saved results for this range. Click &quot;Refresh&quot; to fetch.
+          {sfOnly && startups.length > 0
+            ? `No SF or remote companies in your saved results. Toggle off "SF + Remote" to see all ${startups.length}.`
+            : "No saved results yet. Click \"Discover\" to fetch."}
         </div>
       )}
 
-      {!busy && startups.length > 0 && (
+      {!busy && displayed.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-slate bg-white">
-          {startups.map((s, i) => (
+          {displayed.map((s, i) => (
             <div
               key={`${s.company}-${i}`}
               className={`flex flex-col gap-2 p-4 sm:flex-row sm:items-center ${
@@ -144,6 +173,9 @@ export default function Discover() {
                   {s.stage && <Tag>{s.stage}</Tag>}
                   {s.raised && <Tag>{s.raised}</Tag>}
                   {s.category && <Tag>{s.category}</Tag>}
+                  {s.headquarters && (
+                    <span className="text-xs text-ink/40">{s.headquarters}</span>
+                  )}
                 </div>
                 <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{s.tagline}</p>
                 {s.traction && (
@@ -155,7 +187,7 @@ export default function Discover() {
               <div className="flex shrink-0 items-center gap-3">
                 <button
                   onClick={() => handleFindRoles(s)}
-                  disabled={searchingRoles === s.company}
+                  disabled={!!searchingRoles}
                   className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
                 >
                   {searchingRoles === s.company ? "Searching…" : "Find roles →"}

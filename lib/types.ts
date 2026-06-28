@@ -37,6 +37,7 @@ export interface Startup {
   traction: string;
   careers_url: string;
   category: string;
+  headquarters: string;
 }
 
 export interface Role {
