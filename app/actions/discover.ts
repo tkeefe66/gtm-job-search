@@ -1,6 +1,7 @@
 "use server";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
 
 const SYSTEM =
@@ -14,6 +15,26 @@ const DATE_RANGE_LABELS: Record<DateRange, string> = {
   "3m": "the past 3 months",
   "6m": "the past 6 months",
 };
+
+export async function getDiscoveredStartups(
+  dateRange: DateRange,
+  searchTerm?: string
+): Promise<{ startups: Startup[]; fetchedAt: string | null; error?: string }> {
+  const term = searchTerm ?? null;
+  const { data, error } = await supabase
+    .from("discovered_startups")
+    .select("startups, fetched_at")
+    .eq("date_range", dateRange)
+    .eq("search_term", term ?? "")
+    .maybeSingle();
+
+  if (error) return { startups: [], fetchedAt: null, error: error.message };
+  if (!data) return { startups: [], fetchedAt: null };
+  return {
+    startups: data.startups as Startup[],
+    fetchedAt: data.fetched_at,
+  };
+}
 
 export async function discoverStartups(
   searchTerm?: string,
@@ -34,7 +55,20 @@ export async function discoverStartups(
     });
 
     const startups = parseJson<Startup[]>(raw);
-    return { startups: Array.isArray(startups) ? startups : [] };
+    const result = Array.isArray(startups) ? startups : [];
+
+    // Persist to Supabase — upsert so re-running refreshes the data.
+    await supabase.from("discovered_startups").upsert(
+      {
+        date_range: dateRange,
+        search_term: searchTerm ?? "",
+        startups: result,
+        fetched_at: new Date().toISOString(),
+      },
+      { onConflict: "date_range,search_term" }
+    );
+
+    return { startups: result };
   } catch (err) {
     console.error("discoverStartups error:", err);
     return {

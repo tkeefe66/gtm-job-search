@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { discoverStartups, type DateRange } from "@/app/actions/discover";
+import { useEffect, useState } from "react";
+import { discoverStartups, getDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
 
@@ -23,25 +23,56 @@ export default function Discover({
 }) {
   const [startups, setStartups] = useState<Startup[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingCached, setLoadingCached] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastTerm, setLastTerm] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>("7d");
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+
+  // Load cached results whenever date range changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingCached(true);
+      setError(null);
+      const res = await getDiscoveredStartups(dateRange, lastTerm ?? undefined);
+      if (cancelled) return;
+      setStartups(res.startups);
+      setFetchedAt(res.fetchedAt);
+      setLoadingCached(false);
+    })();
+    return () => { cancelled = true; };
+  }, [dateRange, lastTerm]);
 
   async function run(term?: string, range?: DateRange) {
+    const activeRange = range ?? dateRange;
     setLoading(true);
     setError(null);
     setLastTerm(term ?? null);
-    const res = await discoverStartups(term, range ?? dateRange);
+    const res = await discoverStartups(term, activeRange);
     if (res.error) setError(res.error);
     setStartups(res.startups);
+    setFetchedAt(new Date().toISOString());
     setLoading(false);
   }
 
   // Trigger from Insights "recommended next searches" chips.
-  if (pendingSearch && onConsumeSearch && !loading) {
+  if (pendingSearch && onConsumeSearch && !loading && !loadingCached) {
     const term = pendingSearch;
     onConsumeSearch();
     void run(term);
+  }
+
+  const busy = loading || loadingCached;
+
+  function formatFetchedAt(iso: string) {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   }
 
   return (
@@ -55,10 +86,15 @@ export default function Discover({
             {lastTerm
               ? `Showing results for "${lastTerm}"`
               : "Notable AI/tech funding rounds."}
+            {fetchedAt && !busy && (
+              <span className="ml-2 text-ink/40">
+                · Last fetched {formatFetchedAt(fetchedAt)}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-md border border-slate overflow-hidden">
+          <div className="flex overflow-hidden rounded-md border border-slate">
             {DATE_RANGE_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
@@ -75,34 +111,34 @@ export default function Discover({
           </div>
           <button
             onClick={() => run()}
-            disabled={loading}
+            disabled={busy}
             className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
           >
-            Find startups
+            {loading ? "Searching…" : "Refresh"}
           </button>
         </div>
       </div>
 
-      {loading && (
+      {busy && (
         <div className="py-12">
-          <Spinner label="Searching funding news…" />
+          <Spinner label={loading ? "Searching funding news…" : "Loading saved results…"} />
         </div>
       )}
 
-      {error && !loading && (
+      {error && !busy && (
         <div className="rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">
           {error}
         </div>
       )}
 
-      {!loading && !error && startups.length === 0 && (
+      {!busy && !error && startups.length === 0 && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
-          Select a date range and click &quot;Find startups&quot;.
+          No saved results for this range. Click &quot;Refresh&quot; to fetch.
         </div>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {startups.map((s, i) => (
+        {!busy && startups.map((s, i) => (
           <div
             key={`${s.company}-${i}`}
             className="flex flex-col rounded-lg border border-slate bg-white p-5"
