@@ -1,9 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { discoverStartups } from "@/app/actions/discover";
+import { discoverStartups, type DateRange } from "@/app/actions/discover";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
+
+const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
+  { value: "3m", label: "3 months" },
+  { value: "6m", label: "6 months" },
+];
 
 export default function Discover({
   onFindRoles,
@@ -18,12 +25,13 @@ export default function Discover({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastTerm, setLastTerm] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DateRange>("7d");
 
-  async function run(term?: string) {
+  async function run(term?: string, range?: DateRange) {
     setLoading(true);
     setError(null);
     setLastTerm(term ?? null);
-    const res = await discoverStartups(term);
+    const res = await discoverStartups(term, range ?? dateRange);
     if (res.error) setError(res.error);
     setStartups(res.startups);
     setLoading(false);
@@ -38,24 +46,41 @@ export default function Discover({
 
   return (
     <div>
-      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-heading font-semibold">
-            Weekly startup discovery
+            Startup discovery
           </h2>
           <p className="text-sm text-ink/60">
             {lastTerm
               ? `Showing results for "${lastTerm}"`
-              : "Notable AI/tech funding rounds from the past 7 days."}
+              : "Notable AI/tech funding rounds."}
           </p>
         </div>
-        <button
-          onClick={() => run()}
-          disabled={loading}
-          className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
-        >
-          Find this week&apos;s hot startups
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-md border border-slate overflow-hidden">
+            {DATE_RANGE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setDateRange(opt.value)}
+                className={`px-3 py-1.5 text-sm transition ${
+                  dateRange === opt.value
+                    ? "bg-ink text-white"
+                    : "bg-white text-ink hover:bg-canvas"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => run()}
+            disabled={loading}
+            className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+          >
+            Find startups
+          </button>
+        </div>
       </div>
 
       {loading && (
@@ -72,7 +97,7 @@ export default function Discover({
 
       {!loading && !error && startups.length === 0 && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
-          Click the button above to pull this week&apos;s funding rounds.
+          Select a date range and click &quot;Find startups&quot;.
         </div>
       )}
 
