@@ -80,7 +80,7 @@ Chad Holdorf is a VP of Product / CPO-level candidate with this background:
 - Strong: go-to-market, 0-to-1 product builds, technical PM work with engineers and researchers
 - Weaker fit: pure consumer products, hardware, non-tech industries, roles that don't need a senior leader
 - Looking for: VP of Product, CPO, Head of Product, Director of Product at AI-first or B2B SaaS companies
-- Not interested in: IC roles (Senior PM or below), companies with no AI angle
+- Open to IC PM roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Mistral, Cohere, etc.) or hyper-growth AI startups where the equity, impact, and learning opportunity outweigh the title — this is the new reality for senior PMs in AI
 `.trim();
 
 export async function scoreFit(opts: {
@@ -131,8 +131,9 @@ SCORING GUIDE:
 TITLE SCOPE SIGNALS (use these to adjust score):
 - "Core", "Lead", "Principal", "Head of", "Staff" in the title = broader scope, score higher than a standard PM
 - "VP of Product", "CPO", "Director" = leadership level, eligible for 4-5 if domain matches
-- "Product Manager - [specific feature]" = narrow IC scope, cap at 3 unless domain is exceptional
-- Ignore seniority level for scoring — a Lead PM at the right company beats a VP title at a bad fit
+- IC PM roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) = eligible for 4-5 regardless of title — top execs are taking IC roles at these companies because the equity, learning, and impact outweigh the title. This is the new world of PM. Score these on company tier + domain fit, not title.
+- IC PM roles at hyper-growth AI startups (Series B+ with clear AI-first trajectory and strong domain alignment) = eligible for 3-4, not capped at 2
+- "Product Manager - [specific feature]" at a generic SaaS company with no AI angle = narrow IC scope, cap at 2-3
 
 FINANCIAL SIGNALS (use these to adjust score up or down):
 - High ARR ($100M+) with a clear exit signal (PE exit, IPO path) = strong upward signal — equity likely meaningful, role has real scope
@@ -140,6 +141,13 @@ FINANCIAL SIGNALS (use these to adjust score up or down):
 - Top-tier backer (a16z, Sequoia, Benchmark, General Catalyst, etc.) = legitimacy signal, bump slightly
 - Unknown backer or pre-revenue = neutral, don't penalize unless other signals are weak
 - Very high ARR ($500M+) at a PE-backed company heading to exit = rare opportunity signal, weight positively
+
+PE-BACKED LEGACY AI PIVOT RULE (apply when all three are true):
+1. The company is PE-backed or PE-acquired (established, not a startup)
+2. The role is explicitly framed as leading an AI transformation, AI initiative, or AI pivot (not just "uses AI")
+3. The domain is within 1 degree of Chad's background (enterprise B2B SaaS, GTM tech, developer tools, data platforms, FinTech, or any software vertical where his SaaS leadership transfers)
+→ When all three apply: floor score of 4. This is a CPO-equivalent mandate regardless of title — you walk in defining what AI means for the whole product. The PE exit signal means equity upside is structured and coming.
+→ If the domain requires deep vertical expertise Chad lacks (pharma, LIMS, clinical, hardware): stay at 3. Real equity upside but execution risk is high — he'd spend year 1 learning the domain rather than building.
 
 Return a JSON object with:
 - score (integer 1-5)
