@@ -261,9 +261,6 @@ export default function RolesTable() {
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
                       {job.category ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
-                      {job.department ?? job.seniority ?? "—"}
-                    </td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.location ?? "—"}</td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.salary_range ?? "—"}</td>
                     <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
