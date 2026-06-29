@@ -38,8 +38,8 @@ export default function RolesTable() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showRecruiter, setShowRecruiter] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("company");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortKey, setSortKey] = useState<SortKey>("fit_score");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   async function load() {
     setLoading(true);
@@ -202,172 +202,165 @@ export default function RolesTable() {
       )}
 
       {!loading && filtered.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-slate">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate bg-canvas text-left">
-                <Th label="Company" sortable="company" />
-                <Th label="Job Title" sortable="role_title" />
-                <Th label="Stage" sortable="stage" />
-                <Th label="Backer" sortable="backer" />
-                <Th label="ARR" sortable="arr" />
-                <Th label="Exit Signal" sortable="exit_signal" />
-                <Th label="Industry" sortable="category" />
-                <Th label="Location" sortable="location" />
-                <Th label="Salary Range" sortable="salary_range" />
-                <Th label="Fit Score" sortable="fit_score" />
-                <Th label="Status" sortable="status" />
-                <Th label="Source" sortable="source" />
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="bg-white">
-              {filtered.map((job, idx) => (
-                <>
-                  <tr
-                    key={job.id}
-                    className={`cursor-pointer border-b border-slate transition hover:bg-canvas ${
-                      expandedId === job.id ? "bg-canvas" : ""
-                    } ${idx === filtered.length - 1 ? "border-b-0" : ""}`}
-                    onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}
-                  >
-                    <td className="px-4 py-3 font-medium whitespace-nowrap align-top">{job.company}</td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top">
-                      {job.job_url ? (
-                        <a
-                          href={job.job_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="underline underline-offset-2 hover:text-ink/60"
-                        >
-                          {job.role_title}
-                        </a>
-                      ) : (
-                        job.role_title
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
-                      {job.stage ? <StageBadge stage={job.stage} /> : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs">{job.backer ?? "—"}</td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs font-medium">{job.arr ?? "—"}</td>
-                    <td className="px-4 py-3 align-top max-w-[160px]">
-                      {job.exit_signal ? (
-                        <span
-                          title={job.exit_signal}
-                          className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E] max-w-[150px] truncate block"
-                        >
-                          {job.exit_signal}
-                        </span>
-                      ) : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
-                      {job.category ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.location ?? "—"}</td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.salary_range ?? "—"}</td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
-                      <FitScore
-                        score={job.fit_score}
-                        onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))}
-                      />
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
-                      <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top">
-                      <div className="flex flex-col gap-1">
-                        {job.source === "Recruiter" ? (
-                          <span className="inline-flex items-center rounded-full bg-[#EDE9FE] px-2.5 py-0.5 text-xs font-medium text-[#5B21B6]">
-                            Recruiter
-                          </span>
-                        ) : (
-                          <span className="text-ink/50">{job.source ?? "—"}</span>
-                        )}
-                        {job.ic_flag && (
-                          <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-xs font-medium text-[#92400E]">
-                            IC — apply anyway?
-                          </span>
-                        )}
+        <div className="rounded-lg border border-slate bg-white">
+          {/* Sort bar */}
+          <div className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50">
+            <span>Sort:</span>
+            {([["fit_score", "Fit"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => toggleSort(key)}
+                className={`rounded px-2 py-0.5 transition ${sortKey === key ? "bg-ink text-white" : "hover:bg-slate"}`}
+              >
+                {label} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
+              </button>
+            ))}
+          </div>
+
+          {filtered.map((job, idx) => (
+            <div key={job.id} className={idx < filtered.length - 1 || expandedId === job.id ? "border-b border-slate" : ""}>
+              {/* Main row */}
+              <div
+                className={`flex cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-canvas ${expandedId === job.id ? "bg-canvas" : ""}`}
+                onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}
+              >
+                {/* Fit score circle */}
+                <div
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                    job.fit_score && job.fit_score >= 4
+                      ? "bg-[#DCFCE7] text-[#14532D]"
+                      : job.fit_score === 3
+                      ? "bg-[#FEF3C7] text-[#92400E]"
+                      : job.fit_score && job.fit_score <= 2
+                      ? "bg-[#F3F4F6] text-[#6B7280]"
+                      : "bg-[#F3F4F6] text-[#9CA3AF]"
+                  }`}
+                >
+                  {job.fit_score ?? "—"}
+                </div>
+
+                {/* Company + title + meta */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-1.5">
+                    <span className="font-medium text-ink">{job.company}</span>
+                    <span className="text-ink/40">·</span>
+                    {job.job_url ? (
+                      <a
+                        href={job.job_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-sm text-ink/70 underline underline-offset-2 hover:text-ink"
+                      >
+                        {job.role_title}
+                      </a>
+                    ) : (
+                      <span className="text-sm text-ink/70">{job.role_title}</span>
+                    )}
+                    {job.ic_flag && (
+                      <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E]">
+                        IC — apply anyway?
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink/40">
+                    {job.salary_range && <span>{job.salary_range}</span>}
+                    {job.salary_range && job.location && <span>·</span>}
+                    {job.location && <span>{job.location}</span>}
+                    {job.arr && <><span>·</span><span>{job.arr}</span></>}
+                    {job.exit_signal && <><span>·</span><span title={job.exit_signal} className="max-w-[200px] truncate text-[#92400E]">{job.exit_signal}</span></>}
+                  </div>
+                </div>
+
+                {/* Badges + status */}
+                <div className="flex shrink-0 flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  {job.stage && <StageBadge stage={job.stage} />}
+                  {job.category && (
+                    <span className="inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-xs text-ink/60 border border-slate">
+                      {job.category}
+                    </span>
+                  )}
+                  {job.source === "Recruiter" && (
+                    <span className="inline-flex items-center rounded-full bg-[#EDE9FE] px-2 py-0.5 text-xs font-medium text-[#5B21B6]">
+                      Recruiter
+                    </span>
+                  )}
+                  <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
+                </div>
+              </div>
+
+              {/* Expanded detail */}
+              {expandedId === job.id && (
+                <div className="border-t border-slate bg-canvas px-4 py-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
+                    {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
+                    {job.company_description && <Detail label="About company">{job.company_description}</Detail>}
+                    {job.traction && <Detail label="Traction">{job.traction}</Detail>}
+                    <Detail label="Notes">
+                      <InlineEdit value={job.notes ?? ""} onSave={(v) => handleFieldSave(job.id, "notes", v)} placeholder="Add notes…" />
+                    </Detail>
+                    <Detail label="Salary range">
+                      <InlineEdit value={job.salary_range ?? ""} onSave={(v) => handleFieldSave(job.id, "salary_range", v)} placeholder="e.g. $200K–$280K" />
+                    </Detail>
+                    <Detail label="Department">
+                      <InlineEdit value={job.department ?? ""} onSave={(v) => handleFieldSave(job.id, "department", v)} placeholder="e.g. Product" />
+                    </Detail>
+                    <Detail label="Stage">
+                      <InlineEdit value={job.stage ?? ""} onSave={(v) => handleFieldSave(job.id, "stage", v)} placeholder="e.g. Series B, PE-backed, Public" />
+                    </Detail>
+                    <Detail label="Backer">
+                      <InlineEdit value={job.backer ?? ""} onSave={(v) => handleFieldSave(job.id, "backer", v)} placeholder="e.g. Centerbridge Partners, a16z" />
+                    </Detail>
+                    <Detail label="ARR">
+                      <InlineEdit value={job.arr ?? ""} onSave={(v) => handleFieldSave(job.id, "arr", v)} placeholder="e.g. $380M+" />
+                    </Detail>
+                    <Detail label="Exit signal">
+                      <InlineEdit value={job.exit_signal ?? ""} onSave={(v) => handleFieldSave(job.id, "exit_signal", v)} placeholder="e.g. PE exit planned, IPO path" />
+                    </Detail>
+                    <Detail label="Industry">
+                      <InlineEdit value={job.category ?? ""} onSave={(v) => handleFieldSave(job.id, "category", v)} placeholder="e.g. AI Infra, FinTech, Dev Tools" />
+                    </Detail>
+                    <Detail label="Fit score">
+                      <FitScore score={job.fit_score} onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))} />
+                    </Detail>
+                    {(job.recruiter_name || job.recruiter_email || job.recruiter_company || job.recruiter_notes) && (
+                      <div className="col-span-full rounded-lg border border-[#EDE9FE] bg-[#F5F3FF] p-3">
+                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#5B21B6]">Recruiter</div>
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          {job.recruiter_name && <span><span className="text-ink/50">Name: </span>{job.recruiter_name}</span>}
+                          {job.recruiter_company && <span><span className="text-ink/50">Agency: </span>{job.recruiter_company}</span>}
+                          {job.recruiter_email && (
+                            <span><span className="text-ink/50">Email: </span>
+                              <a href={`mailto:${job.recruiter_email}`} className="underline underline-offset-2">{job.recruiter_email}</a>
+                            </span>
+                          )}
+                        </div>
+                        {job.recruiter_notes && <p className="mt-2 text-sm text-ink/70">{job.recruiter_notes}</p>}
                       </div>
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
+                    )}
+                    <div className="flex items-center gap-4">
+                      {job.company_url && (
+                        <a href={job.company_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Company site →</a>
+                      )}
+                      {job.job_url && (
+                        <a href={job.job_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Job listing →</a>
+                      )}
+                      {job.careers_url && (
+                        <a href={job.careers_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Careers page →</a>
+                      )}
                       <button
                         onClick={() => handleDelete(job.id)}
-                        className="rounded border border-slate px-2 py-1 text-xs text-[#92400E] hover:border-[#92400E]"
+                        className="ml-auto rounded border border-slate px-2 py-1 text-xs text-[#92400E] hover:border-[#92400E]"
                       >
                         Delete
                       </button>
-                    </td>
-                  </tr>
-
-                  {expandedId === job.id && (
-                    <tr key={`${job.id}-expanded`} className="border-b border-slate">
-                      <td colSpan={14} className="bg-canvas px-4 py-4">
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                          {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
-                          {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
-                          {job.company_description && <Detail label="About company">{job.company_description}</Detail>}
-                          {job.traction && <Detail label="Traction">{job.traction}</Detail>}
-                          <Detail label="Notes">
-                            <InlineEdit value={job.notes ?? ""} onSave={(v) => handleFieldSave(job.id, "notes", v)} placeholder="Add notes…" />
-                          </Detail>
-                          <Detail label="Salary range">
-                            <InlineEdit value={job.salary_range ?? ""} onSave={(v) => handleFieldSave(job.id, "salary_range", v)} placeholder="e.g. $200K–$280K" />
-                          </Detail>
-                          <Detail label="Department">
-                            <InlineEdit value={job.department ?? ""} onSave={(v) => handleFieldSave(job.id, "department", v)} placeholder="e.g. Product" />
-                          </Detail>
-                          <Detail label="Stage">
-                            <InlineEdit value={job.stage ?? ""} onSave={(v) => handleFieldSave(job.id, "stage", v)} placeholder="e.g. Series B, PE-backed, Public" />
-                          </Detail>
-                          <Detail label="Backer">
-                            <InlineEdit value={job.backer ?? ""} onSave={(v) => handleFieldSave(job.id, "backer", v)} placeholder="e.g. Centerbridge Partners, a16z" />
-                          </Detail>
-                          <Detail label="ARR">
-                            <InlineEdit value={job.arr ?? ""} onSave={(v) => handleFieldSave(job.id, "arr", v)} placeholder="e.g. $380M+" />
-                          </Detail>
-                          <Detail label="Exit signal">
-                            <InlineEdit value={job.exit_signal ?? ""} onSave={(v) => handleFieldSave(job.id, "exit_signal", v)} placeholder="e.g. PE exit planned, IPO path" />
-                          </Detail>
-                          <Detail label="Industry">
-                            <InlineEdit value={job.category ?? ""} onSave={(v) => handleFieldSave(job.id, "category", v)} placeholder="e.g. AI Infra, FinTech, Dev Tools" />
-                          </Detail>
-                          {(job.recruiter_name || job.recruiter_email || job.recruiter_company || job.recruiter_notes) && (
-                            <div className="col-span-full rounded-lg border border-[#EDE9FE] bg-[#F5F3FF] p-3">
-                              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#5B21B6]">Recruiter</div>
-                              <div className="flex flex-wrap gap-4 text-sm">
-                                {job.recruiter_name && <span><span className="text-ink/50">Name: </span>{job.recruiter_name}</span>}
-                                {job.recruiter_company && <span><span className="text-ink/50">Agency: </span>{job.recruiter_company}</span>}
-                                {job.recruiter_email && (
-                                  <span><span className="text-ink/50">Email: </span>
-                                    <a href={`mailto:${job.recruiter_email}`} className="underline underline-offset-2">{job.recruiter_email}</a>
-                                  </span>
-                                )}
-                              </div>
-                              {job.recruiter_notes && <p className="mt-2 text-sm text-ink/70">{job.recruiter_notes}</p>}
-                            </div>
-                          )}
-                          <div className="flex gap-3">
-                            {job.company_url && (
-                              <a href={job.company_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Company site →</a>
-                            )}
-                            {job.job_url && (
-                              <a href={job.job_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Job listing →</a>
-                            )}
-                            {job.careers_url && (
-                              <a href={job.careers_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Careers page →</a>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
