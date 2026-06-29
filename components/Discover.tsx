@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
+import { addToWatchlist, removeFromWatchlist, getWatchedCompanyNames } from "@/app/actions/watchlist";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
 
@@ -32,16 +33,22 @@ export default function Discover() {
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
   const [sfOnly, setSfOnly] = useState(true);
+  const [watched, setWatched] = useState<Set<string>>(new Set());
+  const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingCached(true);
       setError(null);
-      const res = await getAllDiscoveredStartups();
+      const [res, watchedNames] = await Promise.all([
+        getAllDiscoveredStartups(),
+        getWatchedCompanyNames(),
+      ]);
       if (cancelled) return;
       setStartups(res.startups);
       setFetchedAt(res.fetchedAt);
+      setWatched(watchedNames);
       setLoadingCached(false);
     })();
     return () => { cancelled = true; };
@@ -63,6 +70,18 @@ export default function Discover() {
     await findAndSaveRoles(startup);
     setSearchingRoles(null);
     router.push("/roles");
+  }
+
+  async function handleWatch(startup: Startup) {
+    setWatchingCompany(startup.company);
+    if (watched.has(startup.company)) {
+      await removeFromWatchlist(startup.company);
+      setWatched((prev) => { const n = new Set(prev); n.delete(startup.company); return n; });
+    } else {
+      await addToWatchlist(startup);
+      setWatched((prev) => new Set(prev).add(startup.company));
+    }
+    setWatchingCompany(null);
   }
 
   const busy = loading || loadingCached;
@@ -191,6 +210,17 @@ export default function Discover() {
                   className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
                 >
                   {searchingRoles === s.company ? "Searching…" : "Find roles →"}
+                </button>
+                <button
+                  onClick={() => handleWatch(s)}
+                  disabled={!!watchingCompany}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
+                    watched.has(s.company)
+                      ? "border-ink/30 bg-canvas text-ink/50 hover:border-[#92400E] hover:text-[#92400E]"
+                      : "border-slate text-ink/50 hover:border-ink hover:text-ink"
+                  }`}
+                >
+                  {watchingCompany === s.company ? "…" : watched.has(s.company) ? "Watching ✓" : "Watch"}
                 </button>
                 {s.careers_url && (
                   <a
