@@ -1,19 +1,43 @@
 export type JobStatus =
   | "New"
-  | "Reviewing"
   | "Applied"
+  | "Recruiter Outreach"
+  | "Phone / Intro Screen"
+  | "Hiring Manager"
+  | "Panel Interviews"
+  | "Exec Presentation"
+  | "Reference Check"
+  | "Offer"
   | "Not Interested"
   | "Rejected"
-  | "Offer";
+  | "Passed";
 
 export const JOB_STATUSES: JobStatus[] = [
   "New",
-  "Reviewing",
   "Applied",
+  "Recruiter Outreach",
+  "Phone / Intro Screen",
+  "Hiring Manager",
+  "Panel Interviews",
+  "Exec Presentation",
+  "Reference Check",
+  "Offer",
   "Not Interested",
   "Rejected",
-  "Offer",
+  "Passed",
 ];
+
+export const ACTIVE_STATUSES: JobStatus[] = [
+  "Applied",
+  "Recruiter Outreach",
+  "Phone / Intro Screen",
+  "Hiring Manager",
+  "Panel Interviews",
+  "Exec Presentation",
+  "Reference Check",
+];
+
+export const TERMINAL_STATUSES: JobStatus[] = ["Not Interested", "Rejected", "Passed"];
 
 // Legacy pipeline statuses for Tracker funnel view
 export type PipelineStatus = "Tracking" | "Applied" | "Interviewing" | "Offer" | "Passed";

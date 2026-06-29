@@ -3,20 +3,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
 import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
-import { JOB_STATUSES, type Job, type JobStatus } from "@/lib/types";
+import { JOB_STATUSES, ACTIVE_STATUSES, TERMINAL_STATUSES, type Job, type JobStatus } from "@/lib/types";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
 const STATUS_STYLES: Record<string, string> = {
-  New: "bg-[#DBEAFE] text-[#1E40AF]",
-  Reviewing: "bg-[#FEF3C7] text-[#92400E]",
-  Applied: "bg-[#EDE9FE] text-[#5B21B6]",
+  New: "bg-[#F3F4F6] text-[#6B7280]",
+  Applied: "bg-[#DBEAFE] text-[#1E40AF]",
+  "Recruiter Outreach": "bg-[#EDE9FE] text-[#5B21B6]",
+  "Phone / Intro Screen": "bg-[#E0F2FE] text-[#0369A1]",
+  "Hiring Manager": "bg-[#FEF3C7] text-[#92400E]",
+  "Panel Interviews": "bg-[#FEF3C7] text-[#92400E]",
+  "Exec Presentation": "bg-[#FEF3C7] text-[#92400E]",
+  "Reference Check": "bg-[#FEF3C7] text-[#92400E]",
+  Offer: "bg-[#DCFCE7] text-[#14532D]",
   "Not Interested": "bg-[#F3F4F6] text-[#6B7280]",
   Rejected: "bg-[#FEE2E2] text-[#991B1B]",
-  Offer: "bg-[#DCFCE7] text-[#14532D]",
+  Passed: "bg-[#DCFCE7] text-[#14532D]",
 };
-
-const FUNNEL: JobStatus[] = ["New", "Reviewing", "Applied", "Offer"];
 
 type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category" | "arr" | "exit_signal" | "backer";
 type SortDir = "asc" | "desc";
@@ -34,7 +38,7 @@ export default function RolesTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "All">("All");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "All" | "Active" | "Out">("All");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showRecruiter, setShowRecruiter] = useState(false);
@@ -53,11 +57,22 @@ export default function RolesTable() {
   useEffect(() => { void load(); }, []);
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const s of JOB_STATUSES) c[s] = 0;
-    for (const j of jobs) c[j.status] = (c[j.status] ?? 0) + 1;
+    const c: Record<string, number> = { New: 0, Active: 0, Offer: 0, Out: 0 };
+    for (const j of jobs) {
+      if (j.status === "New") c.New++;
+      else if (ACTIVE_STATUSES.includes(j.status as JobStatus)) c.Active++;
+      else if (j.status === "Offer") c.Offer++;
+      else if (TERMINAL_STATUSES.includes(j.status as JobStatus)) c.Out++;
+    }
     return c;
   }, [jobs]);
+
+  const FUNNEL = [
+    { label: "New", key: "New", filter: ["New"] as JobStatus[] },
+    { label: "Active", key: "Active", filter: ACTIVE_STATUSES },
+    { label: "Offer", key: "Offer", filter: ["Offer"] as JobStatus[] },
+    { label: "Out", key: "Out", filter: TERMINAL_STATUSES },
+  ];
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -66,7 +81,13 @@ export default function RolesTable() {
 
   const filtered = useMemo(() => {
     let list = jobs.filter((j) => {
-      if (statusFilter !== "All" && j.status !== statusFilter) return false;
+      if (statusFilter === "All") {
+        // show everything
+      } else if (statusFilter === "Active") {
+        if (!ACTIVE_STATUSES.includes(j.status as JobStatus)) return false;
+      } else if (statusFilter === "Out") {
+        if (!TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
+      } else if (j.status !== statusFilter) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
@@ -152,16 +173,16 @@ export default function RolesTable() {
 
       {/* Funnel summary */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {FUNNEL.map((s) => (
+        {FUNNEL.map((f) => (
           <button
-            key={s}
-            onClick={() => setStatusFilter(statusFilter === s ? "All" : s)}
+            key={f.key}
+            onClick={() => setStatusFilter(statusFilter === f.key ? "All" : f.key as JobStatus | "All" | "Active" | "Out")}
             className={`rounded-lg border p-4 text-left transition ${
-              statusFilter === s ? "border-ink" : "border-slate hover:border-ink/30"
+              statusFilter === f.key ? "border-ink" : "border-slate hover:border-ink/30"
             } bg-white`}
           >
-            <div className="text-2xl font-heading font-semibold">{counts[s] ?? 0}</div>
-            <div className="text-xs text-ink/60">{s}</div>
+            <div className="text-2xl font-heading font-semibold">{counts[f.key] ?? 0}</div>
+            <div className="text-xs text-ink/60">{f.label}</div>
           </button>
         ))}
       </div>
