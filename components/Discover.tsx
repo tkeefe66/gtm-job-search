@@ -46,7 +46,7 @@ export default function Discover() {
         getWatchedCompanyNames(),
       ]);
       if (cancelled) return;
-      setStartups(res.startups);
+      setStartups(res.startups.filter((s) => !watchedNames.has(s.company)));
       setFetchedAt(res.fetchedAt);
       setWatched(watchedNames);
       setLoadingCached(false);
@@ -77,9 +77,11 @@ export default function Discover() {
     if (watched.has(startup.company)) {
       await removeFromWatchlist(startup.company);
       setWatched((prev) => { const n = new Set(prev); n.delete(startup.company); return n; });
+      setStartups((prev) => [...prev, startup]);
     } else {
       await addToWatchlist(startup);
       setWatched((prev) => new Set(prev).add(startup.company));
+      setStartups((prev) => prev.filter((s) => s.company !== startup.company));
     }
     setWatchingCompany(null);
   }
