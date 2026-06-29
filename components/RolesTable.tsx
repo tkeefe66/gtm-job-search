@@ -230,8 +230,8 @@ export default function RolesTable() {
                     } ${idx === filtered.length - 1 ? "border-b-0" : ""}`}
                     onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}
                   >
-                    <td className="px-4 py-3 font-medium whitespace-nowrap">{job.company}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">
+                    <td className="px-4 py-3 font-medium whitespace-nowrap align-top">{job.company}</td>
+                    <td className="px-4 py-3 whitespace-nowrap align-top">
                       {job.job_url ? (
                         <a
                           href={job.job_url}
@@ -246,36 +246,36 @@ export default function RolesTable() {
                         job.role_title
                       )}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
                       {job.stage ? <StageBadge stage={job.stage} /> : "—"}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap text-xs">{job.backer ?? "—"}</td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap text-xs font-medium">{job.arr ?? "—"}</td>
-                    <td className="px-4 py-3 whitespace-nowrap max-w-[160px]">
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs">{job.backer ?? "—"}</td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs font-medium">{job.arr ?? "—"}</td>
+                    <td className="px-4 py-3 whitespace-nowrap align-top max-w-[160px]">
                       {job.exit_signal ? (
                         <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E]">
                           {job.exit_signal}
                         </span>
                       ) : "—"}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
                       {job.category ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">
                       {job.department ?? job.seniority ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">{job.location ?? "—"}</td>
-                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap">{job.salary_range ?? "—"}</td>
-                    <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.location ?? "—"}</td>
+                    <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top">{job.salary_range ?? "—"}</td>
+                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
                       <FitScore
                         score={job.fit_score}
                         onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))}
                       />
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
                       <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
+                    <td className="px-4 py-3 whitespace-nowrap align-top">
                       <div className="flex flex-col gap-1">
                         {job.source === "Recruiter" ? (
                           <span className="inline-flex items-center rounded-full bg-[#EDE9FE] px-2.5 py-0.5 text-xs font-medium text-[#5B21B6]">
@@ -291,7 +291,7 @@ export default function RolesTable() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-3 whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => handleDelete(job.id)}
                         className="rounded border border-slate px-2 py-1 text-xs text-[#92400E] hover:border-[#92400E]"
