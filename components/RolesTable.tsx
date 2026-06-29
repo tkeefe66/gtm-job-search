@@ -251,9 +251,12 @@ export default function RolesTable() {
                     </td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs">{job.backer ?? "—"}</td>
                     <td className="px-4 py-3 text-ink/70 whitespace-nowrap align-top text-xs font-medium">{job.arr ?? "—"}</td>
-                    <td className="px-4 py-3 whitespace-nowrap align-top max-w-[160px]">
+                    <td className="px-4 py-3 align-top max-w-[160px]">
                       {job.exit_signal ? (
-                        <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E]">
+                        <span
+                          title={job.exit_signal}
+                          className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E] max-w-[150px] truncate block"
+                        >
                           {job.exit_signal}
                         </span>
                       ) : "—"}
