@@ -71,6 +71,52 @@ ${text}`,
   }
 }
 
+export async function parseJobUrl(
+  url: string
+): Promise<{ role?: ParsedRole; error?: string }> {
+  try {
+    const raw = await callWithWebSearch({
+      system:
+        "You are a recruiting assistant with web search access. Fetch the job posting at the given URL, extract all structured details, then search the web for additional company information. Return ONLY valid JSON, no markdown, no preamble.",
+      prompt: `Fetch and parse this job posting URL: ${url}
+
+Extract all details from the page, then search the web for the hiring company to find their website, funding stage, ARR, and backers.
+
+Return a JSON object with these exact fields:
+- company (string, the hiring company name)
+- role_title (string, job title)
+- location (string, city/remote/hybrid or empty)
+- salary_range (string, any salary or compensation info on the page or empty)
+- department (string, team or department or empty)
+- job_url (string, use the URL provided: ${url})
+- company_url (string, the hiring company's main website URL)
+- company_description (string, 1-2 sentence description of what the hiring company does)
+- stage (string, funding stage or ownership type: e.g. "Series B", "PE-backed", "Public" — or empty)
+- category (string, industry or sector: e.g. "AI Infra", "FinTech", "Vertical SaaS" — or empty)
+- arr (string, annual recurring revenue if found: e.g. "$380M+ ARR" — or empty)
+- exit_signal (string, any exit plans, IPO path, or liquidity event — or empty)
+- backer (string, key investor or PE firm — or empty)
+- ic_flag (boolean — true ONLY when: (1) IC-level role with no people management (PM or Senior PM title), AND (2) clear signal the product function is early/nascent: "founding PM", "first PM", "building the product function", "nascent product team". False for VP/Director/Head roles and IC roles at mature product orgs)
+- fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
+- key_skills (string, comma-separated skills from the job posting)
+- recruiter_name (string, empty)
+- recruiter_email (string, empty)
+- recruiter_company (string, empty)
+
+Return ONLY the JSON object.`,
+      maxTokens: 1500,
+    });
+
+    const role = parseJson<ParsedRole>(raw);
+    return { role };
+  } catch (err) {
+    console.error("parseJobUrl error:", err);
+    return {
+      error: err instanceof Error ? err.message : "Failed to parse job URL.",
+    };
+  }
+}
+
 // Chad's background used for ruthless fit scoring.
 const CHAD_BACKGROUND = `
 Chad Holdorf is a VP of Product / CPO-level candidate with this background:

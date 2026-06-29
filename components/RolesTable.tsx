@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
+import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
 import { JOB_STATUSES, type Job, type JobStatus } from "@/lib/types";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
@@ -455,74 +456,168 @@ const EMPTY_FORM = {
   category: "", salary_range: "", source: "", department: "", stage: "",
 };
 
-function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
-  const [form, setForm] = useState({ ...EMPTY_FORM });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+const EMPTY_ADD = {
+  company: "", role_title: "", location: "", salary_range: "", department: "",
+  job_url: "", company_url: "", company_description: "", stage: "", category: "",
+  arr: "", exit_signal: "", backer: "", fit_summary: "", key_skills: "",
+  ic_flag: false, status: "New" as JobStatus,
+};
 
-  function set(k: keyof typeof EMPTY_FORM, v: string) {
+function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [step, setStep] = useState<"url" | "review">("url");
+  const [url, setUrl] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [form, setForm] = useState({ ...EMPTY_ADD });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
+  function set(k: keyof typeof EMPTY_ADD, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  async function save() {
-    if (!form.company || !form.role_title) { setError("Company and role title are required."); return; }
+  async function handleParse() {
+    if (!url.trim()) return;
+    setParsing(true);
+    setParseError(null);
+    const res = await parseJobUrl(url.trim());
+    setParsing(false);
+    if (res.error) { setParseError(res.error); return; }
+    if (res.role) setForm((f) => ({ ...f, ...res.role }));
+    setStep("review");
+  }
+
+  async function handleSave() {
+    if (!form.company || !form.role_title) { setSaveError("Company and role title are required."); return; }
     setSaving(true);
-    const res = await addJob({
-      company: form.company, role_title: form.role_title, status: form.status,
-      seniority: form.seniority || null, location: form.location || null,
-      job_url: form.job_url || null, careers_url: form.careers_url || null,
-      category: form.category || null, salary_range: form.salary_range || null,
-      source: form.source || null, department: form.department || null,
-      stage: form.stage || null,
-    });
+    setSaveError(null);
+    setSaveStatus("Scoring fit…");
+    const [scoreRes, jobRes] = await Promise.all([
+      scoreFit({
+        company: form.company, role_title: form.role_title,
+        company_description: form.company_description, key_skills: form.key_skills,
+        fit_summary: form.fit_summary, department: form.department, location: form.location,
+        arr: form.arr || undefined, exit_signal: form.exit_signal || undefined,
+        backer: form.backer || undefined,
+      }),
+      addJob({
+        company: form.company, role_title: form.role_title, status: form.status,
+        location: form.location || null, salary_range: form.salary_range || null,
+        department: form.department || null, job_url: form.job_url || null,
+        company_url: form.company_url || null, company_description: form.company_description || null,
+        stage: form.stage || null, category: form.category || null,
+        arr: form.arr || null, exit_signal: form.exit_signal || null,
+        backer: form.backer || null, ic_flag: form.ic_flag || false,
+        fit_summary: form.fit_summary || null, key_skills: form.key_skills || null,
+        source: "Manual",
+      }),
+    ]);
+    if (jobRes.error) { setSaving(false); setSaveError(jobRes.error); return; }
+    if (jobRes.job && scoreRes.score > 0) {
+      const { updateJob } = await import("@/app/actions/jobs");
+      await updateJob(jobRes.job.id, {
+        fit_score: scoreRes.score,
+        fit_summary: scoreRes.rationale || form.fit_summary || null,
+      });
+    }
     setSaving(false);
-    if (res.error) { setError(res.error); return; }
+    setSaveStatus(null);
     onAdded();
   }
 
-  const fields: [keyof typeof EMPTY_FORM, string][] = [
-    ["company", "Company *"], ["role_title", "Role title *"], ["department", "Department"],
-    ["stage", "Stage (e.g. Series B, PE-backed, Public)"], ["category", "Industry"],
-    ["location", "Location"], ["salary_range", "Salary range"], ["source", "Source"],
-    ["job_url", "Job URL"], ["careers_url", "Careers URL"],
+  const reviewFields: [keyof typeof EMPTY_ADD, string][] = [
+    ["company", "Company *"], ["role_title", "Role title *"], ["stage", "Stage"],
+    ["category", "Industry"], ["location", "Location"], ["salary_range", "Salary range"],
+    ["arr", "ARR"], ["backer", "Backer"], ["exit_signal", "Exit signal"],
+    ["company_url", "Company website"], ["job_url", "Job URL"],
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-ink/20">
-      <div className="h-full w-full max-w-md overflow-y-auto bg-white p-6">
+      <div className="h-full w-full max-w-lg overflow-y-auto bg-white p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-heading font-semibold">Add a role</h3>
+          <div>
+            <h3 className="text-lg font-heading font-semibold">Add a role</h3>
+            <p className="text-xs text-ink/50">
+              {step === "url" ? "Paste a job posting URL to auto-fill details" : "Review and edit the extracted details"}
+            </p>
+          </div>
           <button onClick={onClose} className="text-ink/50 hover:text-ink">✕</button>
         </div>
-        {error && <div className="mb-3 rounded-md border border-slate bg-canvas p-3 text-sm text-[#92400E]">{error}</div>}
-        <div className="flex flex-col gap-3">
-          {fields.map(([key, label]) => (
-            <label key={key} className="block">
-              <span className="mb-1 block text-xs font-medium text-ink/60">{label}</span>
+
+        {step === "url" && (
+          <div className="flex flex-col gap-4">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-ink/60">Job posting URL</span>
               <input
-                value={form[key]}
-                onChange={(e) => set(key, e.target.value)}
-                className="w-full rounded-md border border-slate bg-white px-3 py-2 text-sm outline-none focus:border-ink"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleParse()}
+                placeholder="https://jobs.ashbyhq.com/company/..."
+                className="w-full rounded-md border border-slate bg-canvas px-3 py-2 text-sm outline-none focus:border-ink"
               />
             </label>
-          ))}
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-ink/60">Status</span>
-            <select
-              value={form.status}
-              onChange={(e) => set("status", e.target.value)}
-              className="w-full rounded-md border border-slate bg-white px-3 py-2 text-sm outline-none focus:border-ink"
-            >
-              {JOB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-        </div>
-        <div className="mt-6 flex gap-3">
-          <button onClick={save} disabled={saving} className="flex-1 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50">
-            {saving ? "Saving…" : "Save role"}
-          </button>
-          <button onClick={onClose} className="rounded-md border border-slate px-4 py-2 text-sm hover:border-ink">Cancel</button>
-        </div>
+            {parseError && <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{parseError}</div>}
+            {parsing && <Spinner label="Fetching job posting and company details…" />}
+            <div className="flex gap-3">
+              <button
+                onClick={handleParse}
+                disabled={parsing || !url.trim()}
+                className="flex-1 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+              >
+                {parsing ? "Fetching…" : "Fetch & extract →"}
+              </button>
+              <button onClick={onClose} className="rounded-md border border-slate px-4 py-2 text-sm hover:border-ink">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {step === "review" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-lg border border-slate p-4">
+              <div className="flex flex-col gap-3">
+                {reviewFields.map(([key, label]) => (
+                  <label key={key} className="block">
+                    <span className="mb-1 block text-xs font-medium text-ink/60">{label}</span>
+                    <input
+                      value={form[key] as string}
+                      onChange={(e) => set(key, e.target.value)}
+                      className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
+                    />
+                  </label>
+                ))}
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-ink/60">Company description</span>
+                  <textarea
+                    value={form.company_description}
+                    onChange={(e) => set("company_description", e.target.value)}
+                    rows={2}
+                    className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-ink/60">Status</span>
+                  <select
+                    value={form.status}
+                    onChange={(e) => set("status", e.target.value)}
+                    className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
+                  >
+                    {JOB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+            {saveError && <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{saveError}</div>}
+            {saving && <Spinner label={saveStatus ?? "Saving…"} />}
+            <div className="flex gap-3">
+              <button onClick={handleSave} disabled={saving} className="flex-1 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50">
+                {saving ? "Saving…" : "Save to Roles"}
+              </button>
+              <button onClick={() => setStep("url")} className="rounded-md border border-slate px-4 py-2 text-sm hover:border-ink">← Back</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
