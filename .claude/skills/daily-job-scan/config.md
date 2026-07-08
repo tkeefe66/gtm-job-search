@@ -74,30 +74,40 @@ PM, location San Francisco, California. Follow through to the underlying
 posting URL when Adzuna links out; otherwise use the adzuna.com listing
 URL.
 
-## Scoring (fallback rubric when the job-fit-analyzer skill is unavailable)
+## Scoring (two tiers — see SKILL.md step 5)
 
-Score 1–3, written to `Fit Score` with a one-sentence `Fit Rationale`
-naming the concrete signals:
+Scoring is owned by the **job-fit-analyzer** skill
+(`.claude/skills/job-fit-analyzer/`). Its
+`references/target_profile.md` is the single source of truth for the hard
+gates (level, comp floor, location, discipline wall) and the rocket-ship
+list — edit THAT file to change the bar; this config only controls what
+gets scanned.
 
-- **3 — Strong fit**: agentic/AI-native product or AI platform/infra scope,
-  senior product leadership or founding-PM/0-to-1 charter, B2B SaaS or
-  developer/platform domain, credible comp (~$350K+ total), Bay Area or
-  remote. Example rationale: "agentic orchestration product, founding PM,
-  B2B SaaS at scale".
-- **2 — Solid fit**: strong on platform/infra/B2B SaaS scope and seniority
-  but missing the agentic-AI edge, or AI scope with a domain stretch
-  (healthcare, adtech, observability). Comp and location qualify.
-- **1 — Stretch**: matches title/seniority filter but weak domain signal —
-  consumer/physical goods, no AI or platform component, niche vertical, or
-  staffing-agency listings. Kept in the tracker for completeness, scored
-  honestly.
+- **Tier 1 (triage)**: every new role is gate-checked from scraped data
+  alone. Gate failures at non-rocket-ship companies → `Verdict =
+  TRIAGE_SKIP`, `Fit Score` 5–30, rationale naming the failed gate(s).
+- **Tier 2 (full analysis)**: plausible gate-passers and any role at a
+  rocket-ship / watchlist company → the full job-fit-analyzer workflow
+  (web research, verdict object, 0–100 fit score, resume diff + why-me on
+  every APPLY).
 
-Do not write roles that fail the shared filters at all (wrong discipline,
-excluded location) — filtering happens before scoring.
+Note the funnel is deliberately wider than the bar: Staff+ IC roles are
+still collected (market visibility), but they triage out honestly instead
+of getting inflated scores.
+
+Do not write roles that fail the shared filters at all (wrong discipline
+per the collection filters, excluded location) — filtering happens before
+scoring.
 
 ## Write caps and hygiene
 
 - Max 40 new rows per run (highest score first).
 - `Source` select values must be exactly: `Target Company Scan`,
   `Big Tech Scan`, `Broad Web Search`, `Adzuna Daily`.
+- `Verdict` select values must be exactly: `APPLY`,
+  `APPLY_PENDING_DILIGENCE`, `ROCKET_SHIP_EXCEPTION`, `SOFT_SKIP`,
+  `HARD_SKIP`, `TRIAGE_SKIP`.
 - `Status` is always `New` on insert; never any other value.
+- Historical rows (written before 2026-07-08) may carry 1–3 Fit Scores
+  from the old rubric; the backfilled `Verdict` is the authoritative
+  signal on those.

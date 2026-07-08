@@ -28,7 +28,9 @@ the only file to edit when criteria change.
 - Database: **PM Job Tracker** — `6e73d71b-6fdd-4048-84f9-786870193401`
 - Data source: `collection://029c5d51-496b-4de1-a482-11e06aa53a7f`
 - Properties written per row: `Company` (title), `Job Title`, `Department`,
-  `Location`, `Salary Range`, `Fit Score` (number 1–3), `Fit Rationale`,
+  `Location`, `Salary Range`, `Verdict` (select: `APPLY` |
+  `APPLY_PENDING_DILIGENCE` | `ROCKET_SHIP_EXCEPTION` | `SOFT_SKIP` |
+  `HARD_SKIP` | `TRIAGE_SKIP`), `Fit Score` (number 0–100), `Fit Rationale`,
   `Job Description Summary`, `Key Skills`, `Job URL`, `Date Found` (today),
   `Source` (select: `Target Company Scan` | `Big Tech Scan` |
   `Broad Web Search` | `Adzuna Daily`), `Status` = `New`.
@@ -92,18 +94,48 @@ failure in run stats; never abort the whole run for one source.
   record; `Source` = whichever scan is listed first in the order
   Target Company Scan → Big Tech Scan → Adzuna Daily → Broad Web Search.
 
-### 5. Verify and score the new roles only
+### 5. Verify, then score in two tiers
 
-For each genuinely new role:
+For each genuinely new role, first **verify the URL is live**: fetch it; if
+it 404s or redirects to a generic careers page, drop the role (count it in
+run stats as `dead_url`).
 
-- **Verify the URL is live**: fetch it; if it 404s or redirects to a generic
-  careers page, drop the role (count it in run stats as `dead_url`).
-- **Score it**: if the `job-fit-analyzer` skill is available in this session,
-  use its full workflow to produce the verdict and rationale. If it is not
-  available, use the fallback rubric in `config.md` (§ Scoring). Either way
-  the tracker gets a 1–3 `Fit Score` and a one-sentence `Fit Rationale`
-  that names the specific signals (e.g. "agentic/orchestration product,
-  founding PM scope, B2B SaaS at scale").
+Scoring uses the **job-fit-analyzer** skill in this repo
+(`.claude/skills/job-fit-analyzer/`). Its
+`references/target_profile.md` is the single source of truth for the hard
+gates and the rocket-ship list. Two tiers:
+
+**Tier 1 — triage (every role, no web research).** Test the four hard
+gates using only the data already scraped:
+
+- *Level*: is the title the top product seat (VP Product, CPO, CPTO, EVP
+  Product, peer C-level carve-out)? Staff/Sr. Staff/Principal/Group/Lead
+  PM and single-area Directors fail. "Head of Product" is ambiguous — do
+  NOT fail it here; send it to Tier 2.
+- *Location*: Remote-US or Bay Area passes (per shared filters — this
+  should already be true for everything collected).
+- *Comp*: a listed band with a ceiling under $350K fails. Unlisted comp
+  never fails triage.
+- *Discipline*: obvious discipline-wall titles (GPU/HPC infra, build/CI
+  systems, hardware) fail.
+
+Also check the company against the rocket-ship named list in
+`target_profile.md` and `references/rocket_ship_watchlist.md`.
+
+A role that **fails any gate** at a non-rocket-ship company → write it with
+`Verdict = TRIAGE_SKIP`, `Fit Score` 5–30 (calibrate: clean single-gate
+miss with strong domain ≈ 25–30; multiple misses or off-domain ≈ 5–15),
+and a one-line `Fit Rationale` naming the failed gate(s), e.g. "level gate:
+Staff IC seat; strong agentic domain otherwise". Properties only — no page
+body, no web research.
+
+**Tier 2 — full analysis.** Roles that plausibly pass all gates (top-seat
+titles, ambiguous Head of Product, unlisted comp on a senior seat) OR any
+role at a rocket-ship / watchlist company → run the **full job-fit-analyzer
+workflow** (all steps: ingest + web research, hard gates with evidence,
+thesis + upside, caveat classification, verdict, rocket-ship override,
+outputs). This includes resume diff + why-me for every APPLY and
+APPLY_PENDING_DILIGENCE — eagerly, never deferred.
 
 ### 6. Write to the tracker
 
@@ -111,6 +143,13 @@ Create one page per new role in the data source with all properties from
 the Notion target section above. `Status` is always `New`; never set any
 other status. **Never update, re-score, or overwrite an existing row** —
 Chad's Status edits (Applied / Not Interested / …) are his alone.
+
+- **Tier-1 rows**: properties only (`Verdict = TRIAGE_SKIP`).
+- **Tier-2 rows**: properties (`Verdict`, 0–100 `Fit Score`, one-line
+  `Fit Rationale`) **plus the row's page body** containing, in order: the
+  structured verdict JSON (fenced code block), the hard-gates table with
+  evidence, thesis/upside summary, caveats and red flags, open questions,
+  the escape hatch (skips), and the resume diff + why-me note (applies).
 
 Cap writes at **40 rows per run**, highest fit score first; if the cap is
 hit, say so in run stats.
@@ -121,6 +160,7 @@ Print run stats to the session log only:
 
 ```
 per source: found / duplicates / dead_url / written
+triaged (tier 1) / deep_analyzed (tier 2) / apply_count
 failures: <source>: <error>  (if any)
 degraded dedup mode: yes/no
 cap hit: yes/no
