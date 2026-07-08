@@ -33,7 +33,8 @@ the only file to edit when criteria change.
   `HARD_SKIP` | `TRIAGE_SKIP`), `Fit Score` (number 0–100), `Fit Rationale`,
   `Job Description Summary`, `Key Skills`, `Job URL`, `Date Found` (today),
   `Source` (select: `Target Company Scan` | `Big Tech Scan` |
-  `Broad Web Search` | `Adzuna Daily`), `Status` = `New`.
+  `Broad Web Search` | `Adzuna Daily`), `Link Check` (select: `Live` |
+  `Dead`; set `Live` on insert), `Status` = `New`.
 
 ## Pipeline (run every step, in order)
 
@@ -65,8 +66,13 @@ history.
 
 Launch four parallel subagents, one per source in `config.md` (Target
 Company Scan, Big Tech Scan, Broad Web Search, Adzuna Daily). Give each
-subagent its source's instructions plus the shared filters, and require it
-to return a raw list of normalized role records:
+subagent its source's instructions plus the shared filters. **Note the
+narrowed funnel (config.md § Shared filters):** the top-seat lane
+(VP/CPO/CPTO/EVP/Head of Product/GM/Founding Product Director) applies to
+every source, and only rocket-ship named + watchlist companies use the
+wide all-roles lane. Do not collect Staff/Principal/Group/Director-sub-area
+IC roles except at those rocket-ship companies. Each subagent returns a raw
+list of normalized role records:
 
 ```
 company, job_title, department, location, salary_range,
@@ -137,14 +143,20 @@ thesis + upside, caveat classification, verdict, rocket-ship override,
 outputs). This includes resume diff + why-me for every APPLY and
 APPLY_PENDING_DILIGENCE — eagerly, never deferred.
 
-### 6. Write to the tracker
+### 6. Write new roles to the tracker
 
 Create one page per new role in the data source with all properties from
-the Notion target section above. `Status` is always `New`; never set any
-other status. **Never update, re-score, or overwrite an existing row** —
-Chad's Status edits (Applied / Not Interested / …) are his alone.
+the Notion target section above. `Status` is always `New` on insert; never
+set any other status.
 
-- **Tier-1 rows**: properties only (`Verdict = TRIAGE_SKIP`).
+**`Verdict` is REQUIRED on every insert — never leave it blank.** Every row
+gets one of: `TRIAGE_SKIP` | `HARD_SKIP` | `SOFT_SKIP` |
+`APPLY_PENDING_DILIGENCE` | `APPLY` | `ROCKET_SHIP_EXCEPTION`. `Fit Score`
+is the 0–100 scale (triage rows 5–30) — **never the legacy 1–3 scale.** A
+row written with a Fit Score but no Verdict is a bug; set both together.
+
+- **Tier-1 rows**: properties only — `Verdict = TRIAGE_SKIP`, `Fit Score`
+  5–30, one-line `Fit Rationale`. No page body.
 - **Tier-2 rows**: properties (`Verdict`, 0–100 `Fit Score`, one-line
   `Fit Rationale`) **plus the row's page body** containing, in order: the
   structured verdict JSON (fenced code block), the hard-gates table with
@@ -154,13 +166,48 @@ Chad's Status edits (Applied / Not Interested / …) are his alone.
 Cap writes at **40 rows per run**, highest fit score first; if the cap is
 hit, say so in run stats.
 
-### 7. Finish silently
+For NEW roles this is insert-only: **never update, re-score, or overwrite a
+pre-existing row here.** Chad's Status edits (Applied / Not Interested / …)
+are his alone. The one place existing rows are touched is Step 7 below,
+under strict rules.
+
+### 7. Candidate maintenance pass
+
+After new-role writes, refresh the live-candidate shortlist. Select existing
+rows where `Verdict` ∈ {`APPLY`, `APPLY_PENDING_DILIGENCE`,
+`ROCKET_SHIP_EXCEPTION`} **AND `Status` = `New`** (never touch a row Chad has
+already moved to Reviewing/Applied/Not Interested/Rejected/Offer). For each:
+
+- **Auto-diligence** (APPLY_PENDING_DILIGENCE only): run targeted web
+  research to answer the row's open questions (reporting line — is it the
+  top seat or a buried VP?; exact comp vs the $350K floor; is there already
+  a CPO above it?). Then:
+  - questions resolve favorably → upgrade `Verdict` to `APPLY`, refresh
+    `Fit Score` + `Fit Rationale`, and append the resume diff + why-me note
+    to the page body (generate eagerly, per the analyzer).
+  - questions resolve unfavorably → downgrade to `SOFT_SKIP` / `HARD_SKIP`
+    with the reason.
+  - still unresolvable → leave as APPLY_PENDING_DILIGENCE; append a dated
+    "diligence attempted, still open: …" note (don't churn the verdict).
+- **Freshness** (all selected rows): fetch the `Job URL`. If it 404s or
+  redirects to a generic careers/search page, set `Link Check` = `Dead` and
+  prefix `Fit Rationale` with "⚠️ posting closed —". If live, set
+  `Link Check` = `Live`.
+
+**Write-rule guardrail for this step — read carefully.** On these rows you
+may modify ONLY: `Verdict`, `Fit Score`, `Fit Rationale`, `Link Check`, and
+the page body. You may NEVER modify `Status`, `Company`, `Job Title`,
+`Job URL`, `Source`, or `Date Found`, and you may never touch any row whose
+`Status` ≠ `New`. When in doubt, leave the row untouched.
+
+### 8. Finish silently
 
 Print run stats to the session log only:
 
 ```
 per source: found / duplicates / dead_url / written
 triaged (tier 1) / deep_analyzed (tier 2) / apply_count
+maintenance: candidates_checked / diligence_upgrades / diligence_downgrades / dead_links
 failures: <source>: <error>  (if any)
 degraded dedup mode: yes/no
 cap hit: yes/no
