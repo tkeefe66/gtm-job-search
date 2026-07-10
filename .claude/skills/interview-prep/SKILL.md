@@ -65,6 +65,14 @@ Read `../job-fit-analyzer/references/resume_master.md` (proof points, the
 three AI-credibility layers) and `../job-fit-analyzer/references/target_profile.md`
 (the thesis/gates so prep stays consistent with how the role was scored).
 
+If the role wants real AI-platform depth (agent architecture, RAG,
+multi-tenant AI trust/governance, "operating rigor," or the fit analysis
+flagged a "power-user builder, not platform architect" caveat), also read
+`../job-fit-analyzer/references/demandbase_ai_case_studies.md` — it has
+the detailed architecture narrative, tradeoffs, and verbatim pitches that
+back up claims the resume only summarizes in one line. Respect its role-
+boundary note: Chad directed these systems, a report built them.
+
 ### 5. Synthesize the prep sheet
 
 Produce, in this order:
