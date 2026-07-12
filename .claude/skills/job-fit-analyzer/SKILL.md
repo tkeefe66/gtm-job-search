@@ -16,6 +16,7 @@ Evaluates job postings against Chad Holdorf's target profile, produces a structu
 | `references/verdict_schema.md` | Before emitting output. Exact structured format + prose rendering rules. |
 | `references/calibration_examples.md` | When a posting resembles a tricky case (prestige logo, keyword overlap, title ambiguity, domain question). Eight graded examples with the lesson each teaches. |
 | `references/rocket_ship_watchlist.md` | In Step 6, whenever the company might be a hot/high-talent-density startup. Reference-tier list (Paraform TDI + Harmonic Hot 25) with discipline + stage tags. Flags only — never waives a gate. |
+| `references/demandbase_ai_case_studies.md` | When generating a resume diff or why-me note for a posting that wants real AI-platform depth (agent architecture, RAG, multi-tenant AI trust/governance, "operating rigor") — richer, quotable detail beyond the resume's one-line bullets. Read the role-boundary note at the top before using: Chad directed these, a report built them. |
 
 ## Workflow
 

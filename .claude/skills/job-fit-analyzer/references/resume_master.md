@@ -14,7 +14,8 @@ Product executive with 15+ years defining GTM platforms and B2B marketing soluti
 ## Work Experience
 
 ### Demandbase — Vice President of Product — San Francisco — 08/2024–Present
-- Launched Demandbase AI — a governed LLM system on Amazon Bedrock with 25+ agents, token-based pricing, and an automated eval harness across 15 GTM domains; drove 50% retention on the company's largest product bet in its history. `[AI-layer-1: shipped-AI-at-scale]`
+- Directed product architecture for Demandbase AI's governed agent platform — tenant-scoped semantic layer, read-only controlled query execution, and fail-closed authorization — turning LLM fluency into auditable answers on live account data; drove 50% retention on the company's largest product bet in its history. `[AI-layer-1: shipped-AI-at-scale]`
+- Directed the product migration of Journey and Opportunity Insights from a static insights sidebar to an embedded, plan-first GTM research agent — 17 scenarios across 13+ grounded analytics tools, streaming multi-turn UX with live dashboard-state context inheritance. `[AI-layer-1: shipped-AI-at-scale]`
 - Led product strategy that delivered #1 Gartner Critical Capabilities ranking for ABM Platforms — surpassing 6sense across New Account Acquisition, Retention, and Expansion (Oct 2025). `[category-leadership]`
 - Scaled Agentbase to 25+ production agents across Sales, Marketing, Advertising, and Operations — delivering 10x faster segmentation, 40% higher CTR, and 4 hours saved per rep per week. `[AI-layer-1: agentic-production]`
 - Launched Buying Groups — AI-powered audience targeting that delivered +67% higher visit rates and 17% lower cost per visit, shifting ad spend toward decision-makers across the full buying group. `[AI-layer-1]`
@@ -44,7 +45,7 @@ Product executive with 15+ years defining GTM platforms and B2B marketing soluti
 ## Skills
 - **Technical:** Agile/DevOps, CI/CD, Cloud architecture, CS degree, Hands-on software development (Python, SQL, Cursor, Claude Code), Developer experience
 - **Product Leadership:** 0-to-1 product development, Platform strategy, Enterprise GTM, B2B SaaS, Product vision & roadmap, Cross-functional team leadership, Pricing & commercialization
-- **AI/Agentic Systems:** LLM product development, Multi-agent workflow design, AI/agentic prototyping, LLM infrastructure & serving, Vector search, AI platform architecture
+- **AI/Agentic Systems:** LLM product development, Plan-first agent orchestration, Governed multi-tenant AI architecture, AI/agentic prototyping, Offline eval & quality gating, Vector search
 
 ## Publications
 - The AI Architecture We Deleted — AWS Summit New York, 06/2026. How Demandbase built, then simplified, a multi-agent GTM architecture using Amazon Bedrock — and got better customer results.
@@ -59,7 +60,7 @@ Product executive with 15+ years defining GTM platforms and B2B marketing soluti
 
 ## Tailoring notes (the three AI-credibility layers)
 
-1. **Layer 1 — Shipped AI product at scale:** Demandbase AI, Agentbase, Buying Groups. Lead with these for AI-native archetype (a) roles.
+1. **Layer 1 — Shipped AI product at scale:** Demandbase AI (governed multi-tenant agent platform), Agentbase, Buying Groups, Pipeline Intelligence GTM Research Agent. Lead with these for AI-native archetype (a) roles. For postings wanting real platform-architecture depth, pull detail from `demandbase_ai_case_studies.md` rather than improvising.
 2. **Layer 2 — Brought AI to an established company:** Pendo first-AI-in-90-days, agentic prototyping framework as internal standard. Lead for "come in and do AI" archetype (b) roles.
 3. **Layer 3 — Hands-on builder:** Cursor/Claude Code daily, Deductible, Marin Cake Studio agents, Deere engineering roots. Lead when a posting names coach-player, technical depth, AI-first operating models, or Chad's actual tools.
 
