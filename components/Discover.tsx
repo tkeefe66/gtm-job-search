@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
@@ -15,14 +15,6 @@ const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
   { value: "6m", label: "6 months" },
 ];
 
-const SF_KEYWORDS = ["san francisco", "sf", "bay area", "palo alto", "menlo park", "mountain view", "santa clara", "san jose", "oakland", "berkeley", "redwood city", "remote"];
-
-function isSfOrRemote(hq: string | undefined): boolean {
-  if (!hq) return true; // no data — show by default
-  const lower = hq.toLowerCase();
-  return SF_KEYWORDS.some((kw) => lower.includes(kw));
-}
-
 export default function Discover() {
   const router = useRouter();
   const [startups, setStartups] = useState<Startup[]>([]);
@@ -32,7 +24,6 @@ export default function Discover() {
   const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
-  const [sfOnly, setSfOnly] = useState(true);
   const [watched, setWatched] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
 
@@ -67,8 +58,20 @@ export default function Discover() {
 
   async function handleFindRoles(startup: Startup) {
     setSearchingRoles(startup.company);
-    await findAndSaveRoles(startup);
+    setError(null);
+    const res = await findAndSaveRoles(startup);
     setSearchingRoles(null);
+    if (res.error) {
+      setError(`Couldn't search ${startup.company}: ${res.error}`);
+      return;
+    }
+    if (!res.roles || res.roles.length === 0) {
+      setError(
+        res.message ||
+          `No remote or Denver/CO GTM / RevOps roles found at ${startup.company} right now.`
+      );
+      return;
+    }
     router.push("/roles");
   }
 
@@ -88,10 +91,7 @@ export default function Discover() {
 
   const busy = loading || loadingCached;
 
-  const displayed = useMemo(() => {
-    if (!sfOnly) return startups;
-    return startups.filter((s) => isSfOrRemote(s.headquarters));
-  }, [startups, sfOnly]);
+  const displayed = startups;
 
   function formatFetchedAt(iso: string) {
     return new Date(iso).toLocaleString(undefined, {
@@ -117,19 +117,6 @@ export default function Discover() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* SF filter toggle */}
-          <button
-            onClick={() => setSfOnly((v) => !v)}
-            disabled={busy}
-            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
-              sfOnly
-                ? "border-ink bg-ink text-white"
-                : "border-slate bg-white text-ink hover:border-ink"
-            }`}
-          >
-            SF + Remote
-          </button>
-
           {/* Date range selector */}
           <div className="flex overflow-hidden rounded-md border border-slate">
             {DATE_RANGE_OPTIONS.map((opt) => (
@@ -172,9 +159,7 @@ export default function Discover() {
 
       {!busy && !error && displayed.length === 0 && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
-          {sfOnly && startups.length > 0
-            ? `No SF or remote companies in your saved results. Toggle off "SF + Remote" to see all ${startups.length}.`
-            : "No saved results yet. Click \"Discover\" to fetch."}
+          No saved results yet. Click &quot;Discover&quot; to fetch.
         </div>
       )}
 

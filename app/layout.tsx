@@ -16,8 +16,8 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Job Search Reconciler",
-  description: "AI-powered product job search tool",
+  title: "GTM Job Search",
+  description: "AI-powered GTM / RevOps job search tool",
 };
 
 export default function RootLayout({

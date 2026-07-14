@@ -20,6 +20,7 @@ const STATUS_STYLES: Record<string, string> = {
   "Not Interested": "bg-[#F3F4F6] text-[#6B7280]",
   Rejected: "bg-[#FEE2E2] text-[#991B1B]",
   Passed: "bg-[#DCFCE7] text-[#14532D]",
+  "Posting Closed": "bg-[#F3F4F6] text-[#9CA3AF]",
 };
 
 type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category" | "arr" | "exit_signal" | "backer";
@@ -38,7 +39,7 @@ export default function RolesTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "All" | "Active" | "Out">("All");
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "All" | "Active" | "Out" | "Open">("Open");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showRecruiter, setShowRecruiter] = useState(false);
@@ -83,6 +84,8 @@ export default function RolesTable() {
     let list = jobs.filter((j) => {
       if (statusFilter === "All") {
         // show everything
+      } else if (statusFilter === "Open") {
+        if (TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
       } else if (statusFilter === "Active") {
         if (!ACTIVE_STATUSES.includes(j.status as JobStatus)) return false;
       } else if (statusFilter === "Out") {
@@ -176,7 +179,7 @@ export default function RolesTable() {
         {FUNNEL.map((f) => (
           <button
             key={f.key}
-            onClick={() => setStatusFilter(statusFilter === f.key ? "All" : f.key as JobStatus | "All" | "Active" | "Out")}
+            onClick={() => setStatusFilter(statusFilter === f.key ? "Open" : f.key as JobStatus | "All" | "Active" | "Out")}
             className={`rounded-lg border p-4 text-left transition ${
               statusFilter === f.key ? "border-ink" : "border-slate hover:border-ink/30"
             } bg-white`}
@@ -196,7 +199,7 @@ export default function RolesTable() {
           className="w-full rounded-md border border-slate bg-white px-3 py-2 text-sm outline-none focus:border-ink sm:max-w-xs"
         />
         <div className="flex flex-wrap gap-2">
-          {(["All", ...JOB_STATUSES] as const).map((s) => (
+          {(["Open", "All", ...JOB_STATUSES] as const).map((s) => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
@@ -280,7 +283,7 @@ export default function RolesTable() {
                     )}
                     {job.ic_flag && (
                       <span className="inline-flex items-center rounded-full bg-[#FEF3C7] px-2 py-0.5 text-xs font-medium text-[#92400E]">
-                        IC — apply anyway?
+                        Builder / IC — apply anyway?
                       </span>
                     )}
                   </div>

@@ -25,10 +25,10 @@ export function StatusBadge({ status }: { status: JobStatus }) {
 
 export function SeniorityBadge({ seniority }: { seniority: string }) {
   const map: Record<string, string> = {
-    "VP/CPO": "bg-[#EDE9FE] text-[#5B21B6]",
+    "VP/Head": "bg-[#EDE9FE] text-[#5B21B6]",
     Director: "bg-[#DBEAFE] text-[#1E40AF]",
-    "Senior PM": "bg-[#FEF3C7] text-[#92400E]",
-    PM: "bg-[#F3F4F6] text-[#6B7280]",
+    "Senior Manager": "bg-[#FEF3C7] text-[#92400E]",
+    "Manager/IC": "bg-[#F3F4F6] text-[#6B7280]",
   };
   return (
     <span

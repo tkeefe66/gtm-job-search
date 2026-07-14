@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import type { Insights } from "@/lib/types";
 
 const SYSTEM =
-  "You are a product leadership career coach. Analyze this person's tracked job pipeline and the current market for product roles at AI startups. Return ONLY valid JSON, no markdown.";
+  "You are a go-to-market and revenue operations career coach. Analyze this person's tracked job pipeline and the current market for GTM Systems, RevOps, Marketing Operations, and GTM/AI Operations roles at B2B SaaS and AI companies. Return ONLY valid JSON, no markdown.";
 
 export async function getCachedInsights(): Promise<{
   insights?: Insights;
@@ -49,7 +49,7 @@ export async function analyzePipeline(): Promise<{
       pipeline,
       null,
       2
-    )}\n\nAlso research what product skills are most in demand at AI-first companies right now. Then analyze my pipeline against the current market. Return a JSON object with these exact fields: top_skills_in_demand (array of strings), common_themes (array of strings), gap_analysis (string, 2-3 sentences on what the market wants vs what a B2B SaaS AI product VP typically brings), positioning_advice (string, 2-3 sentences on how to position for these roles), company_archetypes (array of objects with archetype, description, example_companies array), recommended_next_searches (array of strings — company names or categories to search next). Return ONLY the JSON object.`;
+    )}\n\nAlso research what GTM systems, revenue operations, marketing operations, and GTM/AI operations skills are most in demand at B2B SaaS and AI-first companies right now. Then analyze my pipeline against the current market. Return a JSON object with these exact fields: top_skills_in_demand (array of strings), common_themes (array of strings), gap_analysis (string, 2-3 sentences on what the market wants vs what a senior GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder typically brings), positioning_advice (string, 2-3 sentences on how to position for these roles), company_archetypes (array of objects with archetype, description, example_companies array), recommended_next_searches (array of strings — company names or categories to search next). Return ONLY the JSON object.`;
 
     const raw = await callWithWebSearch({
       system: SYSTEM,

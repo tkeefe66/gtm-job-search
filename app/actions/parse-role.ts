@@ -47,8 +47,8 @@ Return a JSON object with these exact fields:
 - arr (string, annual recurring revenue if mentioned or found via web search: e.g. "$380M+ ARR" — or empty)
 - exit_signal (string, any mention of exit plans, IPO path, acquisition interest, or liquidity event: e.g. "PE exit planned", "IPO path", "M&A target" — or empty)
 - backer (string, key investor or PE firm backing the company: e.g. "Centerbridge Partners", "a16z", "Sequoia" — or empty)
-- ic_flag (boolean — true ONLY when ALL of these are true: (1) the role is IC-level with no people management, meaning a PM or Senior PM title, AND (2) there is a clear signal the product function is early or nascent, such as "founding PM", "first PM", "building the product function", "nascent product team", "you'll define what product looks like here", or very few PMs suggesting a leadership vacuum. The logic: this is an IC role you might apply to as a foot in the door to a future leadership role. Set to false for VP/Director/Head roles and IC roles at mature product orgs with no leadership upside signal)
-- fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
+- ic_flag (boolean — true when the role is an IC / hands-on practitioner role (e.g. GTM Engineer, RevOps or Marketing Ops IC, AI-Ops / automation engineer) that is still worth applying to because it centers on building GTM systems and agentic AI workflows, OR because the function is early/nascent and you'd define it from scratch — i.e. a builder role worth applying to regardless of the IC title. Set to false for standard leadership roles and for narrow IC roles at mature orgs with no systems/AI-building upside)
+- fit_summary (string, 1-2 sentences on what makes this role interesting for a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder)
 - key_skills (string, comma-separated list of skills mentioned)
 - recruiter_name (string, the name of the recruiter or person who sent this message or empty)
 - recruiter_email (string, any email address belonging to the recruiter or empty)
@@ -96,8 +96,8 @@ Return a JSON object with these exact fields:
 - arr (string, annual recurring revenue if found: e.g. "$380M+ ARR" — or empty)
 - exit_signal (string, any exit plans, IPO path, or liquidity event — or empty)
 - backer (string, key investor or PE firm — or empty)
-- ic_flag (boolean — true ONLY when: (1) IC-level role with no people management (PM or Senior PM title), AND (2) clear signal the product function is early/nascent: "founding PM", "first PM", "building the product function", "nascent product team". False for VP/Director/Head roles and IC roles at mature product orgs)
-- fit_summary (string, 1-2 sentences on what makes this role interesting for a VP of Product with B2B SaaS and AI background)
+- ic_flag (boolean — true when the role is an IC / hands-on practitioner role (e.g. GTM Engineer, RevOps or Marketing Ops IC, AI-Ops / automation engineer) worth applying to because it centers on building GTM systems and agentic AI workflows, or because the function is early/nascent and you'd define it from scratch. False for standard leadership roles and narrow IC roles at mature orgs with no systems/AI-building upside)
+- fit_summary (string, 1-2 sentences on what makes this role interesting for a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder)
 - key_skills (string, comma-separated skills from the job posting)
 - recruiter_name (string, empty)
 - recruiter_email (string, empty)
@@ -117,16 +117,19 @@ Return ONLY the JSON object.`,
   }
 }
 
-// Chad's background used for ruthless fit scoring.
-const CHAD_BACKGROUND = `
-Chad Holdorf is a VP of Product / CPO-level candidate with this background:
-- 10+ years in B2B SaaS product leadership (VP/CPO level)
-- Deep experience: Demandbase (AI-powered ABM platform), Salesforce (SDK, Hyperforce, developer platform)
-- Expertise: AI/agentic products, developer platforms, enterprise B2B SaaS, multi-agent systems, platform integrations
-- Strong: go-to-market, 0-to-1 product builds, technical PM work with engineers and researchers
-- Weaker fit: pure consumer products, hardware, non-tech industries, roles that don't need a senior leader
-- Looking for: VP of Product, CPO, Head of Product, Director of Product at AI-first or B2B SaaS companies
-- Open to IC PM roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Mistral, Cohere, etc.) or hyper-growth AI startups where the equity, impact, and learning opportunity outweigh the title — this is the new reality for senior PMs in AI
+// Tom's background used for ruthless fit scoring.
+const CANDIDATE_BACKGROUND = `
+Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
+- 13+ years architecting B2B revenue engines; 6+ years inside the ABM/ABX product category (Demandbase, Engagio)
+- Current: Director of GTM Experts at Demandbase — leads a team that architects GTM systems and AI workflows for enterprise customers (BlackRock, Boeing, Microsoft, SAP Concur, Snowflake); influenced $43M+ in won revenue and $96M+ in pipeline
+- Deep expertise: the quantitative spine of GTM — pipeline waterfall modeling, ICP analysis, capacity planning, attribution, predictive account scoring, forecasting; QBR / board narrative work with CMOs, CROs, and RevOps leaders
+- Tooling: Marketo, Salesforce, Tableau, Bizible, LeanData, Workato, Outreach; led Pardot→Marketo migrations and multiple acquisition data migrations
+- AI builder: ships AI-first products and agentic workflows hands-on ("vibe-codes" working prototypes) — built a live AI product demo for a flagship event, a multi-agent B2B news intelligence agent, and other agentic apps
+- Strong: GTM systems architecture, marketing/revenue operations leadership, AI/agentic GTM workflows, enterprise B2B SaaS, data-driven GTM strategy, executive storytelling, cross-functional leadership (Sales, Marketing, Product, CS, Finance)
+- Weaker fit: pure people-management roles with no systems/building, non-B2B or non-SaaS industries, roles with no AI/automation upside, deeply technical software-engineering roles
+- Looking for: Head / VP / Director of GTM Systems, RevOps, Revenue Operations, Marketing Operations, GTM Strategy, or GTM/AI Operations — plus GTM Engineer and AI-Ops practitioner-builder roles where hands-on systems + agentic AI work is the point
+- Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
+- Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
 `.trim();
 
 export async function scoreFit(opts: {
@@ -153,7 +156,7 @@ export async function scoreFit(opts: {
           content: `Score how well this role fits this candidate on a scale of 1-5. Be ruthless.
 
 CANDIDATE:
-${CHAD_BACKGROUND}
+${CANDIDATE_BACKGROUND}
 
 ROLE:
 Company: ${opts.company}
@@ -169,17 +172,17 @@ Summary: ${opts.fit_summary}
 
 SCORING GUIDE:
 1 = Poor fit — wrong industry, no relevant overlap, or clearly too junior/unrelated
-2 = Weak fit — some domain overlap but significant gaps, or a narrow IC PM role with no strategic scope
-3 = Moderate fit — relevant domain and background but a standard PM role without broad ownership or leadership scope
-4 = Strong fit — clear domain alignment AND (broad ownership across multiple surfaces, lead/principal/head-level scope, or explicit cross-functional leadership even without a VP title)
-5 = Exceptional fit — almost tailor-made: VP/CPO/Head-level title OR a lead role with VP-equivalent scope at a company where the domain is a direct match
+2 = Weak fit — some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope
+3 = Moderate fit — relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside
+4 = Strong fit — clear domain alignment AND (broad ownership across the GTM/RevOps stack, lead/principal/head-level scope, hands-on GTM systems + AI/agentic building, or explicit cross-functional leadership even without a VP title)
+5 = Exceptional fit — almost tailor-made: Head/VP/Director-level GTM Systems / RevOps / Marketing Ops / GTM-AI title at a B2B SaaS company where the domain is a direct match, OR a GTM Engineer / AI-Ops builder role with broad mandate at a strong company
 
 TITLE SCOPE SIGNALS (use these to adjust score):
-- "Core", "Lead", "Principal", "Head of", "Staff" in the title = broader scope, score higher than a standard PM
-- "VP of Product", "CPO", "Director" = leadership level, eligible for 4-5 if domain matches
-- IC PM roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) = eligible for 4-5 regardless of title — top execs are taking IC roles at these companies because the equity, learning, and impact outweigh the title. This is the new world of PM. Score these on company tier + domain fit, not title.
-- IC PM roles at hyper-growth AI startups (Series B+ with clear AI-first trajectory and strong domain alignment) = eligible for 3-4, not capped at 2
-- "Product Manager - [specific feature]" at a generic SaaS company with no AI angle = narrow IC scope, cap at 2-3
+- "Head of", "VP", "Director" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches
+- "GTM Engineer", "GTM Systems", "AI Operations", "AI Ops", "Revenue Systems", "Marketing Ops Architect", "Agentic / Automation" in the title = direct match to Tom's practitioner-builder positioning; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point
+- IC / practitioner builder roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) or hyper-growth B2B SaaS (Series B+) where hands-on GTM systems + agentic AI is the mandate = eligible for 4-5 regardless of title — the building, equity, learning, and impact outweigh the title
+- "Marketing Operations Manager" / "RevOps Analyst" at a generic small company with no AI angle and narrow scope = cap at 2-3
+- Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower
 
 FINANCIAL SIGNALS (use these to adjust score up or down):
 - High ARR ($100M+) with a clear exit signal (PE exit, IPO path) = strong upward signal — equity likely meaningful, role has real scope
@@ -188,12 +191,12 @@ FINANCIAL SIGNALS (use these to adjust score up or down):
 - Unknown backer or pre-revenue = neutral, don't penalize unless other signals are weak
 - Very high ARR ($500M+) at a PE-backed company heading to exit = rare opportunity signal, weight positively
 
-PE-BACKED LEGACY AI PIVOT RULE (apply when all three are true):
-1. The company is PE-backed or PE-acquired (established, not a startup)
-2. The role is explicitly framed as leading an AI transformation, AI initiative, or AI pivot (not just "uses AI")
-3. The domain is within 1 degree of Chad's background (enterprise B2B SaaS, GTM tech, developer tools, data platforms, FinTech, or any software vertical where his SaaS leadership transfers)
-→ When all three apply: floor score of 4. This is a CPO-equivalent mandate regardless of title — you walk in defining what AI means for the whole product. The PE exit signal means equity upside is structured and coming.
-→ If the domain requires deep vertical expertise Chad lacks (pharma, LIMS, clinical, hardware): stay at 3. Real equity upside but execution risk is high — he'd spend year 1 learning the domain rather than building.
+AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):
+1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)
+2. The role is explicitly framed as leading an AI transformation of GTM, RevOps, or Marketing Operations — building AI/agentic workflows into the revenue engine, not just "uses AI"
+3. The domain is within 1 degree of Tom's background (B2B SaaS, ABM/ABX, RevTech/MarTech, GTM tooling, data platforms, or any software vertical where his GTM-systems leadership transfers)
+→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the practitioner-builder + systems-architect role Tom is targeting.
+→ If the domain requires deep vertical expertise Tom lacks (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — he'd spend year 1 learning the domain rather than building.
 
 Return a JSON object with:
 - score (integer 1-5)

@@ -10,7 +10,8 @@ export type JobStatus =
   | "Offer"
   | "Not Interested"
   | "Rejected"
-  | "Passed";
+  | "Passed"
+  | "Posting Closed";
 
 export const JOB_STATUSES: JobStatus[] = [
   "New",
@@ -25,6 +26,7 @@ export const JOB_STATUSES: JobStatus[] = [
   "Not Interested",
   "Rejected",
   "Passed",
+  "Posting Closed",
 ];
 
 export const ACTIVE_STATUSES: JobStatus[] = [
@@ -37,7 +39,12 @@ export const ACTIVE_STATUSES: JobStatus[] = [
   "Reference Check",
 ];
 
-export const TERMINAL_STATUSES: JobStatus[] = ["Not Interested", "Rejected", "Passed"];
+export const TERMINAL_STATUSES: JobStatus[] = [
+  "Not Interested",
+  "Rejected",
+  "Passed",
+  "Posting Closed",
+];
 
 // Legacy pipeline statuses for Tracker funnel view
 export type PipelineStatus = "Tracking" | "Applied" | "Interviewing" | "Offer" | "Passed";
@@ -49,7 +56,7 @@ export const PIPELINE_STATUSES: PipelineStatus[] = [
   "Passed",
 ];
 
-export type Seniority = "VP/CPO" | "Director" | "Senior PM" | "PM";
+export type Seniority = "VP/Head" | "Director" | "Senior Manager" | "Manager/IC";
 
 export interface Startup {
   company: string;

@@ -1,53 +1,50 @@
-# Job Search Reconciler
+# GTM Job Search
 
 <!--
 Required environment variables (.env.local):
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+DATABASE_URL=postgres://user:pass@host:port/db
 ANTHROPIC_API_KEY=your_anthropic_api_key
 -->
 
-An AI-powered, single-user product job search tool. Four phases:
+An AI-powered, single-user GTM / RevOps job search tool tuned to Tom Keefe's profile (GTM Systems / RevOps / Marketing Operations leader and AI practitioner-builder). Four phases:
 
-1. **Discover** — find this week's notable AI/tech startup funding rounds (Anthropic web search).
-2. **Roles** — for any company, surface open VP/CPO/Director/Senior PM roles with fit signals.
-3. **Tracker** — a Supabase-backed pipeline (Tracking → Applied → Interviewing → Offer → Passed) with inline status, fit-score stars, and notes.
+1. **Discover** — find this week's notable AI/tech + B2B SaaS startup funding rounds (Anthropic web search).
+2. **Roles** — for any company, surface open GTM Systems / RevOps / Marketing Ops / GTM-AI / GTM Engineer roles (VP/Head · Director · Senior Manager · Manager/IC) with fit signals.
+3. **Tracker** — a Postgres-backed pipeline (Tracking → Applied → Interviewing → Offer → Passed) with inline status, fit-score stars, and notes.
 4. **Insights** — analyze your pipeline vs. the live market and get positioning advice.
+
+The candidate profile that drives fit-scoring lives in `app/actions/parse-role.ts` (`CANDIDATE_BACKGROUND`); the target-role titles and Denver/remote location filter live in `app/actions/roles.ts` and `app/actions/discover.ts`.
 
 ## Stack
 
-Next.js 14 (App Router) · TypeScript · Tailwind · Supabase · Anthropic API (`claude-sonnet-4-6`, web search tool) · Vercel.
+Next.js 14 (App Router) · TypeScript · Tailwind · Postgres (via `pg`) · Anthropic API (`claude-sonnet-4-6`, web search tool) · Railway.
 
-All Anthropic calls run server-side (server actions). The API key is never exposed client-side.
+The data layer lives in [`lib/supabase.ts`](lib/supabase.ts) — a small Supabase-compatible query builder over `pg` (the file keeps the `supabase` name so the server actions didn't have to change). The canonical schema is [`db/schema.sql`](db/schema.sql). All Anthropic calls run server-side (server actions); the API key is never exposed client-side.
 
 ## Setup
 
-### 1. Clone & install
+### 1. Install
 
 ```bash
-git clone https://github.com/chadholdorf/job-search-reconciler.git
-cd job-search-reconciler
 npm install
 ```
 
 ### 2. Set environment variables
 
-Copy the values into `.env.local`:
+Copy the values into `.env.local` (use your Postgres database's **public** URL for local dev):
 
 ```
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+DATABASE_URL=postgres://user:pass@host:port/db
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
-### 3. Run the Supabase migration
+### 3. Apply the schema
 
-In the Supabase dashboard → SQL Editor, paste and run the contents of
-[`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql).
+```bash
+DATABASE_URL=postgres://... node db/apply-schema.mjs
+```
 
-This creates the `jobs` table. Since this is a single-user tool, Row Level
-Security is left off (the anon key has full access). If you deploy publicly,
-enable RLS or put the app behind auth.
+This creates all five tables (`jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`). It's idempotent — safe to re-run. Single-user tool, so there's no auth/RLS; put it behind auth if you expose it publicly.
 
 ### 4. Run locally
 
@@ -57,14 +54,13 @@ npm run dev
 
 Open http://localhost:3000.
 
-## Deploy to Vercel
+## Deploy to Railway
 
-1. Push to GitHub (`main` auto-deploys).
-2. In the Vercel project → Settings → Environment Variables, add:
-   - `ANTHROPIC_API_KEY`
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-3. Redeploy. `vercel.json` references these as the build env.
+Deployed as the `web` service in the `gtm-job-search` Railway project, with a managed Postgres database in the same project.
+
+1. `DATABASE_URL` on the `web` service is a reference to the Postgres service (`${{Postgres.DATABASE_URL}}`) — uses Railway's private network.
+2. Set `ANTHROPIC_API_KEY` on the `web` service.
+3. `railway up --service web` to deploy. Railway (Nixpacks) runs `npm run build` then `npm run start`.
 
 ## Build
 
