@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { report } from "./usage.js";
 
 export const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || "",
@@ -28,6 +29,10 @@ export async function callWithWebSearch(opts: {
     ],
     messages: [{ role: "user", content: opts.prompt }],
   });
+
+  // Token cost only -- web_search server-tool calls are billed per search and
+  // are not part of the usage token counts, so they stay untracked.
+  report("gtm-job-search", MODEL, message.usage);
 
   return message.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")

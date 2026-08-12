@@ -1,6 +1,7 @@
 "use server";
 
 import { callWithWebSearch, anthropic, MODEL, parseJson } from "@/lib/anthropic";
+import { report } from "@/lib/usage.js";
 
 export interface ParsedRole {
   company: string;
@@ -206,6 +207,8 @@ Return ONLY the JSON object.`,
         },
       ],
     });
+
+    report("gtm-job-search", MODEL, message.usage);
 
     const raw = message.content
       .filter((b) => b.type === "text")
