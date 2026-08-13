@@ -1,7 +1,9 @@
 "use server";
 
-import { supabase } from "@/lib/supabase";
-import type { Startup } from "@/lib/types";
+import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
+import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
+import { rawQuery, supabase } from "@/lib/supabase";
+import type { Startup, TrackedCompany } from "@/lib/types";
 
 export interface WatchlistEntry extends Startup {
   id: string;
@@ -28,6 +30,9 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
       category: startup.category,
       careers_url: startup.careers_url,
       headquarters: startup.headquarters,
+      source: "discover",
+      tracking_enabled: true,
+      consecutive_failures: 0,
     },
     { onConflict: "company" }
   );
@@ -50,4 +55,91 @@ export async function markChecked(company: string): Promise<{ error?: string }> 
 export async function getWatchedCompanyNames(): Promise<Set<string>> {
   const { data } = await supabase.from("watchlist").select("company");
   return new Set((data ?? []).map((r: { company: string }) => r.company));
+}
+
+export async function getTrackedCompanies(): Promise<{
+  companies: TrackedCompany[];
+  error?: string;
+}> {
+  const { data, error } = await supabase
+    .from("watchlist")
+    .select("*")
+    .order("added_at", { ascending: false });
+  if (error) return { companies: [], error: error.message };
+  return { companies: (data ?? []) as TrackedCompany[] };
+}
+
+/**
+ * Track any company by name, whether or not it ever appeared in Discover.
+ * Runs the first crawl immediately so the user sees a result now rather than
+ * waiting for the next cron cycle.
+ */
+export async function trackCompanyByName(
+  name: string
+): Promise<{ outcome?: CrawlOutcome; error?: string }> {
+  const company = name.trim();
+  if (!company) return { error: "Enter a company name." };
+
+  const { error } = await supabase.from("watchlist").upsert(
+    {
+      company,
+      source: "manual",
+      tracking_enabled: true,
+      consecutive_failures: 0,
+    },
+    { onConflict: "company" }
+  );
+  if (error) {
+    return { error: `Could not track "${company}" — ${error.message}` };
+  }
+
+  const outcome = await crawlCompany(company);
+  return { outcome };
+}
+
+export async function setTracking(
+  company: string,
+  enabled: boolean
+): Promise<{ error?: string }> {
+  const patch: Record<string, unknown> = { tracking_enabled: enabled };
+  if (enabled) patch.consecutive_failures = 0;
+  const { error } = await supabase
+    .from("watchlist")
+    .update(patch)
+    .eq("company", company);
+  return { error: error?.message };
+}
+
+export async function setCareersUrl(
+  company: string,
+  url: string
+): Promise<{ error?: string }> {
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return { error: "Enter a full URL starting with http:// or https://" };
+  }
+  const { error } = await supabase
+    .from("watchlist")
+    .update({
+      careers_url: trimmed,
+      last_crawl_status: null,
+      last_crawl_error: null,
+      consecutive_failures: 0,
+    })
+    .eq("company", company);
+  return { error: error?.message };
+}
+
+export async function checkCompanyNow(company: string): Promise<CrawlOutcome> {
+  return crawlCompany(company);
+}
+
+export async function getDueCompanies(
+  limit: number = DEFAULT_BATCH_LIMIT
+): Promise<{ companies: string[]; error?: string }> {
+  const { data, error } = await rawQuery<{ company: string }>(DUE_COMPANIES_SQL, [
+    limit,
+  ]);
+  if (error) return { companies: [], error: error.message };
+  return { companies: (data ?? []).map((r) => r.company) };
 }
