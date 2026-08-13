@@ -168,30 +168,64 @@ async function fetchAllowed(careersUrl: string): Promise<boolean> {
   return !isDisallowed(result.body, new URL(careersUrl).pathname);
 }
 
+/**
+ * Classifies an already-fetched (or not-fetched) careers page as a STABLE
+ * property of the page ("shell" — HTML genuinely has no jobs, won't change
+ * next run) or "content" (worth extracting from). `html === null` means the
+ * fetch never produced a page at all — that classification is left to the
+ * caller, which also knows about the transient robots/network cases; this
+ * function only decides the pure, page-content question. Exported for
+ * testing without a network: it takes plain HTML in, no fetch involved.
+ */
+export type FetchClassification =
+  | { kind: "shell" }
+  | { kind: "content"; page: ExtractedPage };
+
+export function classifyFetchOutcome(html: string): FetchClassification {
+  const page = stripHtml(html);
+  return isJsShell(page) ? { kind: "shell" } : { kind: "content", page };
+}
+
+/**
+ * Result of attempting the fetch tier. `crawl_method` should only ever be
+ * set from "roles" or "shell" — both are stable properties of the page (it
+ * worked, or the HTML genuinely has no jobs) that will hold true next run
+ * too. "unavailable" covers everything transient — robots.txt disallowed
+ * (including a robots.txt that could not be read at all), a network error,
+ * a timeout, or a non-2xx response — and must NOT be learned, or a single
+ * blip permanently pins the company to the ~10-billed-search path.
+ */
+type FetchTierResult =
+  | { kind: "roles"; roles: Role[] }
+  | { kind: "shell" }
+  | { kind: "unavailable" };
+
 async function extractViaFetch(
   company: string,
   careersUrl: string
-): Promise<Role[] | null> {
+): Promise<FetchTierResult> {
   if (!(await fetchAllowed(careersUrl))) {
-    console.log(`crawler: robots.txt disallows ${careersUrl}, using search tier`);
-    return null;
+    console.log(
+      `crawler: robots.txt disallows (or could not be read for) ${careersUrl}, using search tier for this run`
+    );
+    return { kind: "unavailable" };
   }
 
   const html = await fetchPage(careersUrl);
-  if (!html) return null;
+  if (!html) return { kind: "unavailable" };
 
-  const page = stripHtml(html);
-  if (isJsShell(page)) {
+  const classification = classifyFetchOutcome(html);
+  if (classification.kind === "shell") {
     console.log(`crawler: ${company} careers page is a JS shell, using search tier`);
-    return null;
+    return { kind: "shell" };
   }
 
   const raw = await callStructured({
     system: ROLE_SEARCH_SYSTEM,
-    prompt: buildExtractionPrompt(company, page),
+    prompt: buildExtractionPrompt(company, classification.page),
     maxTokens: 4000,
   });
-  return rolesFromRaw(raw);
+  return { kind: "roles", roles: rolesFromRaw(raw) };
 }
 
 async function extractViaSearch(
@@ -330,16 +364,22 @@ export async function crawlCompany(
     } else {
       // A company that previously needed the search tier skips the fetch
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
-      let fetched: Role[] | null = null;
+      let fetchResult: FetchTierResult | null = null;
       if (tracked.crawl_method !== "search") {
-        fetched = await extractViaFetch(company, careersUrl);
+        fetchResult = await extractViaFetch(company, careersUrl);
       }
 
-      if (fetched) {
+      if (fetchResult?.kind === "roles") {
         method = "fetch";
-        roles = fetched;
+        roles = fetchResult.roles;
       } else {
-        method = "search";
+        // "shell" is a stable property of the page — learn 'search' so
+        // future runs skip the fetch attempt. "unavailable" (robots block,
+        // network error, timeout, non-2xx) is transient: method stays null,
+        // and coalesce($2, crawl_method) in the watchlist update below then
+        // preserves whatever crawl_method already was, so the next run
+        // retries the fetch tier instead of being stuck on search forever.
+        method = fetchResult?.kind === "shell" ? "search" : null;
         roles = await extractViaSearch(company, careersUrl);
       }
 
