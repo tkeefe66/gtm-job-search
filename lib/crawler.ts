@@ -422,6 +422,7 @@ export async function crawlCompany(
 
       if (fetchResult?.kind === "roles") {
         runMethod = "fetch";
+        learnedMethod = "fetch";
         roles = fetchResult.roles;
       } else {
         // "shell" is a stable property of the page — learn 'search' so
