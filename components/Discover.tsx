@@ -15,6 +15,7 @@ import {
   filterByWindow,
   type WindowFilter,
 } from "@/lib/discovery-window-filter";
+import RoleSearchPanel from "./RoleSearchPanel";
 import { Spinner, Tag } from "./ui";
 
 // Controls what a NEW search asks Claude for.
@@ -42,6 +43,10 @@ export default function Discover() {
   // `dateRange` above (which only affects what a NEW search asks for).
   // Defaults to "all" so the initial view matches pre-filter behavior exactly.
   const [windowFilter, setWindowFilter] = useState<WindowFilter>("all");
+  // Which of the two discovery approaches is shown — mutually exclusive with
+  // the company-mode body below. Role mode is a fully separate component
+  // (RoleSearchPanel) so this file doesn't have to grow to hold both.
+  const [mode, setMode] = useState<"company" | "role">("company");
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +143,29 @@ export default function Discover() {
 
   return (
     <div>
+      <div className="mb-6 flex overflow-hidden rounded-md border border-slate sm:w-fit">
+        {(
+          [
+            { value: "company", label: "By company (funding)" },
+            { value: "role", label: "By role (title/stack)" },
+          ] as const
+        ).map((m) => (
+          <button
+            key={m.value}
+            onClick={() => setMode(m.value)}
+            className={`px-3 py-1.5 text-sm transition ${
+              mode === m.value ? "bg-ink text-white" : "bg-white text-ink hover:bg-canvas"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "role" && <RoleSearchPanel />}
+
+      {mode === "company" && (
+      <>
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-heading font-semibold">Startup discovery</h2>
@@ -296,6 +324,8 @@ export default function Discover() {
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );

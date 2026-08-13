@@ -39,7 +39,20 @@ The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-trig
 
 **The fit-scoring brain** is `CANDIDATE_BACKGROUND` + the 1–5 rubric in `app/actions/parse-role.ts` (`scoreFit`). Target role titles and the Denver/remote location filter are duplicated in the prompts in `app/actions/roles.ts` and `app/actions/discover.ts`. Changing what "a good fit" means = edit these prompts, nothing else.
 
-**The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → every `job_url` is liveness-checked in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots) → dead roles are saved with status `"Posting Closed"` and skip fit-scoring; live ones are saved as `"New"` and `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
+**The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → the URL-verification and fit-scoring block lives in `lib/ingest-roles.ts` (shared with the crawler and role search below), which liveness-checks every `job_url` in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots), saves dead roles with status `"Posting Closed"` and skips fit-scoring for them, and saves live ones as `"New"`, `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
+
+**Role-first discovery**: `app/actions/role-search.ts` searches for roles by title
+and by GTM tool stack (`titleQueries` / `stackQueries` in `lib/search-criteria.ts`)
+rather than by company, so companies that never appear in funding news still
+surface. Queries are capped: `MAX_QUERIES_PER_SEARCH` in `lib/search-criteria.ts`
+bounds how many of the 39 title / 24 stack queries any one call sends, and both
+the sent list and the searches Claude actually issued are logged. Results cache
+in `role_searches` per family and route through the same `lib/ingest-roles.ts`
+path as the crawler. The Discover tab has two modes: by company (funding) and
+by role. Company mode's default search window is still `7d`; a `6-18m` range
+also exists (the theory being a company hiring GTM systems people today likely
+raised its round 6-18 months ago, not last week) and its results list carries a
+filter chip row for the window a company was discovered in.
 
 **Status/filter machinery is constant-driven**: `JOB_STATUSES`, `ACTIVE_STATUSES`, `TERMINAL_STATUSES` in `lib/types.ts` drive the dropdown, filter chips, and count buckets in `components/RolesTable.tsx` automatically. To add a status: extend the union + arrays + the `STATUS_STYLES` badge map in `RolesTable.tsx`. The table's default filter is `"Open"` (hides `TERMINAL_STATUSES`).
 
