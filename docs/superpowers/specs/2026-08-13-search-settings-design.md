@@ -218,6 +218,40 @@ the most expensive cache to regenerate.
 The crawler needs no cache handling — it reads criteria at crawl time, so the
 next cron cycle picks up new titles automatically.
 
+### Removing a title must not auto-close live roles
+
+**The one place a settings edit can change existing job rows.** Found during
+design review; not obvious from the settings surface.
+
+`closeStalePostings` (`lib/crawler.ts`) marks a role `Posting Closed` when it is
+absent from two consecutive trustworthy crawl runs. The crawler only extracts
+roles matching the current title list. So removing a title means the crawler
+stops looking for it, it is absent from the next two runs, and it closes — as
+though the company took the posting down, when in fact it is still listed and we
+stopped looking.
+
+Scope: `source = 'Crawl'` and `status = 'New'` only. Roles from Role Search and
+Discover are unaffected, as is anything the user has actioned. One row qualifies
+today across 5 tracked companies; the exposure grows directly with tracking.
+Reversible — it is a status flip — but silent, with nothing attributing the
+close to a settings edit.
+
+**Fix: a criteria change resets the closure debounce.** The first crawl after an
+edit counts as a first crawl, so closure requires two clean runs *under the
+current criteria* before absence is trusted again. This reuses the existing
+`runs.length < 2 → close nothing` guard rather than adding a second mechanism,
+and it follows the principle already encoded in `titlesToClose`: an `error` or
+`needs_url` run never closes a live job because a failure is not evidence the
+job is gone. Removing a title is the same class of non-evidence.
+
+**Rejected alternative:** filtering closure candidates to titles still matching
+the criteria. Real titles are chaotic ("Head of Revenue Operations, Americas"),
+the crawler prompt explicitly accepts "close variants", and exact matching would
+under-protect precisely the roles most worth protecting.
+
+**Also warn at save time**, naming the count: "N tracked roles match titles you
+are removing. They stay on /roles, and the crawler will stop monitoring them."
+
 ## Validation
 
 - **Empty title list or empty location list is blocked at save**, with an
