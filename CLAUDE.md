@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile. Next.js 14 (App Router) + TypeScript + Tailwind + Postgres + Anthropic API. No auth, no tests, no API routes — all backend logic is React Server Actions in `app/actions/`.
+Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile. Next.js 14 (App Router) + TypeScript + Tailwind + Postgres + Anthropic API. No auth on the app itself — most backend logic is React Server Actions in `app/actions/`; the one exception is the secret-guarded cron route below.
 
 ## Commands
 
@@ -12,10 +12,15 @@ Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile.
 npm run dev        # local dev server (needs DATABASE_URL + ANTHROPIC_API_KEY in .env.local)
 npm run build      # includes typecheck — the verification gate for changes
 npm run lint
+npm test           # vitest — pure logic in the crawl path
 DATABASE_URL=postgres://... node db/apply-schema.mjs   # apply schema (idempotent)
 ```
 
-There is no test framework. `npm run build` is the pre-deploy check.
+`npm run build && npm test` is the pre-deploy check. Tests cover the pure logic
+in the crawl path only (`lib/*.test.ts`) — Claude calls and live fetches are
+verified through the Watchlist "Check now" button and the cron route's `?dry=1`
+mode. (`npm run lint` is non-functional in this repo — do not add it to the
+gate.)
 
 ## Deploy
 
@@ -40,6 +45,16 @@ The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-trig
 **Status/filter machinery is constant-driven**: `JOB_STATUSES`, `ACTIVE_STATUSES`, `TERMINAL_STATUSES` in `lib/types.ts` drive the dropdown, filter chips, and count buckets in `components/RolesTable.tsx` automatically. To add a status: extend the union + arrays + the `STATUS_STYLES` badge map in `RolesTable.tsx`. The table's default filter is `"Open"` (hides `TERMINAL_STATUSES`).
 
 **Caching pattern**: Discover, Roles, and Insights all cache Claude results in their `*_cache`/`discovered_*` tables and serve those on re-query — API calls only happen on new searches or forced refreshes.
+
+**Tracking and the crawler**: `watchlist` rows with `tracking_enabled = true` are
+crawled on a recurring schedule (`crawl_interval_days`, default 7).
+`lib/crawler.ts` tries a plain HTTP fetch of `careers_url` and extracts roles
+from the stripped text with a non-search Claude call; if `lib/page-extract.ts`
+detects a JS-rendered ATS shell it falls back to the `web_search` path. The tier
+that worked is remembered in `crawl_method`. `app/api/cron/crawl/route.ts` — the
+app's only API route, guarded by `CRON_SECRET` — crawls up to 10 due companies
+per call and is invoked daily by the Railway `crawler` cron service. ATS vendor
+APIs and job aggregator APIs are deliberately not used.
 
 ## History caveat
 
