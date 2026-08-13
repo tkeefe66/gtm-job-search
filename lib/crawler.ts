@@ -104,7 +104,10 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
     system:
       "You find official careers pages. Return ONLY valid JSON, no markdown, no preamble.",
     prompt: `Find the official careers / open-roles page for the company "${company}". Return a JSON object: {"careers_url": "https://..."} — or {"careers_url": ""} if you cannot find one with confidence.`,
-    maxTokens: 1500,
+    // Search narration counts against the budget; 1500 risked the same
+    // truncation-before-JSON failure mode documented on extractViaSearch's
+    // call, silently degrading to needs_url even when a URL was found.
+    maxTokens: 4000,
   });
   try {
     const parsed = parseJson<{ careers_url: string }>(raw);
@@ -297,11 +300,16 @@ export async function crawlCompany(
 ): Promise<CrawlOutcome> {
   const dryRun = opts.dryRun ?? false;
 
-  const { data: row } = await supabase
+  const { data: row, error: watchlistReadError } = await supabase
     .from("watchlist")
     .select("*")
     .eq("company", company)
     .maybeSingle();
+  if (watchlistReadError) {
+    console.error(
+      `crawler: ${company} failed to read watchlist row — ${watchlistReadError.message}`
+    );
+  }
 
   const tracked = row as TrackedCompany | null;
   if (!tracked) {
@@ -331,15 +339,29 @@ export async function crawlCompany(
   // orphaned "running" row behind.
   let runId: string | null = null;
   if (!dryRun) {
-    const { data: runRows } = await supabase
+    const { data: runRows, error: crawlRunInsertError } = await supabase
       .from("crawl_runs")
       .insert({ company, status: "running" })
       .select()
       .single();
+    if (crawlRunInsertError) {
+      console.error(
+        `crawler: ${company} failed to insert the crawl_runs row — ${crawlRunInsertError.message}`
+      );
+    }
     runId = (runRows as { id: string } | null)?.id ?? null;
   }
 
-  let method: CrawlMethod | null = null;
+  // Two different questions share this scope and must not be conflated:
+  // runMethod is "which tier actually ran this run" (used for crawl_runs.method
+  // and the returned CrawlOutcome — needs to be accurate even in the steady
+  // state where a 'search'-pinned company skips the fetch attempt entirely).
+  // learnedMethod is "what should be persisted to watchlist.crawl_method" —
+  // only ever a STABLE page property ('search' from a confirmed shell), never
+  // set from a transient fetch-tier failure. It is passed as coalesce($2, ...)
+  // so leaving it null preserves whatever crawl_method already was.
+  let runMethod: CrawlMethod | null = null;
+  let learnedMethod: CrawlMethod | null = null;
   let status: CrawlStatus = "error";
   let errorMessage: string | undefined;
   let roles: Role[] = [];
@@ -350,11 +372,18 @@ export async function crawlCompany(
     let careersUrl = tracked.careers_url;
     if (!careersUrl) {
       careersUrl = await resolveCareersUrl(company);
-      if (careersUrl) {
-        await supabase
+      // A dry run previews a crawl; it must not permanently write a
+      // model-guessed careers_url the user never reviewed.
+      if (careersUrl && !dryRun) {
+        const { error: careersUrlError } = await supabase
           .from("watchlist")
           .update({ careers_url: careersUrl })
           .eq("company", company);
+        if (careersUrlError) {
+          console.error(
+            `crawler: ${company} failed to persist resolved careers_url — ${careersUrlError.message}`
+          );
+        }
       }
     }
 
@@ -370,16 +399,19 @@ export async function crawlCompany(
       }
 
       if (fetchResult?.kind === "roles") {
-        method = "fetch";
+        runMethod = "fetch";
         roles = fetchResult.roles;
       } else {
         // "shell" is a stable property of the page — learn 'search' so
         // future runs skip the fetch attempt. "unavailable" (robots block,
-        // network error, timeout, non-2xx) is transient: method stays null,
-        // and coalesce($2, crawl_method) in the watchlist update below then
-        // preserves whatever crawl_method already was, so the next run
+        // network error, timeout, non-2xx) is transient: learnedMethod stays
+        // null, and coalesce($2, crawl_method) in the watchlist update below
+        // then preserves whatever crawl_method already was, so the next run
         // retries the fetch tier instead of being stuck on search forever.
-        method = fetchResult?.kind === "shell" ? "search" : null;
+        // runMethod is "search" unconditionally here — the search tier is
+        // what actually ran, whether or not this run taught us anything new.
+        learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
+        runMethod = "search";
         roles = await extractViaSearch(company, careersUrl);
       }
 
@@ -419,11 +451,11 @@ export async function crawlCompany(
 
   if (!dryRun) {
     if (runId) {
-      await supabase
+      const { error: crawlRunUpdateError } = await supabase
         .from("crawl_runs")
         .update({
           finished_at: new Date().toISOString(),
-          method,
+          method: runMethod,
           roles_found: roles.length,
           new_roles: newRoles,
           role_titles: seenTitles,
@@ -431,10 +463,15 @@ export async function crawlCompany(
           error: errorMessage ?? null,
         })
         .eq("id", runId);
+      if (crawlRunUpdateError) {
+        console.error(
+          `crawler: ${company} failed to finalize crawl_runs row ${runId} — ${crawlRunUpdateError.message}`
+        );
+      }
     }
 
     const failed = status === "error" || status === "needs_url";
-    await rawQuery(
+    const { error: watchlistUpdateError } = await rawQuery(
       `update watchlist
           set last_checked_at = now(),
               crawl_method = coalesce($2, crawl_method),
@@ -442,13 +479,28 @@ export async function crawlCompany(
               last_crawl_error = $4,
               consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end
         where company = $1`,
-      [company, method, status, errorMessage ?? null, failed]
+      [company, learnedMethod, status, errorMessage ?? null, failed]
     );
+    if (watchlistUpdateError) {
+      // last_checked_at did not advance, so the batch scheduler will see this
+      // company as still due and may re-crawl (and re-bill ~10 searches for
+      // it) on the very next pass. Downgrading to "error" here is what lets
+      // the caller notice the run was not actually recorded, instead of
+      // silently repeating.
+      const priorStatus = status;
+      console.error(
+        `crawler: ${company} failed to update watchlist after crawl — ${watchlistUpdateError.message}`
+      );
+      status = "error";
+      errorMessage = errorMessage
+        ? `${errorMessage} (also failed to record the crawl on the watchlist: ${watchlistUpdateError.message})`
+        : `Crawl finished as "${priorStatus}" but the watchlist record could not be updated — ${watchlistUpdateError.message}. last_checked_at was not advanced; this company may be re-crawled prematurely.`;
+    }
   }
 
   return {
     company,
-    method,
+    method: runMethod,
     rolesFound: roles.length,
     newRoles,
     status,

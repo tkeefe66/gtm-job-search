@@ -73,6 +73,15 @@ describe("titlesToClose", () => {
   test("does not close when there are no successful runs at all", () => {
     expect(titlesToClose([], ["gtm engineer"])).toEqual([]);
   });
+
+  test("does not close a title missed by the current run but present in the previous run (debounce)", () => {
+    // This is the case the whole two-run rule exists for: one noisy crawl
+    // (a fetch hiccup, an off day for the extraction model) must not close a
+    // role that's still open — it just needs to reappear in the *next* run's
+    // "current" slot to stay open, and this test pins that it does.
+    const runs = [[], ["gtm engineer"]];
+    expect(titlesToClose(runs, ["gtm engineer"])).toEqual([]);
+  });
 });
 
 describe("classifyFetchOutcome", () => {
