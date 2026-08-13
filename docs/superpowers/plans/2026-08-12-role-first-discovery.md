@@ -16,7 +16,7 @@ Spec: `docs/superpowers/specs/2026-08-12-company-tracking-design.md` §5 and §6
 
 - **No ATS vendor APIs and no job aggregator APIs.** Discovery happens through `web_search` against publicly indexed pages. Hard product constraint.
 - **`npm run build && npm test && npm run lint` is the pre-deploy gate.**
-- **All backend logic lives in React Server Actions** in `app/actions/`. The only API route is the cron route from the tracking plan.
+- **No API routes.** The only API route in the app is the cron route from the tracking plan. User-facing backend entry points are React Server Actions in `app/actions/`; shared backend machinery lives in `lib/`.
 - **`lib/supabase.ts` is NOT Supabase** — hand-rolled builder over `pg`, supporting `.from .select .insert .update .upsert .delete .eq .neq .order .limit .single .maybeSingle`. Use `rawQuery` for anything else.
 - **Schema truth is `db/schema.sql`**, applied with `DATABASE_URL=postgres://... node db/apply-schema.mjs`, and must stay idempotent.
 - **Budget `maxTokens` generously on web-search calls** — search narration counts against the budget, and 2000 tokens has truncated responses before the JSON was emitted.

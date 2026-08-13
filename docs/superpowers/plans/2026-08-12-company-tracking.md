@@ -14,7 +14,7 @@ Spec: `docs/superpowers/specs/2026-08-12-company-tracking-design.md`
 
 - **No ATS vendor APIs and no job aggregator APIs.** Careers pages are treated as ordinary web pages. This is a hard product constraint, not a preference.
 - **`npm run build` is the pre-deploy gate** and includes typecheck. After this plan, the gate is `npm run build && npm test && npm run lint`.
-- **All backend logic lives in React Server Actions** in `app/actions/`, except the single cron route added by Task 8. There are no other API routes.
+- **No API routes except the single cron route added by Task 9.** User-facing backend entry points are React Server Actions in `app/actions/`. Shared backend machinery lives in `lib/` alongside the existing `anthropic.ts`, `supabase.ts`, and `verify-url.ts` — `lib/crawler.ts` and `lib/ingest-roles.ts` belong there by design, and `lib/ingest-roles.ts` importing `app/actions/jobs.ts` is intentional and legal in Next. Do not relocate these modules.
 - **`lib/supabase.ts` is NOT Supabase** — it is a hand-rolled Supabase-shaped builder over `pg`. Supported surface: `.from .select .insert .update .upsert .delete .eq .neq .order .limit .single .maybeSingle`. There is no `.lt()`, `.gt()`, or `.in()`. Task 2 adds a raw-query escape hatch for anything beyond that surface.
 - **Schema truth is `db/schema.sql`**, applied with `DATABASE_URL=postgres://... node db/apply-schema.mjs`. It must stay idempotent — every statement re-runnable.
 - **`supabase/migrations/` is legacy.** Do not add migrations there.
