@@ -142,3 +142,42 @@ export interface Insights {
   company_archetypes: CompanyArchetype[];
   recommended_next_searches: string[];
 }
+
+export type CrawlStatus = "ok" | "empty" | "error" | "needs_url";
+export type CrawlMethod = "fetch" | "search";
+
+export interface TrackedCompany {
+  id: string;
+  company: string;
+  tagline: string | null;
+  raised: string | null;
+  stage: string | null;
+  lead_investor: string | null;
+  founded: string | null;
+  traction: string | null;
+  careers_url: string | null;
+  category: string | null;
+  headquarters: string | null;
+  added_at: string;
+  last_checked_at: string | null;
+  tracking_enabled: boolean;
+  crawl_method: CrawlMethod | null;
+  crawl_interval_days: number;
+  last_crawl_status: CrawlStatus | null;
+  last_crawl_error: string | null;
+  consecutive_failures: number;
+  source: string | null;
+}
+
+export interface CrawlRun {
+  id: string;
+  company: string;
+  started_at: string;
+  finished_at: string | null;
+  method: CrawlMethod | null;
+  roles_found: number;
+  new_roles: number;
+  role_titles: string[];
+  status: CrawlStatus | "running";
+  error: string | null;
+}

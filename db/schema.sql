@@ -84,3 +84,33 @@ create table if not exists insights_cache (
   insights jsonb not null,
   fetched_at timestamptz default now()
 );
+
+-- Tracking: watchlist rows are crawled on a recurring schedule until the user
+-- stops tracking them. Untracking sets tracking_enabled = false rather than
+-- deleting, so crawl history survives and the company does not resurface in
+-- Discover as though newly found.
+alter table watchlist add column if not exists tracking_enabled     boolean not null default true;
+alter table watchlist add column if not exists crawl_method         text;
+alter table watchlist add column if not exists crawl_interval_days  integer not null default 7;
+alter table watchlist add column if not exists last_crawl_status    text;
+alter table watchlist add column if not exists last_crawl_error     text;
+alter table watchlist add column if not exists consecutive_failures integer not null default 0;
+alter table watchlist add column if not exists source               text;
+
+-- One row per crawl attempt. Without this, a silently failing crawler is
+-- indistinguishable from a company that genuinely is not hiring.
+-- role_titles holds the normalized titles seen on that run, so stale-posting
+-- closure can compare consecutive successful runs.
+create table if not exists crawl_runs (
+  id           uuid primary key default gen_random_uuid(),
+  company      text not null,
+  started_at   timestamptz not null default now(),
+  finished_at  timestamptz,
+  method       text,
+  roles_found  integer not null default 0,
+  new_roles    integer not null default 0,
+  role_titles  jsonb not null default '[]',
+  status       text not null,
+  error        text
+);
+create index if not exists crawl_runs_company_idx on crawl_runs (company, started_at desc);
