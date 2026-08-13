@@ -1,8 +1,16 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
 import { rawQuery } from "@/lib/supabase";
+
+// Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
+// typo in the cron command) selects every due company and crawls them all
+// sequentially in one request — blowing past any HTTP timeout and burning an
+// unbounded number of Claude calls. `DEFAULT_BATCH_LIMIT` is "the lever" for
+// normal operation; this is the backstop for when that lever is turned too
+// far.
+const MAX_BATCH_LIMIT = 50;
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +21,16 @@ function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
   const header = req.headers.get("authorization") ?? "";
-  const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const a = Buffer.from(provided);
-  const b = Buffer.from(secret);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const provided =
+    header.slice(0, 7).toLowerCase() === "bearer " ? header.slice(7) : "";
+  // Hash both sides to fixed-width digests before comparing: this removes
+  // the length as an observable side channel (timingSafeEqual would
+  // otherwise require an explicit length-equality check, and a length
+  // mismatch on the raw values would throw) and keeps the comparison itself
+  // genuinely constant-time regardless of what the caller sent.
+  const a = createHash("sha256").update(provided).digest();
+  const b = createHash("sha256").update(secret).digest();
+  return timingSafeEqual(a, b);
 }
 
 export async function GET(req: Request) {
@@ -25,8 +39,17 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  const dryRun = url.searchParams.get("dry") === "1";
-  const limit = Number(url.searchParams.get("limit")) || DEFAULT_BATCH_LIMIT;
+  // Any presence of `dry` means dry-run unless explicitly disabled — a flag
+  // whose whole purpose is safety must fail toward *not* writing when the
+  // caller's spelling is unrecognized (`?dry=true`, `?dry=yes`, bare `?dry`),
+  // not silently perform a real, credit-spending, database-writing run.
+  const dryParam = url.searchParams.get("dry");
+  const dryRun = dryParam !== null && dryParam !== "0" && dryParam !== "false";
+  const rawLimit = Math.floor(Number(url.searchParams.get("limit")));
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, MAX_BATCH_LIMIT)
+      : DEFAULT_BATCH_LIMIT;
 
   const { data, error } = await rawQuery<{ company: string }>(
     DUE_COMPANIES_SQL,
@@ -63,13 +86,23 @@ export async function GET(req: Request) {
     }
   }
 
+  const totals = {
+    newRoles: results.reduce((n, r) => n + r.newRoles, 0),
+    failed: results.filter((r) => r.status === "error").length,
+  };
+
+  // The response body lands in the `crawler` service's curl output, not the
+  // `web` service's logs — and vanishes entirely if that output is
+  // redirected. This is the only durable record of a successful run in the
+  // logs a human actually checks.
+  console.log(
+    `cron/crawl: dryRun=${dryRun} crawled=${results.length} newRoles=${totals.newRoles} failed=${totals.failed}`
+  );
+
   return NextResponse.json({
     dryRun,
     crawled: results.length,
-    totals: {
-      newRoles: results.reduce((n, r) => n + r.newRoles, 0),
-      failed: results.filter((r) => r.status === "error").length,
-    },
+    totals,
     results,
   });
 }

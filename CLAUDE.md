@@ -11,7 +11,6 @@ Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile.
 ```bash
 npm run dev        # local dev server (needs DATABASE_URL + ANTHROPIC_API_KEY in .env.local)
 npm run build      # includes typecheck — the verification gate for changes
-npm run lint
 npm test           # vitest — pure logic in the crawl path
 DATABASE_URL=postgres://... node db/apply-schema.mjs   # apply schema (idempotent)
 ```
@@ -30,13 +29,13 @@ Railway only: project `gtm-job-search`, service `web` (+ Postgres service). Depl
 railway up --service web --detach
 ```
 
-The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-triggered deployments sit "Awaiting approval" in the dashboard — `railway up` is the flow actually used. Env vars: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`) and `ANTHROPIC_API_KEY`, both on the `web` service.
+The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-triggered deployments sit "Awaiting approval" in the dashboard — `railway up` is the flow actually used. Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`), `ANTHROPIC_API_KEY`, and `CRON_SECRET` (the bearer token `app/api/cron/crawl` requires — auth fails closed, so a deploy missing this value makes every cron run 401 silently, with no log line to point at why). The `crawler` cron service needs the same `CRON_SECRET` value plus `WEB_URL` (the `web` service's public domain).
 
 ## Architecture
 
 **Every "search" feature is a Claude call with the `web_search` server tool** — there's no scraper. `lib/anthropic.ts` has the two shared helpers: `callWithWebSearch()` (model `claude-sonnet-4-6`) and `parseJson()` (fence-stripping/boundary-finding, because responses aren't strict JSON mode). When adding a web-search call, budget `maxTokens` generously: the model's search narration counts against it, and 2000 tokens has truncated responses before the JSON was emitted (see comment in `app/actions/roles.ts`).
 
-**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (five tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`); `supabase/migrations/` is legacy.
+**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (six tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`); `supabase/migrations/` is legacy.
 
 **The fit-scoring brain** is `CANDIDATE_BACKGROUND` + the 1–5 rubric in `app/actions/parse-role.ts` (`scoreFit`). Target role titles and the Denver/remote location filter are duplicated in the prompts in `app/actions/roles.ts` and `app/actions/discover.ts`. Changing what "a good fit" means = edit these prompts, nothing else.
 
