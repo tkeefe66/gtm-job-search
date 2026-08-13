@@ -1,11 +1,18 @@
 import type { DateRange } from "@/app/actions/discover";
 
-// Pure presentation logic behind the Discover tab's window filter (the chips
-// that let a user see "recent companies vs older" among ALREADY-CACHED
-// results). This is deliberately separate from `dateRange`, the selector
-// that controls what a NEW search asks Claude for — one picks a fetch
-// window, the other slices what's already on screen. Nothing here triggers
-// a fetch.
+// Pure logic behind the Discover tab's single window selector.
+//
+// This was originally two controls — a "search window" that set what a NEW
+// search asked for, and a separate filter over already-cached results. Two
+// rows of near-identical chips read as redundant, so they are merged: one
+// chip both slices the view and names what Discover will fetch next.
+// Selecting a chip still never fetches; the Discover button does that.
+//
+// The two concepts do not overlap perfectly, which is what the "legacy"
+// handling below is for: a window can hold cached results while no longer
+// being offered as a search target (6m and 6-18m were retired once the user
+// decided they would never look that far back). Those results stay visible
+// and filterable — they were paid for — they just cannot be re-fetched.
 
 export type WindowFilter = DateRange | "all";
 
@@ -15,15 +22,16 @@ export interface WindowFilterOption {
   count: number;
 }
 
-// Builds the filter-chip list: "All" first (count = total items), then one
-// chip per date range that actually has at least one item in `ranges`, in
-// the same oldest-last order as `rangeOrder` (Discover.tsx's
-// DATE_RANGE_OPTIONS). A range nobody has searched yet — or that returned
-// zero results — gets no chip; an empty chip for a range that was never run
-// would be noise, not a real choice.
+// Builds the chip list: "All" first (count = every item), then one chip per
+// searchable window — shown even at zero, because the chip is how you choose
+// what to search, so hiding an empty one would make an un-run window
+// unreachable — then one chip per retired window that still holds cached
+// results. A retired window with no data gets no chip: it is neither
+// searchable nor viewable, so it would be a dead control.
 export function buildWindowFilterOptions(
   ranges: DateRange[],
-  rangeOrder: { value: DateRange; label: string }[]
+  searchable: { value: DateRange; label: string }[],
+  legacy: { value: DateRange; label: string }[] = []
 ): WindowFilterOption[] {
   const counts = new Map<DateRange, number>();
   for (const r of ranges) counts.set(r, (counts.get(r) ?? 0) + 1);
@@ -31,11 +39,29 @@ export function buildWindowFilterOptions(
   const options: WindowFilterOption[] = [
     { value: "all", label: "All", count: ranges.length },
   ];
-  for (const { value, label } of rangeOrder) {
+  for (const { value, label } of searchable) {
+    options.push({ value, label, count: counts.get(value) ?? 0 });
+  }
+  for (const { value, label } of legacy) {
     const count = counts.get(value) ?? 0;
     if (count > 0) options.push({ value, label, count });
   }
   return options;
+}
+
+// Which window the Discover button will actually fetch, given what is
+// selected. "All" has no window of its own, and a retired window cannot be
+// re-fetched, so both fall back to the default. Returned rather than inferred
+// at the call site so the button can label itself honestly — a button that
+// says "Discover" while silently fetching a different window than the one
+// highlighted is the kind of quiet mismatch this app has been bitten by.
+export function fetchTargetFor(
+  selected: WindowFilter,
+  searchable: { value: DateRange }[],
+  fallback: DateRange
+): DateRange {
+  if (selected === "all") return fallback;
+  return searchable.some((s) => s.value === selected) ? selected : fallback;
 }
 
 // Filters range-tagged items down to the selected window. "all" (the

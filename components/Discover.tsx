@@ -12,6 +12,7 @@ import { findAndSaveRoles } from "@/app/actions/roles";
 import { addToWatchlist, setTracking, getWatchedCompanyKeys } from "@/app/actions/watchlist";
 import {
   buildWindowFilterOptions,
+  fetchTargetFor,
   filterByWindow,
   type WindowFilter,
 } from "@/lib/discovery-window-filter";
@@ -20,14 +21,32 @@ import { isCompanyWatched } from "@/lib/watched-companies";
 import RoleSearchPanel from "./RoleSearchPanel";
 import { Spinner, Tag } from "./ui";
 
-// Controls what a NEW search asks Claude for.
-const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
+// One selector, two jobs: it slices the cached list AND names what the
+// Discover button will fetch. These were two separate chip rows until
+// 2026-08-13; side by side they read as redundant, so they were merged.
+const SEARCHABLE_RANGES: { value: DateRange; label: string }[] = [
   { value: "7d", label: "7 days" },
   { value: "30d", label: "30 days" },
   { value: "3m", label: "3 months" },
+];
+
+// Retired as search targets — the user does not look this far back — but
+// results already paid for stay visible and filterable. A chip appears only
+// while cached data for the window exists, and Discover falls back to
+// DEFAULT_RANGE if one is selected. Removing these from DateRange itself
+// would invalidate the discovered_startups rows that still carry them.
+const LEGACY_RANGES: { value: DateRange; label: string }[] = [
   { value: "6m", label: "6 months" },
   { value: "6-18m", label: "6–18 mo" },
 ];
+
+const DEFAULT_RANGE: DateRange = "7d";
+
+function labelForRange(range: DateRange): string {
+  return (
+    [...SEARCHABLE_RANGES, ...LEGACY_RANGES].find((o) => o.value === range)?.label ?? range
+  );
+}
 
 export default function Discover() {
   const router = useRouter();
@@ -35,7 +54,6 @@ export default function Discover() {
   const [loading, setLoading] = useState(false);
   const [loadingCached, setLoadingCached] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
   // Normalized company keys (normalizeCompanyName), not raw stored names —
@@ -44,10 +62,9 @@ export default function Discover() {
   // never compared against a differently-cased key.
   const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
-  // Slices the ALREADY-LOADED list by which cached window each company came
-  // from. Purely presentational — never triggers a fetch, and independent of
-  // `dateRange` above (which only affects what a NEW search asks for).
-  // Defaults to "all" so the initial view matches pre-filter behavior exactly.
+  // The single window selector: slices the already-loaded list AND names what
+  // Discover will fetch next. Selecting never fetches; the button does.
+  // Defaults to "all" so the initial view shows every cached window.
   const [windowFilter, setWindowFilter] = useState<WindowFilter>("all");
   // Which of the two discovery approaches is shown — mutually exclusive with
   // the company-mode body below. Role mode is a fully separate component
@@ -75,7 +92,7 @@ export default function Discover() {
   async function run() {
     setLoading(true);
     setError(null);
-    const res = await discoverStartups(undefined, dateRange);
+    const res = await discoverStartups(undefined, fetchTarget);
     if (res.error) setError(res.error);
     const all = await getAllDiscoveredStartups();
     setStartups(all.startups);
@@ -149,14 +166,18 @@ export default function Discover() {
   // pick between — a single-option toggle would just be noise.
   const windowFilterOptions = buildWindowFilterOptions(
     startups.map((s) => s.discovered_range),
-    DATE_RANGE_OPTIONS
+    SEARCHABLE_RANGES,
+    LEGACY_RANGES
   );
-  const showWindowFilter = windowFilterOptions.length > 2;
+  // What the Discover button will actually fetch given the current selection.
+  // "All" and retired windows have no fetchable target, so both fall back —
+  // and the button says so rather than silently fetching something else.
+  const fetchTarget = fetchTargetFor(windowFilter, SEARCHABLE_RANGES, DEFAULT_RANGE);
   const displayed = filterByWindow(startups, windowFilter);
   const hiddenByFilter = startups.length > 0 && displayed.length === 0;
 
   function rangeLabel(range: DateRange): string {
-    return DATE_RANGE_OPTIONS.find((opt) => opt.value === range)?.label ?? range;
+    return labelForRange(range);
   }
 
   function formatFetchedAt(iso: string) {
@@ -205,43 +226,18 @@ export default function Discover() {
                 )}
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Date range selector — controls what a NEW search asks for. */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-ink/40">Search window</span>
-                <div className="flex overflow-hidden rounded-md border border-slate">
-                  {DATE_RANGE_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setDateRange(opt.value)}
-                      disabled={busy}
-                      className={`px-3 py-1.5 text-sm transition ${
-                        dateRange === opt.value
-                          ? "bg-ink text-white"
-                          : "bg-white text-ink hover:bg-canvas"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                onClick={run}
-                disabled={busy}
-                className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
-              >
-                {loading ? "Discovering…" : "Discover"}
-              </button>
-            </div>
+            <button
+              onClick={run}
+              disabled={busy}
+              className="shrink-0 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+            >
+              {loading ? "Discovering…" : `Discover ${labelForRange(fetchTarget)}`}
+            </button>
           </div>
 
-          {showWindowFilter && !busy && (
+          {!busy && (
             <div className="mb-4 flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-medium text-ink/40">
-                Show ({startups.length})
-              </span>
+              <span className="text-xs font-medium text-ink/40">Window</span>
               <div className="flex flex-wrap overflow-hidden rounded-md border border-slate">
                 {windowFilterOptions.map((opt) => (
                   <button
