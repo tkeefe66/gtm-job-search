@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { buildExtractionPrompt, classifyFetchOutcome, titlesToClose } from "./crawler";
+import {
+  buildExtractionPrompt,
+  classifyFetchOutcome,
+  STALE_POSTING_CANDIDATES_SQL,
+  titlesToClose,
+} from "./crawler";
 import { stripHtml } from "./page-extract";
 
 // Reused from lib/page-extract.test.ts's own fixtures so the shell/content
@@ -81,6 +86,24 @@ describe("titlesToClose", () => {
     // "current" slot to stay open, and this test pins that it does.
     const runs = [[], ["gtm engineer"]];
     expect(titlesToClose(runs, ["gtm engineer"])).toEqual([]);
+  });
+});
+
+describe("STALE_POSTING_CANDIDATES_SQL", () => {
+  // This is a string-content check, not a behavioral one — there is no
+  // database in this repo's test setup, so it cannot prove the query
+  // executes correctly against real rows, only that the two load-bearing
+  // predicates are still both present in the text. That is deliberately
+  // weak but honest: its only job is to fail loudly if a future edit
+  // "simplifies" away either restriction the ruling in lib/crawler.ts
+  // requires (source = 'Crawl' and status = 'New').
+
+  test("scopes candidates to the crawler's own findings (source = 'Crawl')", () => {
+    expect(STALE_POSTING_CANDIDATES_SQL).toContain("source = 'Crawl'");
+  });
+
+  test("scopes candidates to untouched jobs only (status = 'New')", () => {
+    expect(STALE_POSTING_CANDIDATES_SQL).toContain("status = 'New'");
   });
 });
 

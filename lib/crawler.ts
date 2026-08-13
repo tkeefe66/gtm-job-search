@@ -262,14 +262,36 @@ async function lastSuccessfulTitles(company: string): Promise<string[][]> {
   return (data ?? []).map((r) => r.role_titles ?? []);
 }
 
+// The crawler may only retract its OWN findings that the user has never
+// acted on. Both predicates are load-bearing — do not "simplify" either
+// away:
+//   - source = 'Crawl': a crawl only looks for target titles on one careers
+//     page, so jobs added by Find Roles, recruiter parsing, or manual entry
+//     are absent from seenTitles BY CONSTRUCTION, not because they're
+//     actually gone. Without this predicate they would be closed on the
+//     very next crawl of this company, deterministically. (ingestRoles sets
+//     `source` from its `source` option; the crawler always passes "Crawl".)
+//   - status = 'New': there is no history table and updateJob writes in
+//     place, so overwriting status is irreversible. A job the user has
+//     moved to Applied, Panel Interviews, Offer, etc. is theirs — no
+//     automated process may touch it, even if its posting comes down.
+//     Accepted consequence: a crawler-found role the user applied to stays
+//     visible after the listing disappears, until closed by hand. That is
+//     deliberate — a stale row costs a glance, a lost pipeline stage costs
+//     unrecoverable information.
+// Exported (rather than inlined in the query call) so the scoping decision
+// can be pinned by a string-content test without a database.
+export const STALE_POSTING_CANDIDATES_SQL = `select id, role_title from jobs
+      where company = $1
+        and source = 'Crawl'
+        and status = 'New'`;
+
 async function closeStalePostings(
   company: string,
   runs: string[][]
 ): Promise<void> {
   const { data } = await rawQuery<{ id: string; role_title: string }>(
-    `select id, role_title from jobs
-      where company = $1
-        and status not in ('Posting Closed', 'Rejected', 'Not Interested', 'Passed')`,
+    STALE_POSTING_CANDIDATES_SQL,
     [company]
   );
 
