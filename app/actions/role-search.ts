@@ -3,6 +3,7 @@
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
+import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
   LOCATION_RULE,
   ROLE_SEARCH_SYSTEM,
@@ -95,7 +96,9 @@ export async function findRolesByCriteria(
 ): Promise<RoleSearchResult> {
   if (!force) {
     const cached = await getCachedRoleSearch(family);
-    if (cached.matches.length > 0) return cached;
+    // Row presence (fetchedAt set), not match count — a genuine zero-result
+    // search is still a valid cache hit. See lib/role-search-cache.ts.
+    if (shouldUseCachedRoleSearch(cached)) return cached;
   }
 
   try {
