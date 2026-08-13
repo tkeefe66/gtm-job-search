@@ -28,7 +28,14 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
       raised: startup.raised,
       stage: startup.stage,
       category: startup.category,
-      careers_url: startup.careers_url,
+      // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
+      // empty string for careers_url ("best guess ... or empty string"), and
+      // the builder's upsert writes every key present in the payload
+      // (lib/supabase.ts:170,179-181) — so an unconditional write here would
+      // blank out a URL a prior crawl had resolved for this company, forcing
+      // a wasted resolveCareersUrl() search call (or a false "needs_url"
+      // failure) on the next crawl. Omit the key instead of writing "".
+      careers_url: startup.careers_url || undefined,
       headquarters: startup.headquarters,
       source: "discover",
       tracking_enabled: true,
