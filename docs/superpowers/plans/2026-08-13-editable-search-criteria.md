@@ -26,6 +26,279 @@
 
 ---
 
+# REVIEW CORRECTIONS — authoritative, supersede the tasks below
+
+Two independent reviews, then a cross-review. Where this section and a task
+disagree, **this section wins**. Every item was verified against the real
+source, not inferred from the plan.
+
+## R1 (Critical, Task 3) — `scoreFit` has THREE callers, not one
+
+Task 3 Step 6 says `lib/ingest-roles.ts:141` is the only call site. **False.**
+Also `components/RolesTable.tsx:514` and `components/RecruiterPanel.tsx:74`,
+both `"use client"`. Adding required fields fails `next build`. Neither can call
+`loadCriteria()` — it transitively imports `pg`.
+
+Final signature (adjudicated between the two reviewers):
+
+```ts
+// lib/fit-inputs.ts  — new file, this task
+export interface FitInputs { fitBrain: string; compFloor: number | null }
+
+// app/actions/parse-role.ts
+export async function scoreFit(opts: {
+  company: string; role_title: string; company_description: string;
+  key_skills: string; fit_summary: string; department: string; location: string;
+  arr?: string; exit_signal?: string; backer?: string;
+  salary_range: string;            // REQUIRED — per-role data, no fallback exists
+  fitInputs: FitInputs | null;     // REQUIRED key. null = "load from settings now"
+}): Promise<{ score: number; rationale: string; error?: string }>
+```
+
+`const inputs = opts.fitInputs ?? (await loadScoringInputs());` at the top.
+The key is **required** so every call site must state intent — omission is a
+compile error. `null` does not mean "use a default"; it loads the user's real
+stored values, so a manual add is scored against the edited brain, not the
+shipped one. `compFloor: null` *inside* the object unambiguously means "floor
+off" — the outer null and the inner null sit in different positions and cannot
+be confused, which is why no `??` disambiguation is needed.
+
+Batch paths (`ingestRoles`, `rescoreAll`, the crawl loop) **must always pass
+explicitly** — letting the fallback fire there costs one settings read per
+scored row. The two client call sites pass `fitInputs: null` and their existing
+`form.salary_range`.
+
+`IngestOptions` carries `fitInputs: FitInputs`, **not** `criteria: Criteria` —
+`ingestRoles` uses nothing else from criteria, and the narrower type stops the
+companion plan re-widening it.
+
+## R2 (Critical, Task 3) — `buildExtractionPrompt` changes signature and breaks 4 tests
+
+`lib/crawler.ts:34` is a **synchronous exported** function pinned by four tests
+at `lib/crawler.test.ts:33-55`, including `toContain("Denver")` which comes from
+`LOCATION_RULE`. New signature `buildExtractionPrompt(company, page, criteria)`;
+update all four tests to pass `DEFAULT_CRITERIA`. Task 7 Step 5's claim that
+"the 22 pre-existing crawler tests still pass" is wrong as written.
+
+## R3 (Critical, Task 3/7) — `crawlCompany` has three callers; a batch load needs a signature change
+
+There is no batch function in `lib/crawler.ts`. The loop is in
+`app/api/cron/crawl/route.ts:79`; `crawlCompany` is also called from
+`app/actions/watchlist.ts:226` and `:285`. Bundle the per-batch values as one
+object rather than three sibling fields:
+
+```ts
+export interface RunContext {
+  criteria: Criteria;
+  fitInputs: FitInputs;
+  criteriaChangedAt: string | null;
+}
+export async function crawlCompany(
+  company: string,
+  opts: { dryRun?: boolean; ctx?: RunContext } = {}
+)
+```
+
+`ctx ?? await loadRunContext()` inside, for the two single-company callers. The
+cron route loads it once before the loop. Name all three callers in the task.
+The task's Files list must include `app/api/cron/crawl/route.ts` and
+`app/actions/watchlist.ts`.
+
+**Compensation must never enter `buildExtractionPrompt`.** It is a scoring input
+only; putting it in extraction would create the ingest-time filter the spec
+forbids.
+
+## R4 (Critical, Task 6) — `.neq("fit_score", null)` matches zero rows, and the read drops four scoring columns
+
+`lib/supabase.ts:108-111` renders `"fit_score" <> $1` with `$1 = null`. In
+Postgres that is never true, so `rescoreAll` returns zero rows and logs
+`rescored 0 of 0` — a success-shaped total failure.
+
+Worse: the plan hardcodes `company_description: ""` and omits `arr`,
+`exit_signal`, `backer`. All four are real columns that `scoreFit` reads and
+weights (`app/actions/parse-role.ts:164-169`, and the FINANCIAL SIGNALS block at
+:188-193). So rescoring does not merely fail to improve scores — **it actively
+degrades them.** A role scored 4 on `$380M+ ARR, PE exit planned` gets rescored
+blind and drops. Replace the builder call outright:
+
+```ts
+const { data, error } = await rawQuery<JobRow>(
+  `select id, company, role_title, company_description, department, location,
+          key_skills, fit_summary, arr, exit_signal, backer, salary_range
+     from jobs
+    where fit_score is not null`
+);
+```
+
+Pass nullable text as `row.arr ?? undefined`, not `?? ""` — the prompt already
+renders `opts.arr || "unknown"`.
+
+Two more defects in the same function:
+- **Check `updateJob`'s error before incrementing.** It returns `{ error?: string }`
+  (`app/actions/jobs.ts:55`); the plan counts a failed write as a rescore.
+  `lib/crawler.ts:346-359` fixed exactly this bug with a comment; do not
+  reintroduce it.
+- **Stop overwriting `fit_summary` on rescore.** It is both an input (`Summary:`
+  in the prompt) and the output written back. Rescore twice and the model is
+  summarizing its own previous rationale rather than the posting.
+
+## R5 (Critical, Task 3) — `readCeiling()` is referenced but never defined
+
+Task 3 Step 3 calls `readCeiling()` "from Task 6"; Task 6 never defines it, and
+Task 3 precedes Task 6 anyway. Define the primitive in **Task 1**:
+
+```ts
+// lib/settings-store.ts
+export async function readNumberSetting(key: SettingKey): Promise<number | null> {
+  const rows = await readAllSettings();
+  const row = rows.find((r) => r.key === key);
+  return typeof row?.value === "number" ? row.value : null;
+}
+export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
+```
+
+And the batch-tier reader in `lib/search-criteria.ts` beside `loadCriteria()`
+(it belongs there because the fit-brain default lives there; putting it in the
+store would create an import cycle):
+
+```ts
+export async function loadScoringInputs(): Promise<FitInputs> {
+  const rows = await readAllSettings();
+  const floor = rows.find((r) => r.key === SETTING_KEYS.compFloor)?.value;
+  return {
+    fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain,
+    compFloor: typeof floor === "number" ? floor : null,
+  };
+}
+```
+
+`getSettings` must do **one** `readAllSettings()` and derive from it — as
+written it reads the seven-row table twice, and adding the readers on top would
+make it four.
+
+## R6 (Critical, Task 7) — `runsEligibleForClosure` cannot be wired as described
+
+`ClosureRun` needs `{ finished_at, titles }`, but `LAST_TRUSTWORTHY_RUN_SQL`
+(`lib/crawler.ts:282`) selects `role_titles` only, `lastSuccessfulTitles` returns
+`string[][]`, and the **current** run has no `finished_at` at all — its
+`crawl_runs` row is not finalized until line 528. Passing `null`/`undefined`
+makes `Date.parse` yield `NaN`, `NaN > cutoff` is `false`, the current run is
+dropped, and **closure is disabled permanently after the first criteria change.**
+Silent, and exactly the failure class this plan's constraints forbid.
+
+The task must specify: (a) `LAST_TRUSTWORTHY_RUN_SQL` selects `role_titles,
+finished_at`, preserving the `status in ('ok', 'empty')` substring that
+`lib/crawler.test.ts:124` and `:128` pin; (b) `lastSuccessfulTitles` returns
+`ClosureRun[]`; (c) the current run is constructed literally as
+`{ finished_at: new Date().toISOString(), titles: seenTitles }`; (d)
+`closeStalePostings(company, runs: ClosureRun[], criteriaChangedAt)` maps
+`.map(r => r.titles)` before `titlesToClose`. Add tests for an unparseable
+`criteriaChangedAt` and a `null` `finished_at` — both currently untested, and
+`crawl_runs.finished_at` is nullable (`db/schema.sql:107`).
+
+## R7 (Important, Task 1/2) — fix `SETTING_KEYS` casing in Task 1 and delete the Task 2 rename
+
+Ship camelCase values (`stackTerms`, `locationRule`, `fitBrain`, `searchCeiling`,
+`compFloor`) in Task 1 Step 4 and **delete Task 2 Step 3's rename paragraph
+entirely.** The companion plan reads `SETTING_KEYS.compFloor` and would otherwise
+consume Task 1's committed snake_case values.
+
+Nothing currently enforces the invariant, and `mergeSettings` skips unknown keys
+**by design** — so drift makes every save a silent no-op with no error anywhere.
+Add a guard test. It must be **one-directional**: `compFloor` and `searchCeiling`
+are not `Criteria` fields, so a bijection assertion would fail.
+
+```ts
+test("every Criteria field has a matching SETTING_KEYS value", () => {
+  const fields = Object.keys(DEFAULT_CRITERIA);
+  expect(fields.length).toBeGreaterThan(0);
+  for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
+});
+```
+
+## R8 (Important, Task 1) — `mergeSettings` accepts a wrong-typed value
+
+A row `{key: "titles", value: "a string"}` passes every guard and lands on
+`criteria.titles`; `titleListForPrompt` then calls `.join` on a string and throws
+mid-crawl. Skip a row whose shape does not match the default's
+(`Array.isArray` mismatch, or `typeof` mismatch for scalars), log it, and test it.
+
+## R9 (Important, Task 2) — the tree is unbuildable between Tasks 2 and 3
+
+Task 2 deletes constants that four files still import, verifies with
+`npm test -- search-criteria` (vitest does not typecheck), and commits. Either
+merge Tasks 2 and 3 into one task with one commit, or state explicitly that the
+build is intentionally red across this pair and suspend the "every task leaves
+the baseline passing" rule for it. Do not leave it implicit.
+
+## R10 (Important, Task 6) — interface block contradicts the implementation
+
+Interfaces say `saveCriteriaList(key, items)`; the code is
+`saveCriteriaList(key, label, items)`. Same for `saveCriteriaText`. It names
+`countStaleScores()`, which nothing implements (the private helper is
+`countScoredJobs`), and omits `getCriteriaChangedAt`, which Task 7 imports. Fix
+the block to match, and have `countScoredJobs` return `number | null` so a failed
+count is not silently rendered as "0 roles" — a wrong answer presented as fact.
+
+## R11 (Important, Task 8) — extract `<RescorePrompt />`; the companion plan imports it
+
+Task 8 describes the prompt only as inline behavior, so the companion plan has
+nothing to import and will re-implement it, producing two prompts with drifting
+copy. Ship `components/RescorePrompt.tsx`:
+
+```tsx
+export default function RescorePrompt({ count, onRescore, onDismiss, busy }: {
+  count: number; onRescore: () => void; onDismiss: () => void; busy: boolean;
+})
+```
+
+It computes the dollar figure from `count` internally (`count * 0.0075`, rounded
+to cents) so the constant has one home, and owns the `busy` label.
+
+Requirement 6's "re-show in this session" also contradicts the spec — a client
+component has no memory across page loads, so the prompt would never reappear on
+a fresh load, which is the burial the spec forbids. Have `getSettings` return
+`fitBrainOverridden: boolean` (a `fitBrain` row exists in `app_settings`) and gate
+on `scoredJobCount > 0 && fitBrainOverridden`.
+
+## R12 (Important) — three spec requirements have no task
+
+- **The save-time warning must name the count**: "N tracked roles match titles
+  you are removing." Task 8 requirement 2 is a static warning; nothing computes N.
+- **The 4,000-character fit-brain warning** exists nowhere —
+  `lib/criteria-validation.ts` has no text validator at all.
+- **"A failed save leaves the form populated"** is unstated in Task 8.
+
+## R13 (Minor, verified) — smaller corrections
+
+- Task 2 Step 5's byte-verify `sed` pattern misses `export const DEFAULT_FIT_BRAIN`.
+- Task 6's `clearCachesFor` deletes all of `role_searches` for a stack-terms edit;
+  the spec says the stack family only. Narrow it or state the widening.
+- `markCriteriaChanged()` fires on a fit-brain save, needlessly suppressing crawler
+  closure. Restrict it to `titles`, `locations`, `locationRule`.
+- Task 5's `input.ceiling ?` treats `0` as "no ceiling"; use `!= null`.
+- Task 8 Step 2 never says whether `getSettings()` is awaited server-side and
+  passed as props or called from the client.
+- The spec calls it `DEFAULT_CANDIDATE_BACKGROUND`; the plan uses
+  `DEFAULT_FIT_BRAIN`. Pick one — the companion plan needs the same name.
+
+## R14 — tests that pass against a broken implementation
+
+Task 2's rewrite **loses three assertions** the originals had. Restore them:
+- `pickQueries` at the **equality boundary** (`cap === length`), not just under it.
+  An off-by-one from `<=` to `<` currently passes.
+- `pickQueries` covers every **location term** — deleted, not replaced.
+- `pickQueries` covers every **stack term** at the default cap — deleted, not
+  replaced. Only title coverage survives, so a regression in the 24-query stack
+  grid is uncaught.
+
+Also: the default grid size (39) is now unasserted anywhere; `estimateRunCost`
+has no absolute-value test, so `3 / 1_000` instead of `3 / 1_000_000` passes
+every test in the suite — pin the headline case between $1.00 and $1.30; and
+`validateList`'s quote test should assert the message names the offending entry.
+
+---
+
 ### Task 1: The `app_settings` table and the settings store
 
 **Files:**
