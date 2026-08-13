@@ -14,6 +14,7 @@ import {
 } from "@/lib/search-criteria";
 import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
+import { untrackedCompanyNames } from "@/lib/untracked-companies";
 
 export interface RoleSearchResult {
   matches: RoleMatch[];
@@ -59,18 +60,8 @@ async function readCache(family: RoleSearchFamily) {
 
 async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
   const { data } = await supabase.from("watchlist").select("company");
-  const tracked = new Set(
-    ((data ?? []) as { company: string }[]).map((r) => r.company.toLowerCase().trim())
-  );
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const m of matches) {
-    const key = m.company?.toLowerCase().trim();
-    if (!key || tracked.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    out.push(m.company);
-  }
-  return out;
+  const trackedCompanies = ((data ?? []) as { company: string }[]).map((r) => r.company);
+  return untrackedCompanyNames(matches, trackedCompanies);
 }
 
 export async function getCachedRoleSearch(

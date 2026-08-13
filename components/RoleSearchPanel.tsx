@@ -6,7 +6,9 @@ import {
   getCachedRoleSearch,
 } from "@/app/actions/role-search";
 import { trackCompanyByName } from "@/app/actions/watchlist";
+import type { CrawlOutcome } from "@/lib/crawler";
 import { groupRolesByCompany } from "@/lib/group-by-company";
+import { describeTrackOutcome } from "@/lib/track-outcome";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
 
@@ -24,7 +26,12 @@ export default function RoleSearchPanel() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trackingCompany, setTrackingCompany] = useState<string | null>(null);
-  const [justTracked, setJustTracked] = useState<Set<string>>(new Set());
+  // Maps company -> the crawl outcome trackCompanyByName produced, so the
+  // badge can distinguish a clean track from one that needs attention (see
+  // describeTrackOutcome). `null` means we know it succeeded but have no
+  // outcome detail (defensive fallback — trackCompanyByName always returns
+  // one on its non-error path today).
+  const [justTracked, setJustTracked] = useState<Map<string, CrawlOutcome | null>>(new Map());
   // Deliberately separate from `error`: trackCompanyByName runs a real crawl
   // (~9s to a couple minutes) and its failure must survive an unrelated
   // search/reload clearing the search-error state below it says which
@@ -62,13 +69,27 @@ export default function RoleSearchPanel() {
   async function handleTrack(company: string) {
     setTrackingCompany(company);
     setTrackError(null);
-    const res = await trackCompanyByName(company);
-    setTrackingCompany(null);
-    if (res.error) {
-      setTrackError({ company, message: res.error });
-      return;
+    try {
+      const res = await trackCompanyByName(company);
+      if (res.error) {
+        setTrackError({ company, message: res.error });
+        return;
+      }
+      setJustTracked((prev) => new Map(prev).set(company, res.outcome ?? null));
+    } catch (err) {
+      // trackCompanyByName's watchlist read (lib/crawler.ts, crawlCompany's
+      // initial select) sits outside its own try/catch, so a network fault
+      // there — or any other rejection from the server action — must not
+      // leave trackingCompany stuck set. Every Track button shares
+      // `disabled={!!trackingCompany}`, so an unhandled rejection here would
+      // otherwise permanently disable the whole panel's Track UI until reload.
+      setTrackError({
+        company,
+        message: err instanceof Error ? err.message : "Track request failed unexpectedly.",
+      });
+    } finally {
+      setTrackingCompany(null);
     }
-    setJustTracked((prev) => new Set(prev).add(company));
   }
 
   function formatFetchedAt(iso: string) {
@@ -165,7 +186,16 @@ export default function RoleSearchPanel() {
                   {roles.length} role{roles.length === 1 ? "" : "s"}
                 </Tag>
                 {justTracked.has(company) ? (
-                  <span className="text-sm text-ink/40">Tracking ✓</span>
+                  (() => {
+                    const display = describeTrackOutcome(justTracked.get(company)!);
+                    return (
+                      <span
+                        className={`text-sm ${display.ok ? "text-ink/40" : "text-[#92400E]"}`}
+                      >
+                        {display.message}
+                      </span>
+                    );
+                  })()
                 ) : (
                   untracked.has(company) && (
                     <button
