@@ -59,3 +59,47 @@ export function roleExtractionSchema(): string {
     "ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on building GTM systems and agentic AI workflows, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no systems/AI-building upside)",
   ].join("\n- ");
 }
+
+// Search-engine queries. Title queries catch roles named the way the user
+// expects. Stack queries catch roles with idiosyncratic titles — Business
+// Systems Manager, Growth Systems Lead — that title search structurally
+// misses. Titles in this function vary wildly; the tooling does not.
+
+export const LOCATION_TERMS = ["Denver", "Colorado", "remote"];
+
+export function titleQueries(): string[] {
+  const queries: string[] = [];
+  for (const title of TARGET_TITLES) {
+    for (const place of LOCATION_TERMS) {
+      queries.push(`"${title}" ${place} job opening`);
+    }
+  }
+  return queries;
+}
+
+export function stackQueries(): string[] {
+  const queries: string[] = [];
+  for (const tool of GTM_STACK_TERMS) {
+    for (const place of LOCATION_TERMS) {
+      queries.push(`"${tool}" revenue operations hiring ${place}`);
+    }
+  }
+  return queries;
+}
+
+// Web searches are billed per search, so a call gets a bounded subset of the
+// full query enumeration rather than all 39 title / 24 stack queries. Selection
+// is a proportional spread rather than a head slice: the query list is
+// title-major, so `slice(0, 15)` would cover only the first 5 of 13 titles,
+// while striding proportionally covers every title and all three location terms.
+export const MAX_QUERIES_PER_SEARCH = 15;
+
+export function pickQueries(queries: string[], cap: number = MAX_QUERIES_PER_SEARCH): string[] {
+  if (cap <= 0) return [];
+  if (queries.length <= cap) return queries;
+  const out: string[] = [];
+  for (let i = 0; i < cap; i++) {
+    out.push(queries[Math.floor((i * queries.length) / cap)]);
+  }
+  return out;
+}

@@ -2,9 +2,14 @@ import { describe, expect, test } from "vitest";
 import {
   GTM_STACK_TERMS,
   LOCATION_RULE,
+  LOCATION_TERMS,
+  MAX_QUERIES_PER_SEARCH,
   TARGET_TITLES,
+  pickQueries,
   roleExtractionSchema,
+  stackQueries,
   titleListForPrompt,
+  titleQueries,
 } from "./search-criteria";
 
 describe("search criteria", () => {
@@ -49,6 +54,101 @@ describe("search criteria", () => {
       "ic_flag",
     ]) {
       expect(schema).toContain(field);
+    }
+  });
+});
+
+describe("titleQueries", () => {
+  test("produces one query per title and location term", () => {
+    expect(titleQueries().length).toBe(TARGET_TITLES.length * LOCATION_TERMS.length);
+  });
+
+  test("quotes the title so search engines match the phrase", () => {
+    expect(
+      titleQueries().some(
+        (q) => q.includes('"Revenue Operations"') || q.includes('"Head of Revenue Operations"'),
+      ),
+    ).toBe(true);
+  });
+
+  test("every query carries a location term", () => {
+    const queries = titleQueries();
+    expect(queries.length).toBe(TARGET_TITLES.length * LOCATION_TERMS.length);
+    for (const q of queries) {
+      expect(LOCATION_TERMS.some((t) => q.includes(t))).toBe(true);
+    }
+  });
+});
+
+describe("stackQueries", () => {
+  test("pairs tool names with hiring language", () => {
+    const queries = stackQueries();
+    expect(queries.length).toBe(GTM_STACK_TERMS.length * LOCATION_TERMS.length);
+    expect(queries.some((q) => q.includes("Clay"))).toBe(true);
+    expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
+  });
+
+  test("every query carries a location term", () => {
+    const queries = stackQueries();
+    expect(queries.length).toBe(GTM_STACK_TERMS.length * LOCATION_TERMS.length);
+    for (const q of queries) {
+      expect(LOCATION_TERMS.some((t) => q.includes(t))).toBe(true);
+    }
+  });
+});
+
+describe("MAX_QUERIES_PER_SEARCH", () => {
+  test("is pinned to 15 so changing the cap is a deliberate act", () => {
+    expect(MAX_QUERIES_PER_SEARCH).toBe(15);
+  });
+});
+
+describe("pickQueries", () => {
+  test("returns the input unchanged when queries.length <= cap", () => {
+    const input = ["a", "b", "c"];
+    expect(pickQueries(input, 5)).toEqual(input);
+    expect(pickQueries(input, 3)).toEqual(input);
+  });
+
+  test("returns exactly cap items when queries.length > cap", () => {
+    const input = Array.from({ length: 20 }, (_, i) => `q${i}`);
+    expect(pickQueries(input, 7).length).toBe(7);
+  });
+
+  test("returns no duplicates", () => {
+    const picked = pickQueries(titleQueries());
+    expect(new Set(picked).size).toBe(picked.length);
+  });
+
+  test("every returned item is a member of the input", () => {
+    const input = titleQueries();
+    const picked = pickQueries(input);
+    for (const q of picked) {
+      expect(input.includes(q)).toBe(true);
+    }
+  });
+
+  test("covers every entry in TARGET_TITLES — this is the assertion that kills slice(0, cap)", () => {
+    const picked = pickQueries(titleQueries());
+    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
+    for (const title of TARGET_TITLES) {
+      expect(picked.some((q) => q.includes(`"${title}"`))).toBe(true);
+    }
+  });
+
+  test("covers every entry in LOCATION_TERMS", () => {
+    const picked = pickQueries(titleQueries());
+    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
+    for (const place of LOCATION_TERMS) {
+      expect(picked.some((q) => q.includes(place))).toBe(true);
+    }
+  });
+
+  test("stack queries: covers every entry in GTM_STACK_TERMS at cap 15", () => {
+    const picked = pickQueries(stackQueries());
+    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
+    for (const tool of GTM_STACK_TERMS) {
+      expect(picked.some((q) => q.includes(`"${tool}"`))).toBe(true);
     }
   });
 });
