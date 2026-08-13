@@ -67,4 +67,21 @@ describe("groupRolesByCompany", () => {
     expect(groups.size).toBe(1);
     expect(groups.has("")).toBe(false);
   });
+
+  test("companies differing only by internal whitespace merge into one group", () => {
+    // Catches a `.toLowerCase()`-only key (no whitespace collapse) — the
+    // third-normalizer drift task 5's review flagged. "Big  Co" (double
+    // space) and "Big Co" (single space) must be the same company.
+    const groups = groupRolesByCompany([role("Big  Co"), role("Big Co")]);
+    expect(groups.size).toBe(1);
+    const [[, roles]] = [...groups];
+    expect(roles.length).toBe(2);
+  });
+
+  test("a name with U+00A0 merges with the same name using a regular space", () => {
+    // Built with an explicit \xa0 escape, not a pasted character.
+    const nbspName = "Big" + "\xa0" + "Co";
+    const groups = groupRolesByCompany([role(nbspName), role("Big Co")]);
+    expect(groups.size).toBe(1);
+  });
 });

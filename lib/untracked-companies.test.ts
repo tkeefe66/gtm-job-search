@@ -58,4 +58,19 @@ describe("untrackedCompanyNames", () => {
     expect(out).toEqual([]);
     expect(out.length).toBe(0);
   });
+
+  test("matches a tracked company differing only by internal whitespace", () => {
+    // Catches a `.toLowerCase()`-only comparison (no whitespace collapse) —
+    // the third-normalizer drift task 5's review flagged. A company tracked
+    // as "Big  Co" (double space) must exclude a match spelled "Big Co".
+    const out = untrackedCompanyNames([role("Big Co")], ["Big  Co"]);
+    expect(out).toEqual([]);
+  });
+
+  test("matches a tracked company differing by U+00A0 vs a regular space", () => {
+    // Built with an explicit \xa0 escape, not a pasted character.
+    const nbspTracked = "Big" + "\xa0" + "Co";
+    const out = untrackedCompanyNames([role("Big Co")], [nbspTracked]);
+    expect(out).toEqual([]);
+  });
 });
