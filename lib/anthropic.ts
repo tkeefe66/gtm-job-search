@@ -7,6 +7,25 @@ export const anthropic = new Anthropic({
 
 export const MODEL = "claude-sonnet-4-6";
 
+// The installed @anthropic-ai/sdk's ContentBlock union (TextBlock | ToolUseBlock,
+// see node_modules/@anthropic-ai/sdk/resources/messages.d.ts) predates the
+// web_search server tool and has no type for the `server_tool_use` blocks the
+// API actually returns when the model issues a search. There is no SDK type to
+// import, so this is a hand-written structural guard rather than a cast to
+// `any` — it only reads fields it has checked exist, and a block that doesn't
+// match falls through untouched.
+interface WebSearchUseBlock {
+  type: "server_tool_use";
+  name: "web_search";
+  input: { query?: unknown };
+}
+
+function isWebSearchUseBlock(block: unknown): block is WebSearchUseBlock {
+  if (typeof block !== "object" || block === null) return false;
+  const b = block as { type?: unknown; name?: unknown };
+  return b.type === "server_tool_use" && b.name === "web_search";
+}
+
 /**
  * Calls Claude with the web_search tool enabled and returns the concatenated
  * text output from all final text blocks. The SDK handles the tool loop when
@@ -33,6 +52,25 @@ export async function callWithWebSearch(opts: {
   // Token cost only -- web_search server-tool calls are billed per search and
   // are not part of the usage token counts, so they stay untracked.
   report("gtm-job-search", MODEL, message.usage);
+
+  // Logging side-channel: which searches the model actually issued (as
+  // opposed to which ones we offered it). Never let this break the call.
+  try {
+    // Cast to unknown[] rather than relying on `.filter`'s type-guard overload
+    // inferring correctly: the SDK's element type (TextBlock | ToolUseBlock)
+    // doesn't satisfy the `S extends T` constraint against WebSearchUseBlock,
+    // so without this the guard silently degrades to the untyped overload.
+    const issued = (message.content as unknown[])
+      .filter(isWebSearchUseBlock)
+      .map((block) =>
+        typeof block.input?.query === "string" ? block.input.query : JSON.stringify(block.input)
+      );
+    if (issued.length > 0) {
+      console.log(`callWithWebSearch: issued ${issued.length} searches — ${issued.join(" | ")}`);
+    }
+  } catch (err) {
+    console.error("callWithWebSearch: failed to log issued searches —", err);
+  }
 
   return message.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")
