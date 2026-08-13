@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { shouldUseCachedRoleSearch } from "./role-search-cache";
+import { shouldReplaceRoleView, shouldUseCachedRoleSearch } from "./role-search-cache";
 
 describe("shouldUseCachedRoleSearch", () => {
   test("a cache row with zero matches still counts as a hit", () => {
@@ -24,5 +24,34 @@ describe("shouldUseCachedRoleSearch", () => {
     expect(shouldUseCachedRoleSearch({ matches: [{ role_title: "x" }], fetchedAt: null })).toBe(
       false
     );
+  });
+});
+
+describe("shouldReplaceRoleView", () => {
+  test("an error with no payload leaves the current view intact", () => {
+    // The regression: findRolesByCriteria's catch and getCachedRoleSearch's
+    // error branch both return matches: [] / fetchedAt: null, so applying
+    // them blanked cached results the database still holds. Fails against the
+    // old unconditional setMatches(res.matches).
+    expect(shouldReplaceRoleView({ fetchedAt: null, error: "connection refused" })).toBe(false);
+  });
+
+  test("an error that still carries results replaces the view", () => {
+    // The cache-write failure path: the billed search succeeded, so the user
+    // must see the roles even though the warning banner is showing.
+    expect(
+      shouldReplaceRoleView({ fetchedAt: "2026-08-13T00:00:00.000Z", error: "cache write failed" })
+    ).toBe(true);
+  });
+
+  test("a clean result with no cached row yet still replaces the view", () => {
+    // Switching families to one that has never been searched must clear the
+    // previous family's roles, not leave them on screen under the new label.
+    // Fails against a naive `return res.fetchedAt !== null`.
+    expect(shouldReplaceRoleView({ fetchedAt: null })).toBe(true);
+  });
+
+  test("a clean result with a cached row replaces the view", () => {
+    expect(shouldReplaceRoleView({ fetchedAt: "2026-08-13T00:00:00.000Z" })).toBe(true);
   });
 });

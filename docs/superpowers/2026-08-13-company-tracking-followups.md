@@ -54,7 +54,10 @@ second row, billed separately.
 
 Closed in `fee58a6` — `fix: make company identity case-insensitive on the Discover path and
 stop careers_url clobber` (task 5). `app/actions/watchlist.ts` gained a shared
-`resolveExistingCompany` helper (SQL `lower()`-based) that `trackCompanyByName`,
+`resolveExistingCompany` helper — TypeScript-side matching via
+`lib/find-existing-company.ts` and the canonical `normalizeCompanyName`, after `f70b289`
+replaced the original SQL `lower()` lookup (SQL `lower()` does not collapse internal
+whitespace, so "Big  Co" never matched "Big Co") — that `trackCompanyByName`,
 `addToWatchlist`, `setTracking`, `markChecked`, `setCareersUrl`, and `removeFromWatchlist`
 all now route through, so every write resolves to the row's exact stored casing before
 filtering or upserting. This also closes the "third half" the original write-up didn't

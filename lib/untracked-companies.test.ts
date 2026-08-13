@@ -67,6 +67,16 @@ describe("untrackedCompanyNames", () => {
     expect(out).toEqual([]);
   });
 
+  test("accepts already-normalized keys as the tracked list", () => {
+    // role-search.ts now passes getWatchedCompanyKeys()'s output here, which
+    // is normalizeCompanyName keys rather than raw stored names. The
+    // normalizer must be idempotent for that to be equivalent: a key like
+    // "big co" has to still exclude a match spelled "  Big  CO ".
+    const out = untrackedCompanyNames([role("  Big  CO ")], ["big co"]);
+    expect(out).toEqual([]);
+    expect(out.length).toBe(0);
+  });
+
   test("matches a tracked company differing by U+00A0 vs a regular space", () => {
     // Built with an explicit \xa0 escape, not a pasted character.
     const nbspTracked = "Big" + "\xa0" + "Co";

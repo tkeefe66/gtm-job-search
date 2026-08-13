@@ -6,6 +6,7 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
   LOCATION_RULE,
+  MAX_QUERIES_PER_SEARCH,
   ROLE_SEARCH_SYSTEM,
   pickQueries,
   roleExtractionSchema,
@@ -15,6 +16,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { untrackedCompanyNames } from "@/lib/untracked-companies";
+import { getWatchedCompanyKeys } from "@/app/actions/watchlist";
 
 export interface RoleSearchResult {
   matches: RoleMatch[];
@@ -59,9 +61,21 @@ async function readCache(family: RoleSearchFamily) {
 }
 
 async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
-  const { data } = await supabase.from("watchlist").select("company");
-  const trackedCompanies = ((data ?? []) as { company: string }[]).map((r) => r.company);
-  return untrackedCompanyNames(matches, trackedCompanies);
+  // "Tracked" has to mean exactly what it means everywhere else on the
+  // Discover tab: a watchlist row with tracking_enabled = true. This used to
+  // read `watchlist` directly with no filter, which gave the one tab two
+  // definitions — un-watching a company in company mode is a soft-disable
+  // (the row survives by design, see setTracking in app/actions/watchlist.ts),
+  // so role search would then list that company with no Track button, no
+  // "Watching ✓", and no way to re-track it from here.
+  //
+  // getWatchedCompanyKeys is the single definition. It returns
+  // normalizeCompanyName keys rather than raw stored names;
+  // untrackedCompanyNames normalizes whatever it is handed, and that
+  // normalizer is idempotent, so passing keys is equivalent to passing the
+  // raw names and avoids a second read of the same table.
+  const watched = await getWatchedCompanyKeys();
+  return untrackedCompanyNames(matches, Array.from(watched));
 }
 
 export async function getCachedRoleSearch(
@@ -106,6 +120,11 @@ export async function findRolesByCriteria(
       prompt: buildPrompt(family, queries),
       // Many searches per call; search narration counts against the budget.
       maxTokens: 8000,
+      // The prompt's query list is advisory — the model decides how many
+      // searches to actually run, and each one is billed. This is the only
+      // hard ceiling on that bill (max_uses on the web_search tool block).
+      // Same number as the query list so the cap and the offer agree.
+      maxSearches: MAX_QUERIES_PER_SEARCH,
     });
 
     const parsed = parseJson<RoleMatch[]>(raw);
@@ -114,10 +133,32 @@ export async function findRolesByCriteria(
     );
 
     const fetchedAt = new Date().toISOString();
-    await supabase.from("role_searches").upsert(
+    const { error: cacheError } = await supabase.from("role_searches").upsert(
       { family, search_term: "", roles: matches, fetched_at: fetchedAt },
       { onConflict: "family,search_term" }
     );
+
+    // A discarded error here is the most expensive silence in this file: the
+    // searches above are already billed. The first thing that happens on a
+    // deploy without `node db/apply-schema.mjs` is that role_searches doesn't
+    // exist — the page load errors loudly, but the search button passes
+    // force=true, skips the cache read, runs the full billed query set, fails
+    // this write, and renders results as if nothing were wrong. Every later
+    // click re-bills with nothing connecting the two.
+    //
+    // Reported, not thrown: the results below were paid for and must still
+    // reach the user. The panel keeps them because the result carries a
+    // payload (see shouldReplaceRoleView in lib/role-search-cache.ts).
+    let cacheWriteError: string | undefined;
+    if (cacheError) {
+      cacheWriteError =
+        `Found ${matches.length} role${matches.length === 1 ? "" : "s"}, but saving them to ` +
+        `the role_searches cache failed — ${cacheError.message}. The results below are live ` +
+        `and were not saved, so the next search re-runs (and re-bills) every query. If the ` +
+        `role_searches table is missing, apply the schema: ` +
+        `DATABASE_URL=... node db/apply-schema.mjs`;
+      console.error(`findRolesByCriteria(${family}): cache write failed — ${cacheError.message}`);
+    }
 
     // Ingest per company so dedupe, URL verification, and fit scoring run
     // through the same path the crawler uses. Grouping is case-insensitive
@@ -140,6 +181,7 @@ export async function findRolesByCriteria(
       matches,
       untrackedCompanies: await untrackedFrom(matches),
       fetchedAt,
+      error: cacheWriteError,
     };
   } catch (err) {
     console.error("findRolesByCriteria error:", err);

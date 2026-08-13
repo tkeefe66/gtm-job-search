@@ -8,6 +8,7 @@ import {
 import { trackCompanyByName } from "@/app/actions/watchlist";
 import type { CrawlOutcome } from "@/lib/crawler";
 import { groupRolesByCompany } from "@/lib/group-by-company";
+import { shouldReplaceRoleView } from "@/lib/role-search-cache";
 import { describeTrackOutcome } from "@/lib/track-outcome";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
@@ -40,16 +41,37 @@ export default function RoleSearchPanel() {
     null
   );
 
-  const loadCached = useCallback(async (f: RoleSearchFamily) => {
-    setLoading(true);
-    setError(null);
-    const res = await getCachedRoleSearch(f);
-    if (res.error) setError(res.error);
-    setMatches(res.matches);
-    setUntracked(new Set(res.untrackedCompanies));
-    setFetchedAt(res.fetchedAt);
-    setLoading(false);
-  }, []);
+  // Applies a result to the view only when it actually carries one. A failed
+  // read or a failed search comes back as matches: [] / fetchedAt: null, and
+  // blindly applying that wipes results the database still holds — recoverable
+  // only by toggling the family and back, which nothing tells the user. See
+  // shouldReplaceRoleView in lib/role-search-cache.ts for the exact rule
+  // (including why an errored result WITH results still replaces the view).
+  const applyResult = useCallback(
+    (res: {
+      matches: RoleMatch[];
+      untrackedCompanies: string[];
+      fetchedAt: string | null;
+      error?: string;
+    }) => {
+      if (res.error) setError(res.error);
+      if (!shouldReplaceRoleView(res)) return;
+      setMatches(res.matches);
+      setUntracked(new Set(res.untrackedCompanies));
+      setFetchedAt(res.fetchedAt);
+    },
+    []
+  );
+
+  const loadCached = useCallback(
+    async (f: RoleSearchFamily) => {
+      setLoading(true);
+      setError(null);
+      applyResult(await getCachedRoleSearch(f));
+      setLoading(false);
+    },
+    [applyResult]
+  );
 
   useEffect(() => {
     loadCached(family);
@@ -58,11 +80,7 @@ export default function RoleSearchPanel() {
   async function runSearch() {
     setSearching(true);
     setError(null);
-    const res = await findRolesByCriteria(family, true);
-    if (res.error) setError(res.error);
-    setMatches(res.matches);
-    setUntracked(new Set(res.untrackedCompanies));
-    setFetchedAt(res.fetchedAt);
+    applyResult(await findRolesByCriteria(family, true));
     setSearching(false);
   }
 

@@ -30,22 +30,37 @@ function isWebSearchUseBlock(block: unknown): block is WebSearchUseBlock {
  * Calls Claude with the web_search tool enabled and returns the concatenated
  * text output from all final text blocks. The SDK handles the tool loop when
  * web_search is a server tool, so the final message contains the model's text.
+ *
+ * `maxSearches` sets the tool block's `max_uses` — the only hard ceiling on
+ * how many (individually billed) searches the call can run. It is optional and
+ * omitted by default: the field is absent from the request unless a caller
+ * asks for it, so discover.ts, roles.ts, and crawler.ts keep sending exactly
+ * the request they sent before. Only role-search.ts, whose prompt hands the
+ * model a long query list and invites it to run them all, sets it today.
  */
 export async function callWithWebSearch(opts: {
   system: string;
   prompt: string;
   maxTokens?: number;
+  maxSearches?: number;
 }): Promise<string> {
+  // Same force-cast as before, and for the same reason: the installed SDK
+  // (0.32.1) has no type for the web_search server tool at all — no
+  // WebSearchTool20250305 in resources/messages.d.ts — so neither the `type`
+  // discriminator nor `max_uses` is expressible against Anthropic.Tool. The
+  // object is built as a plain literal (not `any`) so its shape is still
+  // checked internally, then cast once at the boundary.
+  const webSearchTool = {
+    type: "web_search_20250305",
+    name: "web_search",
+    ...(opts.maxSearches !== undefined ? { max_uses: opts.maxSearches } : {}),
+  } as unknown as Anthropic.Tool;
+
   const message = await anthropic.messages.create({
     model: MODEL,
     max_tokens: opts.maxTokens ?? 2000,
     system: opts.system,
-    tools: [
-      {
-        type: "web_search_20250305",
-        name: "web_search",
-      } as unknown as Anthropic.Tool,
-    ],
+    tools: [webSearchTool],
     messages: [{ role: "user", content: opts.prompt }],
   });
 

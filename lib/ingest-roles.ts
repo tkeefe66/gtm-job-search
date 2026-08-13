@@ -2,7 +2,12 @@ import { rawQuery } from "@/lib/supabase";
 import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { checkJobUrl } from "@/lib/verify-url";
-import { normalizeRoleKey, normalizeTitle } from "@/lib/role-key";
+import {
+  NORMALIZED_COMPANY_SQL,
+  normalizeCompanyName,
+  normalizeRoleKey,
+  normalizeTitle,
+} from "@/lib/role-key";
 import type { Role } from "@/lib/types";
 
 export interface IngestCompanyContext {
@@ -40,18 +45,33 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   const ctx = opts.companyContext ?? {};
   const seenTitles = roles.map((r) => normalizeTitle(r.role_title));
 
-  // Case-insensitive on purpose: normalizeRoleKey lowercases both sides for
-  // the dedupe comparison below, but an exact-match lookup here would make
-  // that lowercasing decorative — a row stored as "Clay" would be invisible
-  // to a crawl passing "clay", so every role would look new and re-insert as
-  // a duplicate. rawQuery is the escape hatch since the builder's filter
-  // surface (.eq/.neq) can't express lower().
+  // Normalized on both sides on purpose: normalizeRoleKey collapses casing
+  // AND whitespace for the dedupe comparison below, but a lookup that only
+  // matched on `lower(company) = lower($1)` would make that half-decorative —
+  // SQL lower() does not collapse internal whitespace, so a row stored as
+  // "Big  Co" (double space, or a scraped U+00A0) would be invisible to a
+  // crawl passing "Big Co" and every role would look new and re-insert as a
+  // duplicate "New" job.
+  //
+  // This WHERE decides which rows get LOADED, so it has to narrow in SQL —
+  // the TypeScript-side match app/actions/watchlist.ts uses would mean
+  // reading the whole (unbounded) jobs table. NORMALIZED_COMPANY_SQL is
+  // therefore the SQL twin of normalizeCompanyName; both live in
+  // lib/role-key.ts with the comment explaining why they must stay in sync,
+  // and the parameter below is normalized by the TS one so the two sides are
+  // always compared under definitions that agree.
+  //
+  // rawQuery is the escape hatch since the builder's filter surface
+  // (.eq/.neq) can't express a normalizing expression. Its error is rethrown
+  // below, deliberately unswallowed: a malformed expression must fail loudly
+  // on the first crawl rather than quietly degrade to "everything is new".
   const { data: existing, error } = await rawQuery<{
     role_title: string;
     job_url: string | null;
-  }>(`select role_title, job_url from jobs where lower(company) = lower($1)`, [
-    company,
-  ]);
+  }>(
+    `select role_title, job_url from jobs where ${NORMALIZED_COMPANY_SQL} = $1`,
+    [normalizeCompanyName(company)]
+  );
 
   if (error) {
     throw new Error(`ingestRoles: could not read existing jobs — ${error.message}`);

@@ -104,22 +104,42 @@ export default function Discover() {
 
   async function handleWatch(startup: DiscoveredStartup) {
     setWatchingCompany(startup.company);
+    setError(null);
     const key = normalizeCompanyName(startup.company);
-    if (isCompanyWatched(startup.company, watchedKeys)) {
-      // Soft-disable, not delete: crawl history, the learned careers_url,
-      // crawl_method, and failure counters must survive an un-star so
-      // re-watching doesn't cost a fresh resolveCareersUrl() search. The
-      // Watchlist page's own "Stop tracking" button already works this way;
-      // removeFromWatchlist stays exported as the explicit hard-delete.
-      await setTracking(startup.company, false);
-      setWatchedKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
-      setStartups((prev) => [...prev, startup]);
-    } else {
-      await addToWatchlist(startup);
-      setWatchedKeys((prev) => new Set(prev).add(key));
-      setStartups((prev) => prev.filter((s) => normalizeCompanyName(s.company) !== key));
+    try {
+      if (isCompanyWatched(startup.company, watchedKeys)) {
+        // Soft-disable, not delete: crawl history, the learned careers_url,
+        // crawl_method, and failure counters must survive an un-star so
+        // re-watching doesn't cost a fresh resolveCareersUrl() search. The
+        // Watchlist page's own "Stop tracking" button already works this way;
+        // removeFromWatchlist stays exported as the explicit hard-delete.
+        //
+        // setTracking now reports an explicit error when the name resolves to
+        // no stored row (see resolveWriteTarget in app/actions/watchlist.ts) —
+        // this is that fix's only consumer on this page, so dropping the
+        // return value would make it unobservable. Surfacing it the way
+        // components/Watchlist.tsx does (show the action's message, then
+        // don't pretend the write happened): the star must not flip and the
+        // row must not reappear when nothing was actually written.
+        const res = await setTracking(startup.company, false);
+        if (res.error) {
+          setError(`Couldn't stop watching ${startup.company}: ${res.error}`);
+          return;
+        }
+        setWatchedKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
+        setStartups((prev) => [...prev, startup]);
+      } else {
+        const res = await addToWatchlist(startup);
+        if (res.error) {
+          setError(`Couldn't watch ${startup.company}: ${res.error}`);
+          return;
+        }
+        setWatchedKeys((prev) => new Set(prev).add(key));
+        setStartups((prev) => prev.filter((s) => normalizeCompanyName(s.company) !== key));
+      }
+    } finally {
+      setWatchingCompany(null);
     }
-    setWatchingCompany(null);
   }
 
   const busy = loading || loadingCached;
