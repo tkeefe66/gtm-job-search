@@ -19,10 +19,24 @@ export default function Watchlist() {
   const [newCompany, setNewCompany] = useState("");
   const [tracking, setTrackingBusy] = useState(false);
   const [checking, setChecking] = useState<string | null>(null);
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  // Per-row lock. Must be a collection, not a single string — a single
+  // shared value lets a second row's action overwrite it mid-flight and
+  // spuriously re-enable the first row's button while its own mutation is
+  // still in progress. Always mutate via setRowBusy (add/delete), never
+  // overwrite wholesale.
+  const [busyRows, setBusyRows] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
   const [urlDrafts, setUrlDrafts] = useState<Record<string, string>>({});
   const [showUntracked, setShowUntracked] = useState(false);
+
+  function setRowBusy(company: string, busy: boolean) {
+    setBusyRows((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(company);
+      else next.delete(company);
+      return next;
+    });
+  }
 
   useEffect(() => {
     load();
@@ -51,34 +65,43 @@ export default function Watchlist() {
     if (!name) return;
     setTrackingBusy(true);
     setNotice(null);
-    const res = await trackCompanyByName(name);
-    setTrackingBusy(false);
-    if (res.error) setNotice(res.error);
-    else if (res.outcome) setNotice(`${name}: ${describe(res.outcome)}`);
-    setNewCompany("");
-    await load();
+    try {
+      const res = await trackCompanyByName(name);
+      if (res.error) setNotice(res.error);
+      else if (res.outcome) setNotice(`${name}: ${describe(res.outcome)}`);
+      setNewCompany("");
+      await load();
+    } finally {
+      setTrackingBusy(false);
+    }
   }
 
   async function handleCheckNow(company: string) {
     setChecking(company);
     setNotice(null);
-    const outcome = await checkCompanyNow(company);
-    setChecking(null);
-    setNotice(`${company}: ${describe(outcome)}`);
-    await load();
+    try {
+      const outcome = await checkCompanyNow(company);
+      setNotice(`${company}: ${describe(outcome)}`);
+      await load();
+    } finally {
+      setChecking(null);
+    }
   }
 
   async function handleSetTracking(company: string, enabled: boolean) {
-    setBusyRow(company);
-    const res = await setTracking(company, enabled);
-    setBusyRow(null);
-    if (res.error) setNotice(res.error);
-    await load();
+    setRowBusy(company, true);
+    try {
+      const res = await setTracking(company, enabled);
+      if (res.error) setNotice(res.error);
+      await load();
+    } finally {
+      setRowBusy(company, false);
+    }
   }
 
   async function handleSaveUrl(company: string) {
     const url = (urlDrafts[company] ?? "").trim();
-    setBusyRow(company);
+    setRowBusy(company, true);
     try {
       const res = await setCareersUrl(company, url);
       if (res.error) {
@@ -88,7 +111,7 @@ export default function Watchlist() {
       setUrlDrafts((prev) => ({ ...prev, [company]: "" }));
       await handleCheckNow(company);
     } finally {
-      setBusyRow(null);
+      setRowBusy(company, false);
     }
   }
 
@@ -151,7 +174,7 @@ export default function Watchlist() {
             </p>
           )}
 
-          {c.last_crawl_status === "needs_url" && (
+          {c.tracking_enabled && c.last_crawl_status === "needs_url" && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
                 type="text"
@@ -164,7 +187,7 @@ export default function Watchlist() {
               />
               <button
                 onClick={() => handleSaveUrl(c.company)}
-                disabled={busyRow === c.company}
+                disabled={busyRows.has(c.company)}
                 className="rounded-md border border-ink px-2 py-1 text-xs font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
               >
                 Save careers URL
@@ -195,7 +218,7 @@ export default function Watchlist() {
               )}
               <button
                 onClick={() => handleSetTracking(c.company, false)}
-                disabled={busyRow === c.company}
+                disabled={busyRows.has(c.company)}
                 className="text-sm text-ink/30 transition hover:text-[#92400E] disabled:opacity-50"
               >
                 Stop tracking
@@ -204,7 +227,7 @@ export default function Watchlist() {
           ) : (
             <button
               onClick={() => handleSetTracking(c.company, true)}
-              disabled={busyRow === c.company}
+              disabled={busyRows.has(c.company)}
               className="rounded-md border border-slate px-3 py-1.5 text-sm font-medium text-ink/60 transition hover:border-ink hover:text-ink disabled:opacity-50"
             >
               Resume
