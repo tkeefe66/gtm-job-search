@@ -9,12 +9,14 @@ import {
   type DiscoveredStartup,
 } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
-import { addToWatchlist, setTracking, getWatchedCompanyNames } from "@/app/actions/watchlist";
+import { addToWatchlist, setTracking, getWatchedCompanyKeys } from "@/app/actions/watchlist";
 import {
   buildWindowFilterOptions,
   filterByWindow,
   type WindowFilter,
 } from "@/lib/discovery-window-filter";
+import { normalizeCompanyName } from "@/lib/role-key";
+import { isCompanyWatched } from "@/lib/watched-companies";
 import RoleSearchPanel from "./RoleSearchPanel";
 import { Spinner, Tag } from "./ui";
 
@@ -36,7 +38,11 @@ export default function Discover() {
   const [dateRange, setDateRange] = useState<DateRange>("7d");
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
-  const [watched, setWatched] = useState<Set<string>>(new Set());
+  // Normalized company keys (normalizeCompanyName), not raw stored names —
+  // see getWatchedCompanyKeys in app/actions/watchlist.ts. Every membership
+  // test against this set must go through isCompanyWatched so a raw name is
+  // never compared against a differently-cased key.
+  const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
   // Slices the ALREADY-LOADED list by which cached window each company came
   // from. Purely presentational — never triggers a fetch, and independent of
@@ -53,14 +59,14 @@ export default function Discover() {
     (async () => {
       setLoadingCached(true);
       setError(null);
-      const [res, watchedNames] = await Promise.all([
+      const [res, watchedKeysResult] = await Promise.all([
         getAllDiscoveredStartups(),
-        getWatchedCompanyNames(),
+        getWatchedCompanyKeys(),
       ]);
       if (cancelled) return;
-      setStartups(res.startups.filter((s) => !watchedNames.has(s.company)));
+      setStartups(res.startups.filter((s) => !isCompanyWatched(s.company, watchedKeysResult)));
       setFetchedAt(res.fetchedAt);
-      setWatched(watchedNames);
+      setWatchedKeys(watchedKeysResult);
       setLoadingCached(false);
     })();
     return () => { cancelled = true; };
@@ -98,19 +104,20 @@ export default function Discover() {
 
   async function handleWatch(startup: DiscoveredStartup) {
     setWatchingCompany(startup.company);
-    if (watched.has(startup.company)) {
+    const key = normalizeCompanyName(startup.company);
+    if (isCompanyWatched(startup.company, watchedKeys)) {
       // Soft-disable, not delete: crawl history, the learned careers_url,
       // crawl_method, and failure counters must survive an un-star so
       // re-watching doesn't cost a fresh resolveCareersUrl() search. The
       // Watchlist page's own "Stop tracking" button already works this way;
       // removeFromWatchlist stays exported as the explicit hard-delete.
       await setTracking(startup.company, false);
-      setWatched((prev) => { const n = new Set(prev); n.delete(startup.company); return n; });
+      setWatchedKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
       setStartups((prev) => [...prev, startup]);
     } else {
       await addToWatchlist(startup);
-      setWatched((prev) => new Set(prev).add(startup.company));
-      setStartups((prev) => prev.filter((s) => s.company !== startup.company));
+      setWatchedKeys((prev) => new Set(prev).add(key));
+      setStartups((prev) => prev.filter((s) => normalizeCompanyName(s.company) !== key));
     }
     setWatchingCompany(null);
   }
@@ -265,7 +272,9 @@ export default function Discover() {
 
           {!busy && displayed.length > 0 && (
             <div className="overflow-hidden rounded-lg border border-slate bg-white">
-              {displayed.map((s, i) => (
+              {displayed.map((s, i) => {
+                const watching = isCompanyWatched(s.company, watchedKeys);
+                return (
                 <div
                   key={`${s.company}-${i}`}
                   className={`flex flex-col gap-2 p-4 sm:flex-row sm:items-center ${
@@ -303,12 +312,12 @@ export default function Discover() {
                       onClick={() => handleWatch(s)}
                       disabled={!!watchingCompany}
                       className={`rounded-md border px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
-                        watched.has(s.company)
+                        watching
                           ? "border-ink/30 bg-canvas text-ink/50 hover:border-[#92400E] hover:text-[#92400E]"
                           : "border-slate text-ink/50 hover:border-ink hover:text-ink"
                       }`}
                     >
-                      {watchingCompany === s.company ? "…" : watched.has(s.company) ? "Watching ✓" : "Watch"}
+                      {watchingCompany === s.company ? "…" : watching ? "Watching ✓" : "Watch"}
                     </button>
                     {s.careers_url && (
                       <a
@@ -322,7 +331,8 @@ export default function Discover() {
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>

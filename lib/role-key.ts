@@ -11,3 +11,10 @@ export function normalizeTitle(title: string): string {
 export function normalizeRoleKey(company: string, roleTitle: string): string {
   return `${normalizeTitle(company)}::${normalizeTitle(roleTitle)}`;
 }
+
+// Company identity (watchlist dedupe, Discover's "already watched?" checks)
+// needs exactly the same normalization as role titles: lowercase, trim,
+// collapse whitespace including U+00A0. Aliased rather than reimplemented —
+// see the module comment in app/actions/watchlist.ts for why a second,
+// subtly different normalizer is the failure mode this is meant to prevent.
+export const normalizeCompanyName = normalizeTitle;
