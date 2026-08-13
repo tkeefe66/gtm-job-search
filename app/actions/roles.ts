@@ -2,9 +2,7 @@
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { supabase } from "@/lib/supabase";
-import { addJob, updateJob } from "./jobs";
-import { scoreFit } from "./parse-role";
-import { checkJobUrl } from "@/lib/verify-url";
+import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
   LOCATION_RULE,
@@ -93,61 +91,19 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
       { onConflict: "company" }
     );
 
-    // Verify job URLs are still live before saving/scoring.
-    const urlStatuses = await Promise.all(
-      roles.map((role) => checkJobUrl(role.job_url))
-    );
-    const liveCount = urlStatuses.filter((s) => s === "live").length;
-    const deadCount = urlStatuses.filter((s) => s === "dead").length;
-    const unknownCount = urlStatuses.filter((s) => s === "unknown").length;
-    console.log(
-      `URL check: ${liveCount} live, ${deadCount} dead, ${unknownCount} unknown for ${startup.company}`
-    );
-
-    // Add each role to the jobs table, then score fit in parallel.
-    const companyDescription = `${startup.tagline}. ${startup.traction ?? ""}`.trim();
-    await Promise.all(
-      roles.map(async (role, i) => {
-        const urlStatus = urlStatuses[i];
-        const isDead = urlStatus === "dead";
-
-        const jobRes = await addJob({
-          company: startup.company,
-          role_title: role.role_title,
-          status: isDead ? "Posting Closed" : "New",
-          seniority: role.seniority || null,
-          location: role.location || null,
-          job_url: role.job_url || null,
-          careers_url: startup.careers_url || null,
-          category: startup.category || null,
-          raised: startup.raised || null,
-          stage: startup.stage || null,
-          traction: startup.traction || null,
-          salary_range: role.salary_range || null,
-          fit_summary: role.fit_signal || null,
-          ic_flag: role.ic_flag ?? false,
-          source: "Discover",
-        });
-
-        if (jobRes.job && !isDead) {
-          const scored = await scoreFit({
-            company: startup.company,
-            role_title: role.role_title,
-            company_description: companyDescription,
-            key_skills: role.description_summary,
-            fit_summary: role.fit_signal,
-            department: "",
-            location: role.location,
-          });
-          if (scored.score > 0) {
-            await updateJob(jobRes.job.id, {
-              fit_score: scored.score,
-              fit_summary: scored.rationale || role.fit_signal || null,
-            });
-          }
-        }
-      })
-    );
+    await ingestRoles({
+      company: startup.company,
+      roles,
+      companyContext: {
+        tagline: startup.tagline,
+        traction: startup.traction,
+        careers_url: startup.careers_url,
+        category: startup.category,
+        raised: startup.raised,
+        stage: startup.stage,
+      },
+      source: "Discover",
+    });
 
     return { roles, message };
   } catch (err) {
