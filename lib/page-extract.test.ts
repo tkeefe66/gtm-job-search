@@ -80,3 +80,64 @@ describe("isJsShell", () => {
     expect(isJsShell(page)).toBe(true);
   });
 });
+
+describe("isJsShell threshold boundaries", () => {
+  // Pins MIN_JOB_LINKS = 3. Both fixtures carry the same abundant prose
+  // (well over 500 chars), so the content-length condition is comfortably
+  // satisfied and never decides the outcome — only the link count varies.
+  const abundantProse = "Filler sentence about the team and mission. ".repeat(30);
+
+  function linksFixture(count: number): string {
+    const links = Array.from(
+      { length: count },
+      (_, i) => `<a href="/careers/role-${i}">Role ${i}</a>`
+    ).join("");
+    return `<html><body><p>${abundantProse}</p>${links}</body></html>`;
+  }
+
+  test("2 job-like links, below MIN_JOB_LINKS, is a shell", () => {
+    const page = stripHtml(linksFixture(2));
+    expect(page.text.length).toBeGreaterThan(500);
+    expect(page.links.length).toBe(2);
+    expect(isJsShell(page)).toBe(true);
+  });
+
+  test("3 job-like links, at MIN_JOB_LINKS, is not a shell", () => {
+    const page = stripHtml(linksFixture(3));
+    expect(page.text.length).toBeGreaterThan(500);
+    expect(page.links.length).toBe(3);
+    expect(isJsShell(page)).toBe(false);
+  });
+
+  // Pins MIN_CONTENT_CHARS = 500. Both fixtures carry 3 job-like links, so
+  // the link-count condition is comfortably satisfied and never decides the
+  // outcome — only the collapsed text length varies. The filler is built
+  // from a non-whitespace, non-entity character, so each character added
+  // contributes exactly one character to the final collapsed text (collapse()
+  // only touches whitespace runs) — the mapping from fillerLen to
+  // text.length is computed here, not hand-counted, and the exact resulting
+  // length is asserted below so a future reader can see the fixture really
+  // sits where its name claims.
+  function contentFixtureHtml(fillerLen: number): string {
+    const filler = "x".repeat(fillerLen);
+    return `<html><body><p>${filler}</p><a href="/careers/a">Role A</a><a href="/careers/b">Role B</a><a href="/careers/c">Role C</a></body></html>`;
+  }
+
+  const fixedOverhead = stripHtml(contentFixtureHtml(1)).text.length - 1;
+
+  test("text length just under MIN_CONTENT_CHARS is a shell", () => {
+    const target = 499;
+    const page = stripHtml(contentFixtureHtml(target - fixedOverhead));
+    expect(page.text.length).toBe(target);
+    expect(page.links.length).toBe(3);
+    expect(isJsShell(page)).toBe(true);
+  });
+
+  test("text length at MIN_CONTENT_CHARS is not a shell", () => {
+    const target = 500;
+    const page = stripHtml(contentFixtureHtml(target - fixedOverhead));
+    expect(page.text.length).toBe(target);
+    expect(page.links.length).toBe(3);
+    expect(isJsShell(page)).toBe(false);
+  });
+});

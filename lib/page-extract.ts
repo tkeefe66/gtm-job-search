@@ -38,7 +38,7 @@ function decodeEntities(s: string): string {
 }
 
 function collapse(s: string): string {
-  return s.replace(/[ \s]+/g, " ").trim();
+  return s.replace(/\s+/g, " ").trim();
 }
 
 export function stripHtml(html: string): ExtractedPage {
