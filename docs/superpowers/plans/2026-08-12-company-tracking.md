@@ -13,7 +13,7 @@ Spec: `docs/superpowers/specs/2026-08-12-company-tracking-design.md`
 ## Global Constraints
 
 - **No ATS vendor APIs and no job aggregator APIs.** Careers pages are treated as ordinary web pages. This is a hard product constraint, not a preference.
-- **`npm run build` is the pre-deploy gate** and includes typecheck. After this plan, the gate is `npm run build && npm test && npm run lint`.
+- **The gate is `npm run build && npm test`.** `npm run build` includes typecheck. **Do NOT run or attempt to fix `npm run lint`** — the repo has no ESLint config and `next lint` blocks on an interactive setup prompt. Adding a config makes `next build` run ESLint, and 3 pre-existing errors then fail the build. Fixing that is out of scope for every task in this plan. Where a task's steps say to run `npm run lint`, run `npm run build && npm test` instead.
 - **All backend logic lives in React Server Actions** in `app/actions/`, except the single cron route added by Task 8. There are no other API routes.
 - **`lib/supabase.ts` is NOT Supabase** — it is a hand-rolled Supabase-shaped builder over `pg`. Supported surface: `.from .select .insert .update .upsert .delete .eq .neq .order .limit .single .maybeSingle`. There is no `.lt()`, `.gt()`, or `.in()`. Task 2 adds a raw-query escape hatch for anything beyond that surface.
 - **Schema truth is `db/schema.sql`**, applied with `DATABASE_URL=postgres://... node db/apply-schema.mjs`. It must stay idempotent — every statement re-runnable.
