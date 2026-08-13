@@ -26,279 +26,6 @@
 
 ---
 
-# REVIEW CORRECTIONS — authoritative, supersede the tasks below
-
-Two independent reviews, then a cross-review. Where this section and a task
-disagree, **this section wins**. Every item was verified against the real
-source, not inferred from the plan.
-
-## R1 (Critical, Task 3) — `scoreFit` has THREE callers, not one
-
-Task 3 Step 6 says `lib/ingest-roles.ts:141` is the only call site. **False.**
-Also `components/RolesTable.tsx:514` and `components/RecruiterPanel.tsx:74`,
-both `"use client"`. Adding required fields fails `next build`. Neither can call
-`loadCriteria()` — it transitively imports `pg`.
-
-Final signature (adjudicated between the two reviewers):
-
-```ts
-// lib/fit-inputs.ts  — new file, this task
-export interface FitInputs { fitBrain: string; compFloor: number | null }
-
-// app/actions/parse-role.ts
-export async function scoreFit(opts: {
-  company: string; role_title: string; company_description: string;
-  key_skills: string; fit_summary: string; department: string; location: string;
-  arr?: string; exit_signal?: string; backer?: string;
-  salary_range: string;            // REQUIRED — per-role data, no fallback exists
-  fitInputs: FitInputs | null;     // REQUIRED key. null = "load from settings now"
-}): Promise<{ score: number; rationale: string; error?: string }>
-```
-
-`const inputs = opts.fitInputs ?? (await loadScoringInputs());` at the top.
-The key is **required** so every call site must state intent — omission is a
-compile error. `null` does not mean "use a default"; it loads the user's real
-stored values, so a manual add is scored against the edited brain, not the
-shipped one. `compFloor: null` *inside* the object unambiguously means "floor
-off" — the outer null and the inner null sit in different positions and cannot
-be confused, which is why no `??` disambiguation is needed.
-
-Batch paths (`ingestRoles`, `rescoreAll`, the crawl loop) **must always pass
-explicitly** — letting the fallback fire there costs one settings read per
-scored row. The two client call sites pass `fitInputs: null` and their existing
-`form.salary_range`.
-
-`IngestOptions` carries `fitInputs: FitInputs`, **not** `criteria: Criteria` —
-`ingestRoles` uses nothing else from criteria, and the narrower type stops the
-companion plan re-widening it.
-
-## R2 (Critical, Task 3) — `buildExtractionPrompt` changes signature and breaks 4 tests
-
-`lib/crawler.ts:34` is a **synchronous exported** function pinned by four tests
-at `lib/crawler.test.ts:33-55`, including `toContain("Denver")` which comes from
-`LOCATION_RULE`. New signature `buildExtractionPrompt(company, page, criteria)`;
-update all four tests to pass `DEFAULT_CRITERIA`. Task 7 Step 5's claim that
-"the 22 pre-existing crawler tests still pass" is wrong as written.
-
-## R3 (Critical, Task 3/7) — `crawlCompany` has three callers; a batch load needs a signature change
-
-There is no batch function in `lib/crawler.ts`. The loop is in
-`app/api/cron/crawl/route.ts:79`; `crawlCompany` is also called from
-`app/actions/watchlist.ts:226` and `:285`. Bundle the per-batch values as one
-object rather than three sibling fields:
-
-```ts
-export interface RunContext {
-  criteria: Criteria;
-  fitInputs: FitInputs;
-  criteriaChangedAt: string | null;
-}
-export async function crawlCompany(
-  company: string,
-  opts: { dryRun?: boolean; ctx?: RunContext } = {}
-)
-```
-
-`ctx ?? await loadRunContext()` inside, for the two single-company callers. The
-cron route loads it once before the loop. Name all three callers in the task.
-The task's Files list must include `app/api/cron/crawl/route.ts` and
-`app/actions/watchlist.ts`.
-
-**Compensation must never enter `buildExtractionPrompt`.** It is a scoring input
-only; putting it in extraction would create the ingest-time filter the spec
-forbids.
-
-## R4 (Critical, Task 6) — `.neq("fit_score", null)` matches zero rows, and the read drops four scoring columns
-
-`lib/supabase.ts:108-111` renders `"fit_score" <> $1` with `$1 = null`. In
-Postgres that is never true, so `rescoreAll` returns zero rows and logs
-`rescored 0 of 0` — a success-shaped total failure.
-
-Worse: the plan hardcodes `company_description: ""` and omits `arr`,
-`exit_signal`, `backer`. All four are real columns that `scoreFit` reads and
-weights (`app/actions/parse-role.ts:164-169`, and the FINANCIAL SIGNALS block at
-:188-193). So rescoring does not merely fail to improve scores — **it actively
-degrades them.** A role scored 4 on `$380M+ ARR, PE exit planned` gets rescored
-blind and drops. Replace the builder call outright:
-
-```ts
-const { data, error } = await rawQuery<JobRow>(
-  `select id, company, role_title, company_description, department, location,
-          key_skills, fit_summary, arr, exit_signal, backer, salary_range
-     from jobs
-    where fit_score is not null`
-);
-```
-
-Pass nullable text as `row.arr ?? undefined`, not `?? ""` — the prompt already
-renders `opts.arr || "unknown"`.
-
-Two more defects in the same function:
-- **Check `updateJob`'s error before incrementing.** It returns `{ error?: string }`
-  (`app/actions/jobs.ts:55`); the plan counts a failed write as a rescore.
-  `lib/crawler.ts:346-359` fixed exactly this bug with a comment; do not
-  reintroduce it.
-- **Stop overwriting `fit_summary` on rescore.** It is both an input (`Summary:`
-  in the prompt) and the output written back. Rescore twice and the model is
-  summarizing its own previous rationale rather than the posting.
-
-## R5 (Critical, Task 3) — `readCeiling()` is referenced but never defined
-
-Task 3 Step 3 calls `readCeiling()` "from Task 6"; Task 6 never defines it, and
-Task 3 precedes Task 6 anyway. Define the primitive in **Task 1**:
-
-```ts
-// lib/settings-store.ts
-export async function readNumberSetting(key: SettingKey): Promise<number | null> {
-  const rows = await readAllSettings();
-  const row = rows.find((r) => r.key === key);
-  return typeof row?.value === "number" ? row.value : null;
-}
-export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
-```
-
-And the batch-tier reader in `lib/search-criteria.ts` beside `loadCriteria()`
-(it belongs there because the fit-brain default lives there; putting it in the
-store would create an import cycle):
-
-```ts
-export async function loadScoringInputs(): Promise<FitInputs> {
-  const rows = await readAllSettings();
-  const floor = rows.find((r) => r.key === SETTING_KEYS.compFloor)?.value;
-  return {
-    fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain,
-    compFloor: typeof floor === "number" ? floor : null,
-  };
-}
-```
-
-`getSettings` must do **one** `readAllSettings()` and derive from it — as
-written it reads the seven-row table twice, and adding the readers on top would
-make it four.
-
-## R6 (Critical, Task 7) — `runsEligibleForClosure` cannot be wired as described
-
-`ClosureRun` needs `{ finished_at, titles }`, but `LAST_TRUSTWORTHY_RUN_SQL`
-(`lib/crawler.ts:282`) selects `role_titles` only, `lastSuccessfulTitles` returns
-`string[][]`, and the **current** run has no `finished_at` at all — its
-`crawl_runs` row is not finalized until line 528. Passing `null`/`undefined`
-makes `Date.parse` yield `NaN`, `NaN > cutoff` is `false`, the current run is
-dropped, and **closure is disabled permanently after the first criteria change.**
-Silent, and exactly the failure class this plan's constraints forbid.
-
-The task must specify: (a) `LAST_TRUSTWORTHY_RUN_SQL` selects `role_titles,
-finished_at`, preserving the `status in ('ok', 'empty')` substring that
-`lib/crawler.test.ts:124` and `:128` pin; (b) `lastSuccessfulTitles` returns
-`ClosureRun[]`; (c) the current run is constructed literally as
-`{ finished_at: new Date().toISOString(), titles: seenTitles }`; (d)
-`closeStalePostings(company, runs: ClosureRun[], criteriaChangedAt)` maps
-`.map(r => r.titles)` before `titlesToClose`. Add tests for an unparseable
-`criteriaChangedAt` and a `null` `finished_at` — both currently untested, and
-`crawl_runs.finished_at` is nullable (`db/schema.sql:107`).
-
-## R7 (Important, Task 1/2) — fix `SETTING_KEYS` casing in Task 1 and delete the Task 2 rename
-
-Ship camelCase values (`stackTerms`, `locationRule`, `fitBrain`, `searchCeiling`,
-`compFloor`) in Task 1 Step 4 and **delete Task 2 Step 3's rename paragraph
-entirely.** The companion plan reads `SETTING_KEYS.compFloor` and would otherwise
-consume Task 1's committed snake_case values.
-
-Nothing currently enforces the invariant, and `mergeSettings` skips unknown keys
-**by design** — so drift makes every save a silent no-op with no error anywhere.
-Add a guard test. It must be **one-directional**: `compFloor` and `searchCeiling`
-are not `Criteria` fields, so a bijection assertion would fail.
-
-```ts
-test("every Criteria field has a matching SETTING_KEYS value", () => {
-  const fields = Object.keys(DEFAULT_CRITERIA);
-  expect(fields.length).toBeGreaterThan(0);
-  for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
-});
-```
-
-## R8 (Important, Task 1) — `mergeSettings` accepts a wrong-typed value
-
-A row `{key: "titles", value: "a string"}` passes every guard and lands on
-`criteria.titles`; `titleListForPrompt` then calls `.join` on a string and throws
-mid-crawl. Skip a row whose shape does not match the default's
-(`Array.isArray` mismatch, or `typeof` mismatch for scalars), log it, and test it.
-
-## R9 (Important, Task 2) — the tree is unbuildable between Tasks 2 and 3
-
-Task 2 deletes constants that four files still import, verifies with
-`npm test -- search-criteria` (vitest does not typecheck), and commits. Either
-merge Tasks 2 and 3 into one task with one commit, or state explicitly that the
-build is intentionally red across this pair and suspend the "every task leaves
-the baseline passing" rule for it. Do not leave it implicit.
-
-## R10 (Important, Task 6) — interface block contradicts the implementation
-
-Interfaces say `saveCriteriaList(key, items)`; the code is
-`saveCriteriaList(key, label, items)`. Same for `saveCriteriaText`. It names
-`countStaleScores()`, which nothing implements (the private helper is
-`countScoredJobs`), and omits `getCriteriaChangedAt`, which Task 7 imports. Fix
-the block to match, and have `countScoredJobs` return `number | null` so a failed
-count is not silently rendered as "0 roles" — a wrong answer presented as fact.
-
-## R11 (Important, Task 8) — extract `<RescorePrompt />`; the companion plan imports it
-
-Task 8 describes the prompt only as inline behavior, so the companion plan has
-nothing to import and will re-implement it, producing two prompts with drifting
-copy. Ship `components/RescorePrompt.tsx`:
-
-```tsx
-export default function RescorePrompt({ count, onRescore, onDismiss, busy }: {
-  count: number; onRescore: () => void; onDismiss: () => void; busy: boolean;
-})
-```
-
-It computes the dollar figure from `count` internally (`count * 0.0075`, rounded
-to cents) so the constant has one home, and owns the `busy` label.
-
-Requirement 6's "re-show in this session" also contradicts the spec — a client
-component has no memory across page loads, so the prompt would never reappear on
-a fresh load, which is the burial the spec forbids. Have `getSettings` return
-`fitBrainOverridden: boolean` (a `fitBrain` row exists in `app_settings`) and gate
-on `scoredJobCount > 0 && fitBrainOverridden`.
-
-## R12 (Important) — three spec requirements have no task
-
-- **The save-time warning must name the count**: "N tracked roles match titles
-  you are removing." Task 8 requirement 2 is a static warning; nothing computes N.
-- **The 4,000-character fit-brain warning** exists nowhere —
-  `lib/criteria-validation.ts` has no text validator at all.
-- **"A failed save leaves the form populated"** is unstated in Task 8.
-
-## R13 (Minor, verified) — smaller corrections
-
-- Task 2 Step 5's byte-verify `sed` pattern misses `export const DEFAULT_FIT_BRAIN`.
-- Task 6's `clearCachesFor` deletes all of `role_searches` for a stack-terms edit;
-  the spec says the stack family only. Narrow it or state the widening.
-- `markCriteriaChanged()` fires on a fit-brain save, needlessly suppressing crawler
-  closure. Restrict it to `titles`, `locations`, `locationRule`.
-- Task 5's `input.ceiling ?` treats `0` as "no ceiling"; use `!= null`.
-- Task 8 Step 2 never says whether `getSettings()` is awaited server-side and
-  passed as props or called from the client.
-- The spec calls it `DEFAULT_CANDIDATE_BACKGROUND`; the plan uses
-  `DEFAULT_FIT_BRAIN`. Pick one — the companion plan needs the same name.
-
-## R14 — tests that pass against a broken implementation
-
-Task 2's rewrite **loses three assertions** the originals had. Restore them:
-- `pickQueries` at the **equality boundary** (`cap === length`), not just under it.
-  An off-by-one from `<=` to `<` currently passes.
-- `pickQueries` covers every **location term** — deleted, not replaced.
-- `pickQueries` covers every **stack term** at the default cap — deleted, not
-  replaced. Only title coverage survives, so a regression in the 24-query stack
-  grid is uncaught.
-
-Also: the default grid size (39) is now unasserted anywhere; `estimateRunCost`
-has no absolute-value test, so `3 / 1_000` instead of `3 / 1_000_000` passes
-every test in the suite — pin the headline case between $1.00 and $1.30; and
-`validateList`'s quote test should assert the message names the offending entry.
-
----
-
 ### Task 1: The `app_settings` table and the settings store
 
 **Files:**
@@ -307,7 +34,8 @@ every test in the suite — pin the headline case between $1.00 and $1.30; and
 - Create: `lib/settings-store.test.ts`
 
 **Interfaces:**
-- Produces: `SETTING_KEYS` (const object), `type SettingKey`, `mergeSettings(defaults, rows)`, and async `readSetting(key)` / `writeSetting(key, value)` / `deleteSetting(key)`.
+- Produces: `SETTING_KEYS` (const object, values equal to `Criteria` field names), `type SettingKey`, `mergeSettings(defaults, rows)` (with a shape guard), `readNumberSetting(key)`, `readCeiling()`, and async `readAllSettings()` / `writeSetting(key, value)` / `deleteSetting(key)`.
+- Typed scalar readers built on `readNumberSetting` are the intended extension point — the companion plan adds `readCompFloor` the same way.
 - Consumed by: Task 2 (`loadCriteria`), Task 6 (server actions), and the companion compensation plan.
 
 - [ ] **Step 1: Append the table to `db/schema.sql`**
@@ -361,6 +89,25 @@ describe("mergeSettings", () => {
     mergeSettings(defaults, [{ key: "titles", value: ["X"] }]);
     expect(defaults.titles).toEqual(["A"]);
   });
+
+  test("ignores a value of the wrong shape rather than poisoning the crawler", () => {
+    // A string here would make titleListForPrompt call .join on a string and
+    // throw mid-crawl. Must fall back to the default, not merge.
+    const defaults = { titles: ["A"], rule: "r" };
+    expect(mergeSettings(defaults, [{ key: "titles", value: "oops" }]).titles).toEqual(["A"]);
+    expect(mergeSettings(defaults, [{ key: "rule", value: ["oops"] }]).rule).toBe("r");
+  });
+});
+
+describe("SETTING_KEYS alignment", () => {
+  test("every Criteria field has a matching SETTING_KEYS value", () => {
+    // One-directional on purpose: searchCeiling and compFloor are settings but
+    // NOT Criteria fields, so a bijection assertion would fail. Drift in the
+    // other direction makes every save a silent no-op.
+    const fields = Object.keys(DEFAULT_CRITERIA);
+    expect(fields.length).toBeGreaterThan(0);
+    for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
+  });
 });
 ```
 
@@ -377,14 +124,17 @@ import { rawQuery } from "@/lib/supabase";
 // The full set of editable settings. Adding one here plus a default in
 // lib/search-criteria.ts is the whole change — app_settings is key/value, so
 // there is no migration.
+// Values MUST equal the `Criteria` field names in lib/search-criteria.ts —
+// mergeSettings skips unknown keys BY DESIGN, so a drifted spelling makes
+// every save a silent no-op with no error anywhere. Pinned by a test.
 export const SETTING_KEYS = {
   titles: "titles",
   locations: "locations",
-  stackTerms: "stack_terms",
-  locationRule: "location_rule",
-  fitBrain: "fit_brain",
-  searchCeiling: "search_ceiling",
-  compFloor: "comp_floor",
+  stackTerms: "stackTerms",
+  locationRule: "locationRule",
+  fitBrain: "fitBrain",
+  searchCeiling: "searchCeiling",
+  compFloor: "compFloor",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -412,10 +162,36 @@ export function mergeSettings<T extends Record<string, unknown>>(
   for (const row of rows) {
     if (!(row.key in defaults)) continue;
     if (row.value === null || row.value === undefined) continue;
+    // Shape guard. Without it a row like {key:"titles", value:"a string"}
+    // passes every check above and lands on criteria.titles, and
+    // titleListForPrompt then calls .join on a string and throws mid-crawl.
+    const before = defaults[row.key];
+    if (Array.isArray(before) !== Array.isArray(row.value)) {
+      console.error(
+        `settings-store: ignoring "${row.key}" — stored value is the wrong shape.`
+      );
+      continue;
+    }
+    if (!Array.isArray(before) && typeof before !== typeof row.value) {
+      console.error(
+        `settings-store: ignoring "${row.key}" — expected ${typeof before}.`
+      );
+      continue;
+    }
     (merged as Record<string, unknown>)[row.key] = row.value;
   }
   return merged;
 }
+
+/** Reads one scalar setting. A missing row, or a row holding a non-number
+ *  (a bad write, a hand-edit), reads as null — the same as "not set". */
+export async function readNumberSetting(key: SettingKey): Promise<number | null> {
+  const rows = await readAllSettings();
+  const row = rows.find((r) => r.key === key);
+  return typeof row?.value === "number" ? row.value : null;
+}
+
+export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
 
 export async function readAllSettings(): Promise<SettingRow[]> {
   const { data, error } = await rawQuery<{ key: string; value: unknown }>(
@@ -760,7 +536,9 @@ export async function loadCriteria(): Promise<Criteria> {
 }
 ```
 
-Note the setting keys in `SETTING_KEYS` (`titles`, `locations`, `stack_terms`, …) must map onto the `Criteria` field names for `mergeSettings` to apply them. Use `Criteria`'s own field names as the stored keys — change `SETTING_KEYS` in `lib/settings-store.ts` to `stackTerms`, `locationRule`, `fitBrain`, `searchCeiling`, `compFloor` so the two agree, and update its test if needed. State in your report that you did this and why.
+`SETTING_KEYS` already ships the correct camelCase values from Task 1 and is pinned by the alignment test there. Nothing to rename here.
+
+**This task intentionally leaves `npm run build` red.** It deletes constants that four files still import, and Task 3 is what repairs them. Verify with `npm test -- search-criteria` only; do not run the full gate until Task 3. This is the one place in this plan where the baseline-passing rule is suspended, and it is deliberate.
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
@@ -773,7 +551,7 @@ The `CANDIDATE_BACKGROUND` string moved files. Confirm it is byte-identical:
 
 ```bash
 git show HEAD:app/actions/parse-role.ts | sed -n '/^const CANDIDATE_BACKGROUND/,/^`.trim/p' > /tmp/before.txt
-sed -n '/^const DEFAULT_FIT_BRAIN/,/^`.trim/p' lib/search-criteria.ts > /tmp/after.txt
+sed -n '/^export const DEFAULT_FIT_BRAIN/,/^`.trim/p' lib/search-criteria.ts > /tmp/after.txt
 diff <(tail -n +2 /tmp/before.txt) <(tail -n +2 /tmp/after.txt) && echo "IDENTICAL"
 ```
 
@@ -796,12 +574,27 @@ git commit -m "refactor: criteria become a parameter, constants become defaults"
 - Modify: `app/actions/role-search.ts`
 - Modify: `lib/crawler.ts`
 - Modify: `app/actions/parse-role.ts`
+- Modify: `lib/ingest-roles.ts`
+- Modify: `components/RolesTable.tsx` (one call site)
+- Modify: `components/RecruiterPanel.tsx` (one call site)
+- Modify: `app/api/cron/crawl/route.ts` (batch load)
+- Modify: `app/actions/watchlist.ts` (two `crawlCompany` callers)
+- Modify: `lib/crawler.test.ts` (four `buildExtractionPrompt` tests)
+- Create: `lib/fit-inputs.ts`
 
 **Interfaces:**
-- Consumes: `loadCriteria`, `Criteria`, `titleQueries`, `stackQueries`, `titleListForPrompt`, `MAX_QUERY_MULTIPLIER`, `pickQueries` (Task 2).
-- Produces: nothing new. This task only rewires.
+- Consumes: `loadCriteria`, `Criteria`, `titleQueries`, `stackQueries`, `titleListForPrompt`, `MAX_QUERY_MULTIPLIER`, `pickQueries`, `readCeiling` (Tasks 1-2).
+- Produces: `FitInputs`, `loadScoringInputs()`, `RunContext`, and the reshaped `scoreFit` / `buildExtractionPrompt` / `crawlCompany` signatures.
 
-All five files are already in async server contexts, so `await loadCriteria()` is safe in each.
+**Verified caller map — the plan originally got this wrong. Do not trust memory; these are the real call sites:**
+
+| Function | Callers |
+|---|---|
+| `scoreFit` | `lib/ingest-roles.ts:141`, `components/RolesTable.tsx:514`, `components/RecruiterPanel.tsx:74` |
+| `crawlCompany` | `app/api/cron/crawl/route.ts:79`, `app/actions/watchlist.ts:226`, `app/actions/watchlist.ts:285` |
+| `buildExtractionPrompt` | `lib/crawler.ts` internal + 4 tests at `lib/crawler.test.ts:33-55` |
+
+The two `scoreFit` callers in `components/` are `"use client"` and **cannot** call `loadCriteria()` — it transitively imports `pg`.
 
 - [ ] **Step 1: `app/actions/discover.ts`**
 
@@ -824,15 +617,59 @@ const maxSearches = ceiling ?? allQueries.length * MAX_QUERY_MULTIPLIER;
 
 Pass `maxSearches` to `callWithWebSearch`'s `maxSearches` option (it already exists). Keep the existing `console.log` of the sent list, adjusting the wording so it reports the ceiling state honestly — e.g. `sending 39 of 39 queries (no ceiling set, max_uses 78)`.
 
-- [ ] **Step 4: `lib/crawler.ts`**
+- [ ] **Step 4: `lib/crawler.ts` — signatures, not just call sites**
 
-`await loadCriteria()` where the extraction prompt is built, then `titleListForPrompt(criteria)` and `criteria.locationRule`. **Load once per crawl batch, not once per company** — the cron route crawls up to 10 companies in a loop, and reloading per company means a mid-batch save could split one run across two title lists. Thread the criteria object down from the batch entry point rather than calling `loadCriteria()` inside the per-company function.
-
-- [ ] **Step 5: `app/actions/parse-role.ts`**
-
-Delete the local `CANDIDATE_BACKGROUND` (it moved to `lib/search-criteria.ts` in Task 2). `scoreFit` takes the fit brain as an argument rather than reading a module constant:
+`buildExtractionPrompt` at `lib/crawler.ts:34` is a **synchronous exported** function pinned by four tests at `lib/crawler.test.ts:33-55`, one of which asserts `toContain("Denver")` — which comes from `LOCATION_RULE`. Its new signature:
 
 ```ts
+export function buildExtractionPrompt(company: string, page: ExtractedPage, criteria: Criteria): string
+```
+
+Update all four tests to pass `DEFAULT_CRITERIA`.
+
+There is **no batch function inside `lib/crawler.ts`** — the loop lives in `app/api/cron/crawl/route.ts:79`. So "load once per batch" requires changing `crawlCompany`:
+
+```ts
+export interface RunContext {
+  criteria: Criteria;
+  fitInputs: FitInputs;
+  criteriaChangedAt: string | null;   // Task 7 uses this
+}
+
+export async function crawlCompany(
+  company: string,
+  opts: { dryRun?: boolean; ctx?: RunContext } = {}
+)
+```
+
+`const ctx = opts.ctx ?? (await loadRunContext());` inside, for the two single-company callers (`app/actions/watchlist.ts:226` and `:285`). The cron route builds it **once** before the loop and passes it into every iteration — a mid-batch save must not split one run across two title lists.
+
+Bundle as one object rather than three sibling parameters: the companion plan adds a field to `RunContext` and no signature reopens.
+
+- [ ] **Step 5: `app/actions/parse-role.ts` and the new `lib/fit-inputs.ts`**
+
+Delete the local `CANDIDATE_BACKGROUND` (it moved to `lib/search-criteria.ts` in Task 2).
+
+```ts
+// lib/fit-inputs.ts
+export interface FitInputs {
+  fitBrain: string;
+  // The companion compensation plan adds `compFloor: number | null` here.
+  // Nothing else changes when it does — that is the point of this indirection.
+}
+```
+
+```ts
+// lib/search-criteria.ts — beside loadCriteria(), because the fit-brain
+// default lives here; putting it in settings-store would be an import cycle.
+export async function loadScoringInputs(): Promise<FitInputs> {
+  const rows = await readAllSettings();
+  return { fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain };
+}
+```
+
+```ts
+// app/actions/parse-role.ts
 export async function scoreFit(opts: {
   company: string;
   role_title: string;
@@ -841,18 +678,28 @@ export async function scoreFit(opts: {
   fit_summary: string;
   department: string;
   location: string;
-  fitBrain: string;
   arr?: string;
   exit_signal?: string;
   backer?: string;
+  fitInputs: FitInputs | null;   // REQUIRED key. null = "load from settings now"
 }): Promise<{ score: number; rationale: string; error?: string }> {
+  const { fitBrain } = opts.fitInputs ?? (await loadScoringInputs());
 ```
 
-Use `opts.fitBrain` where `CANDIDATE_BACKGROUND` appeared in the prompt.
+Why the key is **required** while its value may be null: omission would be
+indistinguishable from "I meant the default", and the companion plan adds a
+money value to this same object where that ambiguity becomes a real bug.
+Required forces every call site to state intent — omission is a compile error.
+`null` does not mean "use a shipped default"; it loads the user's actual stored
+values, so a manually-added role is scored against the edited brain.
 
-- [ ] **Step 6: Update the single `scoreFit` caller**
+- [ ] **Step 6: Update all three `scoreFit` callers**
 
-`lib/ingest-roles.ts:141` is the only call site. `ingestRoles` must now receive the criteria. Add `criteria: Criteria` to `IngestOptions` and pass `fitBrain: opts.criteria.fitBrain` through to `scoreFit`. Update all `ingestRoles` callers (`app/actions/roles.ts`, `app/actions/role-search.ts`, `lib/crawler.ts`) to pass the criteria they already loaded — do not call `loadCriteria()` a second time inside `ingestRoles`.
+- `lib/ingest-roles.ts:141` — add `fitInputs: FitInputs` to `IngestOptions` and pass it straight through. **Carry `FitInputs`, not `Criteria`**: `ingestRoles` uses nothing else from criteria, and the narrower type stops the companion plan re-widening the same interface. Update its three callers (`app/actions/roles.ts`, `app/actions/role-search.ts`, `lib/crawler.ts`) to pass what they already loaded.
+- `components/RolesTable.tsx:514` — pass `fitInputs: null`.
+- `components/RecruiterPanel.tsx:74` — pass `fitInputs: null`.
+
+Batch paths must always pass explicitly. Letting the `null` fallback fire inside a loop costs one settings read per scored row.
 
 - [ ] **Step 7: Verify the build and full suite**
 
@@ -1047,6 +894,15 @@ describe("estimateRunCost", () => {
     expect(big.dollars).toBeGreaterThan(small.dollars);
   });
 
+  test("pins an absolute figure, not just a trend", () => {
+    // A units typo (3 / 1_000 instead of 3 / 1_000_000, or DOLLARS_PER_SEARCH
+    // at 0.1) passes every other test in this suite. This is the only one that
+    // catches it.
+    const e = estimateRunCost({ titles: 13, locations: 3, stackTerms: 8, ceiling: null });
+    expect(e.dollars).toBeGreaterThan(1.0);
+    expect(e.dollars).toBeLessThan(1.3);
+  });
+
   test("an empty grid costs nothing", () => {
     const e = estimateRunCost({ titles: 0, locations: 3, stackTerms: 0, ceiling: null });
     expect(e.searches).toBe(0);
@@ -1090,7 +946,7 @@ export function estimateRunCost(input: EstimateInput): Estimate {
   const stackQueries = input.stackTerms * input.locations;
   // A run is one family at a time; the larger grid is the worst case.
   const grid = Math.max(titleQueries, stackQueries);
-  const searches = input.ceiling ? Math.min(grid, input.ceiling) : grid;
+  const searches = input.ceiling != null ? Math.min(grid, input.ceiling) : grid;
 
   const dollars =
     searches === 0
@@ -1124,7 +980,7 @@ git commit -m "feat: add per-run cost estimate"
 
 **Interfaces:**
 - Consumes: Task 1 store, Task 2 `DEFAULT_CRITERIA`/`Criteria`, Task 4 validation.
-- Produces: `getSettings()`, `saveCriteriaList(key, items)`, `saveCriteriaText(key, text)`, `saveCeiling(n)`, `resetSetting(key)`, `countStaleScores()`, `rescoreAll()`.
+- Produces: `getSettings()`, `saveCriteriaList(key, label, items)`, `saveCriteriaText(key, label, text)`, `saveCeiling(n)`, `resetSetting(key)`, `getCriteriaChangedAt()`, `rescoreAll()`. (Three-arg save signatures — the originally-stated two-arg forms were wrong. There is no `countStaleScores`.)
 
 - [ ] **Step 1: Create `app/actions/settings.ts`**
 
@@ -1146,18 +1002,23 @@ export interface SettingsView {
   criteria: Criteria;
   ceiling: number | null;
   scoredJobCount: number;
+  fitBrainOverridden: boolean;
   error?: string;
 }
 
 export async function getSettings(): Promise<SettingsView> {
-  const [criteria, rows, scored] = await Promise.all([
-    loadCriteria(),
-    readAllSettings(),
-    countScoredJobs(),
-  ]);
+  // ONE read of app_settings, then derive. loadCriteria() would read it a
+  // second time, and layering readCeiling() on top would make it three.
+  const [rows, scored] = await Promise.all([readAllSettings(), countScoredJobs()]);
   const ceilingRow = rows.find((r) => r.key === SETTING_KEYS.searchCeiling);
-  const ceiling = typeof ceilingRow?.value === "number" ? ceilingRow.value : null;
-  return { criteria, ceiling, scoredJobCount: scored };
+  return {
+    criteria: mergeSettings(DEFAULT_CRITERIA, rows),
+    ceiling: typeof ceilingRow?.value === "number" ? ceilingRow.value : null,
+    scoredJobCount: scored,
+    // Gates the rescore prompt across page loads — a client component has no
+    // memory, so "re-show it this session" would bury it on a fresh load.
+    fitBrainOverridden: rows.some((r) => r.key === SETTING_KEYS.fitBrain),
+  };
 }
 
 async function countScoredJobs(): Promise<number> {
@@ -1192,6 +1053,15 @@ const CACHES_TO_CLEAR: Record<string, string[]> = {
   [SETTING_KEYS.searchCeiling]: [],
 };
 
+// Only the settings that change what a SEARCH asks for reset the crawler's
+// closure debounce. The fit brain and the ceiling do not affect what the
+// crawler looks for, so stamping on them would needlessly suppress closure.
+const AFFECTS_CRAWL: SettingKey[] = [
+  SETTING_KEYS.titles,
+  SETTING_KEYS.locations,
+  SETTING_KEYS.locationRule,
+];
+
 async function clearCachesFor(key: SettingKey): Promise<void> {
   for (const table of CACHES_TO_CLEAR[key] ?? []) {
     const { error } = await rawQuery(`delete from ${table}`);
@@ -1213,7 +1083,7 @@ export async function saveCriteriaList(
   if (error) return { error: `Could not save ${label} — ${error}` };
 
   await clearCachesFor(key);
-  await markCriteriaChanged();
+  if (AFFECTS_CRAWL.includes(key)) await markCriteriaChanged();
   return {};
 }
 
@@ -1229,7 +1099,7 @@ export async function saveCriteriaText(
   if (error) return { error: `Could not save ${label} — ${error}` };
 
   await clearCachesFor(key);
-  await markCriteriaChanged();
+  if (AFFECTS_CRAWL.includes(key)) await markCriteriaChanged();
   return {};
 }
 ```
@@ -1290,23 +1160,27 @@ export async function resetSetting(key: SettingKey): Promise<{ error?: string }>
  * spend money, and the user decides each time.
  */
 export async function rescoreAll(): Promise<{ rescored: number; error?: string }> {
-  const criteria = await loadCriteria();
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("id, company, role_title, location, key_skills, fit_summary, department")
-    .neq("fit_score", null);
+  const fitInputs = await loadScoringInputs();
+  let failed = 0;
+  // rawQuery, NOT the builder. `.neq("fit_score", null)` renders
+  // `"fit_score" <> $1` with $1 = null, which is never true in Postgres — it
+  // returns zero rows and reports success. Verified against lib/supabase.ts.
+  //
+  // Every column here is read and weighted by scoreFit (parse-role.ts:164-169,
+  // and the FINANCIAL SIGNALS block at :188-193). Dropping arr / exit_signal /
+  // backer / company_description does not merely fail to improve scores — it
+  // ACTIVELY DEGRADES them: a role scored 4 on "$380M+ ARR, PE exit planned"
+  // gets rescored blind and drops.
+  const { data, error } = await rawQuery<JobRow>(
+    `select id, company, role_title, company_description, department, location,
+            key_skills, fit_summary, arr, exit_signal, backer
+       from jobs
+      where fit_score is not null`
+  );
 
   if (error) return { rescored: 0, error: `Could not read jobs — ${error.message}` };
 
-  const rows = (data ?? []) as {
-    id: string;
-    company: string;
-    role_title: string;
-    location: string | null;
-    key_skills: string | null;
-    fit_summary: string | null;
-    department: string | null;
-  }[];
+  const rows = data ?? [];
 
   const { scoreFit } = await import("@/app/actions/parse-role");
   const { updateJob } = await import("@/app/actions/jobs");
@@ -1316,27 +1190,40 @@ export async function rescoreAll(): Promise<{ rescored: number; error?: string }
     const scored = await scoreFit({
       company: row.company,
       role_title: row.role_title,
-      company_description: "",
+      company_description: row.company_description ?? "",
       key_skills: row.key_skills ?? "",
       fit_summary: row.fit_summary ?? "",
       department: row.department ?? "",
       location: row.location ?? "",
-      fitBrain: criteria.fitBrain,
+      arr: row.arr ?? undefined,
+      exit_signal: row.exit_signal ?? undefined,
+      backer: row.backer ?? undefined,
+      fitInputs,
     });
     if (scored.score > 0) {
-      await updateJob(row.id, {
-        fit_score: scored.score,
-        fit_summary: scored.rationale || row.fit_summary,
-      });
+      // Check the write before counting it. updateJob returns { error?: string }
+      // (app/actions/jobs.ts:55); lib/crawler.ts:346-359 fixed exactly this
+      // "counted a failed write as a success" bug — do not reintroduce it.
+      const { error: updErr } = await updateJob(row.id, { fit_score: scored.score });
+      if (updErr) {
+        console.error(`rescoreAll: update failed for ${row.company} — ${updErr}`);
+        failed++;
+        continue;
+      }
       rescored++;
     }
   }
-  console.log(`rescoreAll: rescored ${rescored} of ${rows.length} scored jobs`);
-  return { rescored };
+  console.log(
+    `rescoreAll: rescored ${rescored} of ${rows.length} scored jobs, ${failed} write failures`
+  );
+  return { rescored, failed };
 }
 ```
 
-Note `.neq("fit_score", null)` may not express `IS NOT NULL` in this builder — read `lib/supabase.ts` first and use `rawQuery` if it does not. Report which you used.
+**Do not write `fit_summary` back.** It is both an input to the prompt
+(`Summary: ${opts.fit_summary}`) and the field the original plan overwrote with
+`scored.rationale`. Rescore twice and the model is summarizing its own previous
+rationale instead of the posting. Update `fit_score` only.
 
 - [ ] **Step 5: Verify the build**
 
@@ -1359,7 +1246,7 @@ git commit -m "feat: add settings server actions"
 - Modify: `lib/crawler.test.ts`
 
 **Interfaces:**
-- Consumes: `getCriteriaChangedAt` (Task 6).
+- Consumes: `getCriteriaChangedAt` (Task 6), `RunContext` (Task 3).
 - Produces: nothing new; changes `closeStalePostings` behavior.
 
 Read the doc comment above `titlesToClose` in `lib/crawler.ts` before starting. This task extends the principle already written there.
@@ -1398,6 +1285,21 @@ describe("runsEligibleForClosure", () => {
     expect(eligible.length).toBeGreaterThan(0);
     expect(eligible[0].titles).toEqual(["a"]);
   });
+
+  test("an unparseable cutoff falls back to trusting every run", () => {
+    // Guards the Number.isNaN branch. Getting this wrong disables closure
+    // permanently and silently.
+    expect(runsEligibleForClosure(RUNS, "garbage").length).toBe(2);
+  });
+
+  test("a run with an unparseable finished_at is dropped loudly, not silently", () => {
+    // crawl_runs.finished_at is nullable (db/schema.sql:107) — a 'running' row
+    // has none. It must not be treated as newer than the cutoff.
+    const withNull = [{ finished_at: null as unknown as string, titles: ["x"] }, ...RUNS];
+    const eligible = runsEligibleForClosure(withNull, "2026-08-05T00:00:00Z");
+    expect(eligible.some((r) => r.titles[0] === "x")).toBe(false);
+    expect(eligible.length).toBe(1);
+  });
 });
 ```
 
@@ -1435,13 +1337,42 @@ export function runsEligibleForClosure(
   if (!criteriaChangedAt) return runs;
   const cutoff = Date.parse(criteriaChangedAt);
   if (Number.isNaN(cutoff)) return runs;
-  return runs.filter((r) => Date.parse(r.finished_at) > cutoff);
+  return runs.filter((r) => {
+    const at = Date.parse(r.finished_at);
+    if (Number.isNaN(at)) {
+      // A nullable/unfinalized finished_at must not silently count as evidence.
+      console.warn(
+        `runsEligibleForClosure: run with unparseable finished_at "${r.finished_at}" excluded`
+      );
+      return false;
+    }
+    return at > cutoff;
+  });
 }
 ```
 
-- [ ] **Step 4: Wire it into `closeStalePostings`**
+- [ ] **Step 4: Plumb `finished_at` through — the data does not exist yet**
 
-Fetch `getCriteriaChangedAt()` once per batch (alongside the criteria from Task 3, Step 4) and thread it in. Filter the trustworthy-runs list through `runsEligibleForClosure` before passing it to `titlesToClose`. Add a log line when a change suppresses closure, so the behavior is visible:
+`runsEligibleForClosure` needs `{ finished_at, titles }`, but today:
+`LAST_TRUSTWORTHY_RUN_SQL` (`lib/crawler.ts:282`) selects `role_titles` only,
+`lastSuccessfulTitles` returns `string[][]`, and the **current** run has no
+`finished_at` at all — its `crawl_runs` row is not finalized until line 528.
+
+Passing `null`/`undefined` there makes `Date.parse` yield `NaN`, `NaN > cutoff`
+is `false`, the current run is dropped from evidence, and **closure is disabled
+permanently after the first criteria change** — silently. Four concrete changes:
+
+1. `LAST_TRUSTWORTHY_RUN_SQL` selects `role_titles, finished_at`. **Preserve the
+   `status in ('ok', 'empty')` substring** — `lib/crawler.test.ts:124` and `:128`
+   pin it.
+2. `lastSuccessfulTitles` returns `ClosureRun[]`.
+3. The current run is constructed literally as
+   `{ finished_at: new Date().toISOString(), titles: seenTitles }`.
+4. `closeStalePostings(company, runs: ClosureRun[], criteriaChangedAt: string | null)`
+   maps `.map(r => r.titles)` before calling `titlesToClose`.
+
+`criteriaChangedAt` arrives on the `RunContext` built in Task 3 Step 4 — do not
+re-read it per company. Add a log line when a change suppresses closure:
 
 ```ts
 if (eligible.length < runs.length) {
@@ -1455,7 +1386,7 @@ if (eligible.length < runs.length) {
 - [ ] **Step 5: Run the full suite**
 
 Run: `npm run build && npm test`
-Expected: clean; the 22 pre-existing crawler tests still pass.
+Expected: clean. Note the four `buildExtractionPrompt` tests were already updated in Task 3 Step 4 for its new signature; the rest of the crawler suite is untouched by this task.
 
 - [ ] **Step 6: Commit**
 
@@ -1471,7 +1402,9 @@ git commit -m "fix: a criteria change resets the stale-posting closure debounce"
 **Files:**
 - Create: `app/settings/page.tsx`
 - Create: `components/Settings.tsx`
+- Create: `components/RescorePrompt.tsx`
 - Modify: `components/Nav.tsx`
+- Modify: `lib/criteria-validation.ts` (add the text-length guard)
 
 **Interfaces:**
 - Consumes: everything from Tasks 4, 5, 6.
@@ -1496,13 +1429,24 @@ In `components/Nav.tsx`, append to `TABS`:
 A client component with five independently-saving sections. Requirements, each of which the reviewer will check:
 
 1. **Sections:** Target titles (list), Locations (list), GTM stack terms (list), Location rule (textarea), Fit brain (textarea). Each has its own Save button and its own Reset to defaults.
-2. **Titles section carries a plain-language warning** that editing it also changes what the weekly crawler looks for on every tracked company, and what the per-company Find roles button searches for. This is the least obvious consequence of the page.
+2. **Titles section carries a warning that names the count.** Editing titles also changes what the weekly crawler hunts for on every tracked company and what Find roles searches for — the least obvious consequence of this page. When titles are being removed, compute N (crawl-sourced, still-`New` jobs whose titles match what is going away) and say: *"N tracked roles match titles you are removing. They stay on /roles, and the crawler will stop monitoring them."* A static warning with no number does not satisfy the spec.
 3. **The estimate** renders under the titles and locations sections and recomputes as the user edits, before saving: `13 titles × 3 locations = 39 queries · ~$1.13 per By Role run`. Use `estimateRunCost` from Task 5. Label it approximate.
 4. **The ceiling** is a number input labeled in searches, with the dollar equivalent beside it, and an explicit off state. Default off.
-5. **Save errors surface next to the section that failed**, naming it — not in one shared banner that a later action wipes.
-6. **After a successful fit-brain save**, show a dismissible prompt: `Saved. N roles carry scores from before this edit. Rescore them for about $X? [Rescore] [Not now]` where N is `scoredJobCount` and X is `N × 0.0075` rounded to cents. Re-show it whenever the page loads while `scoredJobCount > 0` and the fit brain differs from what was last scored — since there is no version column, re-show it on every load after any fit-brain save in this session, and accept that it is dismissible.
+5. **Save errors surface next to the section that failed**, naming it — not in one shared banner that a later action wipes. **A failed save leaves the form populated** with what the user typed; never reset it to the stored value on error.
+6. **Extract the prompt as `components/RescorePrompt.tsx`** — the companion compensation plan imports it, and describing it only as inline behavior would guarantee two prompts with drifting copy:
+
+```tsx
+export default function RescorePrompt({ count, onRescore, onDismiss, busy }: {
+  count: number; onRescore: () => void; onDismiss: () => void; busy: boolean;
+})
+```
+
+It computes its own dollar figure from `count` (`count * 0.0075`, rounded to cents) so that constant has exactly one home, and owns the busy label. Copy: `Saved. N roles carry scores from before this edit. Rescore them for about $X? [Rescore] [Not now]`.
+
+Gate it on `scoredJobCount > 0 && fitBrainOverridden` from `getSettings` — **not** on session state. A client component has no memory across page loads, so a session-scoped rule would never re-show the prompt on a fresh load, which is the burial the spec explicitly forbids.
 7. **Rescore runs in the foreground** with a disabled button and honest label (`Rescoring 44 roles… (about a minute)`), because `rescoreAll` makes one API call per row.
-8. **Every async action is wrapped in try/catch/finally** so a rejected promise cannot leave a button permanently disabled. This repo has been bitten by exactly that.
+8. **The fit brain warns above 4,000 characters** (today's is ~1,800). It is sent on every `scoreFit` call, so its length multiplies across a re-score. Add `validateText(text, label, maxChars)` to `lib/criteria-validation.ts` with tests; warn, do not block.
+9. **Every async action is wrapped in try/catch/finally** so a rejected promise cannot leave a button permanently disabled. This repo has been bitten by exactly that.
 
 - [ ] **Step 4: Verify the build**
 
