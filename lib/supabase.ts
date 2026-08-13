@@ -218,3 +218,23 @@ export const supabase = {
     return new QueryBuilder(table);
   },
 };
+
+/**
+ * Escape hatch for queries the chainable builder cannot express (interval
+ * arithmetic, IN lists, ORDER BY ... NULLS FIRST). Returns the same
+ * { data, error } shape as the builder so callers handle errors identically.
+ */
+export async function rawQuery<T = Row>(
+  text: string,
+  values: unknown[] = []
+): Promise<{ data: T[]; error: { message: string } | null }> {
+  try {
+    const res = await getPool().query(text, values);
+    return { data: res.rows as T[], error: null };
+  } catch (e) {
+    return {
+      data: [],
+      error: { message: e instanceof Error ? e.message : String(e) },
+    };
+  }
+}

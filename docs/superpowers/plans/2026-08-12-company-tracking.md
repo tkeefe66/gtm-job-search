@@ -13,7 +13,7 @@ Spec: `docs/superpowers/specs/2026-08-12-company-tracking-design.md`
 ## Global Constraints
 
 - **No ATS vendor APIs and no job aggregator APIs.** Careers pages are treated as ordinary web pages. This is a hard product constraint, not a preference.
-- **`npm run build` is the pre-deploy gate** and includes typecheck. After this plan, the gate is `npm run build && npm test && npm run lint`.
+- **The gate is `npm run build && npm test`.** `npm run build` includes typecheck. **Do NOT run or attempt to fix `npm run lint`** — the repo has no ESLint config and `next lint` blocks on an interactive setup prompt. Adding a config makes `next build` run ESLint, and 3 pre-existing errors then fail the build. Fixing that is out of scope for every task in this plan. Where a task's steps say to run `npm run lint`, run `npm run build && npm test` instead.
 - **No API routes except the single cron route added by Task 9.** User-facing backend entry points are React Server Actions in `app/actions/`. Shared backend machinery lives in `lib/` alongside the existing `anthropic.ts`, `supabase.ts`, and `verify-url.ts` — `lib/crawler.ts` and `lib/ingest-roles.ts` belong there by design, and `lib/ingest-roles.ts` importing `app/actions/jobs.ts` is intentional and legal in Next. Do not relocate these modules.
 - **`lib/supabase.ts` is NOT Supabase** — it is a hand-rolled Supabase-shaped builder over `pg`. Supported surface: `.from .select .insert .update .upsert .delete .eq .neq .order .limit .single .maybeSingle`. There is no `.lt()`, `.gt()`, or `.in()`. Task 2 adds a raw-query escape hatch for anything beyond that surface.
 - **Schema truth is `db/schema.sql`**, applied with `DATABASE_URL=postgres://... node db/apply-schema.mjs`. It must stay idempotent — every statement re-runnable.
@@ -1418,10 +1418,18 @@ async function closeStalePostings(
   company: string,
   runs: string[][]
 ): Promise<void> {
+  // Scope corrected after Task 6 review (human ruling): the crawler may only
+  // retract its OWN findings that the user has never acted on. A crawl looks
+  // only for target titles on one careers page, so jobs from Find Roles,
+  // recruiters, or manual entry are absent from every run by construction —
+  // the original `status not in (terminal)` predicate would have closed them
+  // on the second crawl, and would have overwritten the stage of a job sitting
+  // at Panel Interviews or Offer, irrecoverably.
   const { data } = await rawQuery<{ id: string; role_title: string }>(
     `select id, role_title from jobs
       where company = $1
-        and status not in ('Posting Closed', 'Rejected', 'Not Interested', 'Passed')`,
+        and source = 'Crawl'
+        and status = 'New'`,
     [company]
   );
 
@@ -2239,12 +2247,23 @@ Expected: same shape as local. A 401 means `CRON_SECRET` did not reach the deplo
 In the `gtm-job-search` project, add a service named `crawler` with a daily cron schedule and this start command:
 
 ```bash
-curl -fsS -H "Authorization: Bearer $CRON_SECRET" "$WEB_URL/api/cron/crawl"
+curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" "$WEB_URL/api/cron/crawl"
 ```
+
+`--max-time 300` (5 min) so a hung request fails fast rather than holding a
+connection open indefinitely — a search-tier crawl is ~60-120s, so this covers
+several companies' worth of runway without letting one wedged request hang
+the cron service until the next scheduled fire.
 
 Set `CRON_SECRET` (same value) and `WEB_URL` (the `web` service's public domain) on the `crawler` service.
 
-With `BATCH_LIMIT = 10`, a daily schedule, and the 7-day default interval, this sustains about 70 tracked companies. Beyond that, companies age past their interval and are picked up in `last_checked_at` order — nothing starves, checks just stretch out. `limit` is the lever.
+With `DEFAULT_BATCH_LIMIT = 3` (lowered from 10 in the consolidated fix wave,
+2026-08-12, until real per-company crawl duration is known), a daily schedule,
+and the 7-day default interval, this sustains about 21 tracked companies.
+Beyond that, companies age past their interval and are picked up in
+`last_checked_at` order — nothing starves, checks just stretch out. `limit`
+(the query param, or raising `DEFAULT_BATCH_LIMIT` once duration is measured)
+is the lever.
 
 - [ ] **Step 8: Confirm the first scheduled run**
 

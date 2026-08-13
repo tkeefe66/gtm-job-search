@@ -42,6 +42,32 @@ export async function callWithWebSearch(opts: {
 }
 
 /**
+ * A plain completion with no tools. Used to extract roles from page text that
+ * has already been fetched — the fetch tier's cost win comes from not paying
+ * for web searches when the page content is already in hand.
+ */
+export async function callStructured(opts: {
+  system: string;
+  prompt: string;
+  maxTokens?: number;
+}): Promise<string> {
+  const message = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: opts.maxTokens ?? 4000,
+    system: opts.system,
+    messages: [{ role: "user", content: opts.prompt }],
+  });
+
+  report("gtm-job-search", MODEL, message.usage);
+
+  return message.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
+/**
  * Strips markdown code fences and extracts the first JSON value (array or
  * object) from a model response, then parses it.
  */
