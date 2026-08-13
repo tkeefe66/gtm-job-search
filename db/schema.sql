@@ -114,3 +114,14 @@ create table if not exists crawl_runs (
   error        text
 );
 create index if not exists crawl_runs_company_idx on crawl_runs (company, started_at desc);
+
+-- Cached role-first search results per (family, search_term). Same
+-- cache-first pattern as discovered_startups and insights_cache.
+create table if not exists role_searches (
+  id          uuid primary key default gen_random_uuid(),
+  family      text not null,          -- 'title' | 'stack'
+  search_term text not null default '',
+  roles       jsonb not null default '[]',
+  fetched_at  timestamptz default now(),
+  unique (family, search_term)
+);

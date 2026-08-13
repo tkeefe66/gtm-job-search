@@ -181,3 +181,9 @@ export interface CrawlRun {
   status: CrawlStatus | "running";
   error: string | null;
 }
+
+export type RoleSearchFamily = "title" | "stack";
+
+export interface RoleMatch extends Role {
+  company: string;
+}

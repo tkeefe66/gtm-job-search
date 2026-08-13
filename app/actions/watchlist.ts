@@ -1,9 +1,81 @@
 "use server";
 
+import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
+import { findExistingCompany } from "@/lib/find-existing-company";
+import { normalizeCompanyName } from "@/lib/role-key";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type { Startup, TrackedCompany } from "@/lib/types";
+
+// Company identity across this file is resolved case-insensitively using a
+// SINGLE normalizer — normalizeCompanyName (lib/role-key.ts) — for every
+// comparison, SQL and TypeScript alike. This file used to also match with
+// SQL `lower(company) = lower($1)`, on the theory that `lower()` and
+// normalizeCompanyName were just two flavors of "case-insensitive" and it
+// didn't matter which language did the comparing. Task 5's review found that
+// theory wrong: SQL `lower()` does not collapse internal whitespace (or
+// reliably fold U+00A0 the way JS's `\s` does), so a row stored as
+// "Big  Co" (double space) would not match a `lower()` lookup for "Big Co" —
+// resolveExistingCompany would then fall back to the trimmed input, and the
+// write that followed (`.eq("company", "Big Co")`) matched zero rows and
+// silently no-opped. That is the same failure class follow-up #4's "third
+// half" named, reached through whitespace instead of casing.
+//
+// Postgres's own \s/lower() semantics for U+00A0 are locale-dependent and
+// not verifiable without a database, so the fix is to stop straddling two
+// languages rather than try to replicate normalizeCompanyName in SQL: read
+// the watchlist's company names (the watchlist is a single user's list of
+// tens of rows — a full read is cheap) and do the actual match in
+// TypeScript, via findExistingCompany (lib/find-existing-company.ts), which
+// is the same normalizer every other TS-side company-identity comparison in
+// this codebase uses. Do not "optimize" this back into a `lower()` query —
+// that reintroduces the exact bug this comment describes.
+interface ExistingCompanyRow {
+  company: string;
+  careers_url: string | null;
+}
+
+interface ResolvedCompany {
+  row: ExistingCompanyRow;
+  // False means no row matched under normalizeCompanyName — `row.company`
+  // is then just the trimmed input, not a real stored value. Callers that
+  // mutate an existing row (setTracking, markChecked, setCareersUrl,
+  // removeFromWatchlist) must check this and fail loudly instead of issuing
+  // a write that's guaranteed to match zero rows — see the resolveWriteTarget
+  // helper below.
+  found: boolean;
+}
+
+async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
+  const trimmed = name.trim();
+  const { data } = await rawQuery<ExistingCompanyRow>(
+    `select company, careers_url from watchlist`
+  );
+  const match = findExistingCompany(data ?? [], trimmed);
+  return match
+    ? { row: match, found: true }
+    : { row: { company: trimmed, careers_url: null }, found: false };
+}
+
+// Shared guard for the four functions that mutate an EXISTING row
+// (setTracking, markChecked, setCareersUrl, removeFromWatchlist) rather than
+// upserting one (trackCompanyByName, addToWatchlist, where "not found" is
+// the normal first-time-tracking case, not an error). lib/supabase.ts's
+// query builder reports { error: null } no matter how many rows an
+// UPDATE/DELETE matched — see the module comment on setTracking below — so
+// without this check, a name that doesn't resolve to a stored row (a race
+// with another tab's delete, or simply a typo) silently no-ops: the caller
+// sees no error and the UI reports success for a write that touched nothing.
+async function resolveWriteTarget(
+  company: string
+): Promise<{ company: string; careers_url: string | null; error?: string }> {
+  const { row, found } = await resolveExistingCompany(company);
+  if (!found) {
+    return { ...row, error: `"${row.company}" is not on the watchlist.` };
+  }
+  return row;
+}
 
 export interface WatchlistEntry extends Startup {
   id: string;
@@ -21,53 +93,85 @@ export async function getWatchlist(): Promise<{ entries: WatchlistEntry[]; error
 }
 
 export async function addToWatchlist(startup: Startup): Promise<{ error?: string }> {
-  const { error } = await supabase.from("watchlist").upsert(
-    {
-      company: startup.company,
-      tagline: startup.tagline,
-      raised: startup.raised,
-      stage: startup.stage,
-      category: startup.category,
-      // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
-      // empty string for careers_url ("best guess ... or empty string"), and
-      // the builder's upsert writes every key present in the payload
-      // (lib/supabase.ts:170,179-181) — so an unconditional write here would
-      // blank out a URL a prior crawl had resolved for this company, forcing
-      // a wasted resolveCareersUrl() search call (or a false "needs_url"
-      // failure) on the next crawl. Omit the key instead of writing "".
-      careers_url: startup.careers_url || undefined,
-      headquarters: startup.headquarters,
-      source: "discover",
-      tracking_enabled: true,
-      consecutive_failures: 0,
-    },
-    { onConflict: "company" }
-  );
+  // "not found" is the normal case here (a company Discover has never seen
+  // tracked before) — this is an upsert, so `found` is irrelevant and only
+  // `row` is used.
+  const { row: existing } = await resolveExistingCompany(startup.company);
+
+  // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
+  // empty string for careers_url ("best guess ... or empty string"), and
+  // it's only ever a guess by construction — it must never beat a URL
+  // already stored, which may have been typed by hand on the Watchlist page
+  // to recover a company whose crawl was broken. resolveCareersUrlWrite
+  // (lib/careers-url-precedence.ts) encodes that precedence and doubles as
+  // the "did the URL actually change" signal: a defined return means it did,
+  // which is also exactly when crawl_method/last_crawl_status/
+  // last_crawl_error need resetting (see setCareersUrl below for why — a new
+  // URL invalidates everything the crawler learned about the old one).
+  const careersUrl = resolveCareersUrlWrite(existing.careers_url, startup.careers_url);
+
+  const payload: Record<string, unknown> = {
+    company: existing.company,
+    tagline: startup.tagline,
+    raised: startup.raised,
+    stage: startup.stage,
+    category: startup.category,
+    careers_url: careersUrl,
+    headquarters: startup.headquarters,
+    source: "discover",
+    tracking_enabled: true,
+    consecutive_failures: 0,
+  };
+  if (careersUrl !== undefined) {
+    payload.crawl_method = null;
+    payload.last_crawl_status = null;
+    payload.last_crawl_error = null;
+  }
+
+  const { error } = await supabase.from("watchlist").upsert(payload, { onConflict: "company" });
   return { error: error?.message };
 }
 
+// Exported as the explicit hard-delete (setTracking(company, false) is the
+// soft-disable everything else uses — see its comment). Currently has no
+// caller in the app; kept available for a future "remove entirely" action.
 export async function removeFromWatchlist(company: string): Promise<{ error?: string }> {
-  const { error } = await supabase.from("watchlist").delete().eq("company", company);
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
+  const { error } = await supabase.from("watchlist").delete().eq("company", target.company);
   return { error: error?.message };
 }
 
+// Currently has no caller in the app (checkCompanyNow/crawlCompany update
+// last_checked_at themselves as part of a full crawl). Kept exported for a
+// lighter-weight "mark seen without crawling" action.
 export async function markChecked(company: string): Promise<{ error?: string }> {
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
   const { error } = await supabase
     .from("watchlist")
     .update({ last_checked_at: new Date().toISOString() })
-    .eq("company", company);
+    .eq("company", target.company);
   return { error: error?.message };
 }
 
-export async function getWatchedCompanyNames(): Promise<Set<string>> {
+export async function getWatchedCompanyKeys(): Promise<Set<string>> {
   // Only rows still actively tracked count as "watched" — a company the user
   // stopped tracking (tracking_enabled = false) must be able to show up
   // un-starred in Discover again, not read as permanently claimed.
+  //
+  // Returns normalizeCompanyName keys, not raw stored strings: this set only
+  // ever backs membership tests (Discover.tsx via lib/watched-companies.ts),
+  // never display, so resolving the normalization once here — instead of at
+  // every call site — is what keeps "Clay" (stored) and "clay" (a fresh
+  // Discover result) reading as the same company. Renamed from
+  // getWatchedCompanyNames to make that contract change explicit at every
+  // call site instead of a same-shaped-but-different-meaning silent swap.
   const { data } = await supabase
     .from("watchlist")
     .select("company")
     .eq("tracking_enabled", true);
-  return new Set((data ?? []).map((r: { company: string }) => r.company));
+  return new Set((data ?? []).map((r: { company: string }) => normalizeCompanyName(r.company)));
 }
 
 export async function getTrackedCompanies(): Promise<{
@@ -100,12 +204,11 @@ export async function trackCompanyByName(
   // billed separately — and ingestRoles' now-case-insensitive dedupe query
   // would still find nothing under the new casing's exact string, so every
   // role would re-insert as a duplicate "New" job. Reusing the exact stored
-  // string keeps it to one row.
-  const { data: existingRows } = await rawQuery<{ company: string }>(
-    `select company from watchlist where lower(company) = lower($1) limit 1`,
-    [trimmed]
-  );
-  const company = existingRows?.[0]?.company ?? trimmed;
+  // string keeps it to one row. This is an upsert, like addToWatchlist —
+  // "not found" is the normal first-time-tracking case, not an error.
+  const {
+    row: { company },
+  } = await resolveExistingCompany(trimmed);
 
   const { error } = await supabase.from("watchlist").upsert(
     {
@@ -124,16 +227,29 @@ export async function trackCompanyByName(
   return { outcome };
 }
 
+// setTracking, markChecked, setCareersUrl, and removeFromWatchlist all
+// filter their write with .eq("company", ...). lib/supabase.ts's query
+// builder returns { error: null } no matter how many rows an UPDATE/DELETE
+// matched (execute() only ever checks the driver-level error, never
+// res.rowCount), so a company name that doesn't resolve to a stored row used
+// to succeed silently while touching nothing — the caller saw no error, and
+// Discover's handleWatch, for instance, would flip its "Watching" star off
+// even though the underlying row was never touched. resolveWriteTarget
+// (above) closes that: it checks existence up front and returns an explicit
+// error naming the company instead of letting a guaranteed-zero-row write
+// report success.
 export async function setTracking(
   company: string,
   enabled: boolean
 ): Promise<{ error?: string }> {
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
   if (enabled) patch.consecutive_failures = 0;
   const { error } = await supabase
     .from("watchlist")
     .update(patch)
-    .eq("company", company);
+    .eq("company", target.company);
   return { error: error?.message };
 }
 
@@ -145,6 +261,8 @@ export async function setCareersUrl(
   if (!/^https?:\/\//i.test(trimmed)) {
     return { error: "Enter a full URL starting with http:// or https://" };
   }
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
   const { error } = await supabase
     .from("watchlist")
     .update({
@@ -159,7 +277,7 @@ export async function setCareersUrl(
       last_crawl_error: null,
       consecutive_failures: 0,
     })
-    .eq("company", company);
+    .eq("company", target.company);
   return { error: error?.message };
 }
 

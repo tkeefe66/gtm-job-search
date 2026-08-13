@@ -35,11 +35,29 @@ The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-trig
 
 **Every "search" feature is a Claude call with the `web_search` server tool** — there's no scraper. `lib/anthropic.ts` has the two shared helpers: `callWithWebSearch()` (model `claude-sonnet-4-6`) and `parseJson()` (fence-stripping/boundary-finding, because responses aren't strict JSON mode). When adding a web-search call, budget `maxTokens` generously: the model's search narration counts against it, and 2000 tokens has truncated responses before the JSON was emitted (see comment in `app/actions/roles.ts`).
 
-**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (six tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`); `supabase/migrations/` is legacy.
+**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (seven tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`, `role_searches`); `supabase/migrations/` is legacy.
 
 **The fit-scoring brain** is `CANDIDATE_BACKGROUND` + the 1–5 rubric in `app/actions/parse-role.ts` (`scoreFit`). Target role titles and the Denver/remote location filter are duplicated in the prompts in `app/actions/roles.ts` and `app/actions/discover.ts`. Changing what "a good fit" means = edit these prompts, nothing else.
 
-**The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → every `job_url` is liveness-checked in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots) → dead roles are saved with status `"Posting Closed"` and skip fit-scoring; live ones are saved as `"New"` and `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
+**The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → the URL-verification and fit-scoring block lives in `lib/ingest-roles.ts` (shared with the crawler and role search below), which liveness-checks every `job_url` in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots), saves dead roles with status `"Posting Closed"` and skips fit-scoring for them, and saves live ones as `"New"`, `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
+
+**Role-first discovery**: `app/actions/role-search.ts` searches for roles by title
+and by GTM tool stack (`titleQueries` / `stackQueries` in `lib/search-criteria.ts`)
+rather than by company, so companies that never appear in funding news still
+surface. Queries are capped in two places, both from `MAX_QUERIES_PER_SEARCH`
+in `lib/search-criteria.ts`: `pickQueries` bounds how many of the 39 title / 24
+stack queries the prompt offers (advisory — the model decides what to run), and
+the same number is passed as `callWithWebSearch`'s optional `maxSearches`, which
+sets the `web_search` tool block's `max_uses` and is the actual ceiling on
+billed searches. `maxSearches` is opt-in; the discover, roles, and crawler
+callers omit it and are uncapped. Both the sent list and the searches Claude
+actually issued are logged. Results cache
+in `role_searches` per family and route through the same `lib/ingest-roles.ts`
+path as the crawler. The Discover tab has two modes: by company (funding) and
+by role. Company mode's default search window is still `7d`; a `6-18m` range
+also exists (the theory being a company hiring GTM systems people today likely
+raised its round 6-18 months ago, not last week) and its results list carries a
+filter chip row for the window a company was discovered in.
 
 **Status/filter machinery is constant-driven**: `JOB_STATUSES`, `ACTIVE_STATUSES`, `TERMINAL_STATUSES` in `lib/types.ts` drive the dropdown, filter chips, and count buckets in `components/RolesTable.tsx` automatically. To add a status: extend the union + arrays + the `STATUS_STYLES` badge map in `RolesTable.tsx`. The table's default filter is `"Open"` (hides `TERMINAL_STATUSES`).
 
