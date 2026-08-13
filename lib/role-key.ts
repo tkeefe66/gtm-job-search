@@ -3,10 +3,9 @@
 // a later crawl.
 
 export function normalizeTitle(title: string): string {
-  return title
-    .replace(/[ \s]+/g, " ")
-    .trim()
-    .toLowerCase();
+  // \s covers U+00A0 (non-breaking space), which scraped careers-page titles
+  // are full of — collapsing it is load-bearing for dedupe, so it is tested.
+  return title.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 export function normalizeRoleKey(company: string, roleTitle: string): string {

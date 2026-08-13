@@ -6,8 +6,8 @@ describe("normalizeTitle", () => {
     expect(normalizeTitle("  Director   of  RevOps ")).toBe("director of revops");
   });
 
-  test("treats non-breaking spaces as spaces", () => {
-    expect(normalizeTitle("Head of GTM")).toBe("head of gtm");
+  test("collapses non-breaking spaces like ordinary whitespace", () => {
+    expect(normalizeTitle("Head\xa0of\xa0GTM")).toBe("head of gtm");
   });
 });
 
