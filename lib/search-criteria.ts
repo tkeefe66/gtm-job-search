@@ -103,3 +103,18 @@ export function pickQueries(queries: string[], cap: number = MAX_QUERIES_PER_SEA
   }
   return out;
 }
+
+// The model has no idea what today's date is, so a prompt that only says
+// "recent" or "the last 60 days" leaves it to guess a year — and it guesses
+// from training bias. Observed in production on 2026-08-13: every one of the
+// 14 issued web searches had "2025" appended, biasing the whole result set
+// toward year-old postings. Stating the date explicitly, and telling it not to
+// invent a year, is the fix. Injected into every date-sensitive search prompt.
+export function dateContextLine(now: Date = new Date()): string {
+  const today = now.toISOString().slice(0, 10);
+  return (
+    `Today's date is ${today}. Do not append a year to any search query — ` +
+    `the search engine already returns current results, and an invented year ` +
+    `biases the results toward stale postings.`
+  );
+}

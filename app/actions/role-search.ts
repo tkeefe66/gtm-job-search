@@ -6,6 +6,7 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
   LOCATION_RULE,
+  dateContextLine,
   MAX_QUERIES_PER_SEARCH,
   ROLE_SEARCH_SYSTEM,
   pickQueries,
@@ -41,7 +42,7 @@ function buildPrompt(family: RoleSearchFamily, queries: string[]): string {
 
 ${queries.map((q) => `- ${q}`).join("\n")}
 
-Run as many of these searches as you can and combine the results. Prioritize postings from the last 60 days. ${LOCATION_RULE}
+Run as many of these searches as you can and combine the results. ${dateContextLine()} Prioritize postings from the last 60 days. ${LOCATION_RULE}
 
 ${roleExtractionSchema()}
 - company (string, the hiring company name — REQUIRED, never empty)

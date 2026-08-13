@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  dateContextLine,
   GTM_STACK_TERMS,
   LOCATION_RULE,
   LOCATION_TERMS,
@@ -150,5 +151,23 @@ describe("pickQueries", () => {
     for (const tool of GTM_STACK_TERMS) {
       expect(picked.some((q) => q.includes(`"${tool}"`))).toBe(true);
     }
+  });
+});
+
+describe("dateContextLine", () => {
+  test("states the supplied date in ISO form", () => {
+    expect(dateContextLine(new Date("2026-08-13T12:00:00Z"))).toContain("2026-08-13");
+  });
+
+  test("tracks the clock rather than hardcoding a year", () => {
+    // The bug this exists to prevent was a hardcoded-feeling year. A literal
+    // "2026" in the implementation would pass the test above and fail this one.
+    expect(dateContextLine(new Date("2031-01-05T00:00:00Z"))).toContain("2031-01-05");
+    expect(dateContextLine(new Date("2031-01-05T00:00:00Z"))).not.toContain("2026");
+  });
+
+  test("forbids appending a year, which is the observed failure", () => {
+    const line = dateContextLine(new Date("2026-08-13T12:00:00Z"));
+    expect(line.toLowerCase()).toContain("do not append a year");
   });
 });
