@@ -2,22 +2,33 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
+import {
+  discoverStartups,
+  getAllDiscoveredStartups,
+  type DateRange,
+  type DiscoveredStartup,
+} from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
 import { addToWatchlist, setTracking, getWatchedCompanyNames } from "@/app/actions/watchlist";
-import type { Startup } from "@/lib/types";
+import {
+  buildWindowFilterOptions,
+  filterByWindow,
+  type WindowFilter,
+} from "@/lib/discovery-window-filter";
 import { Spinner, Tag } from "./ui";
 
+// Controls what a NEW search asks Claude for.
 const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
   { value: "7d", label: "7 days" },
   { value: "30d", label: "30 days" },
   { value: "3m", label: "3 months" },
   { value: "6m", label: "6 months" },
+  { value: "6-18m", label: "6–18 mo" },
 ];
 
 export default function Discover() {
   const router = useRouter();
-  const [startups, setStartups] = useState<Startup[]>([]);
+  const [startups, setStartups] = useState<DiscoveredStartup[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingCached, setLoadingCached] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +37,11 @@ export default function Discover() {
   const [searchingRoles, setSearchingRoles] = useState<string | null>(null);
   const [watched, setWatched] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
+  // Slices the ALREADY-LOADED list by which cached window each company came
+  // from. Purely presentational — never triggers a fetch, and independent of
+  // `dateRange` above (which only affects what a NEW search asks for).
+  // Defaults to "all" so the initial view matches pre-filter behavior exactly.
+  const [windowFilter, setWindowFilter] = useState<WindowFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -56,7 +72,7 @@ export default function Discover() {
     setLoading(false);
   }
 
-  async function handleFindRoles(startup: Startup) {
+  async function handleFindRoles(startup: DiscoveredStartup) {
     setSearchingRoles(startup.company);
     setError(null);
     const res = await findAndSaveRoles(startup);
@@ -75,7 +91,7 @@ export default function Discover() {
     router.push("/roles");
   }
 
-  async function handleWatch(startup: Startup) {
+  async function handleWatch(startup: DiscoveredStartup) {
     setWatchingCompany(startup.company);
     if (watched.has(startup.company)) {
       // Soft-disable, not delete: crawl history, the learned careers_url,
@@ -96,7 +112,20 @@ export default function Discover() {
 
   const busy = loading || loadingCached;
 
-  const displayed = startups;
+  // Chips for windows that actually have loaded companies, plus "All". Not
+  // rendered as a control at all until there's more than one real range to
+  // pick between — a single-option toggle would just be noise.
+  const windowFilterOptions = buildWindowFilterOptions(
+    startups.map((s) => s.discovered_range),
+    DATE_RANGE_OPTIONS
+  );
+  const showWindowFilter = windowFilterOptions.length > 2;
+  const displayed = filterByWindow(startups, windowFilter);
+  const hiddenByFilter = startups.length > 0 && displayed.length === 0;
+
+  function rangeLabel(range: DateRange): string {
+    return DATE_RANGE_OPTIONS.find((opt) => opt.value === range)?.label ?? range;
+  }
 
   function formatFetchedAt(iso: string) {
     return new Date(iso).toLocaleString(undefined, {
@@ -122,22 +151,25 @@ export default function Discover() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Date range selector */}
-          <div className="flex overflow-hidden rounded-md border border-slate">
-            {DATE_RANGE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setDateRange(opt.value)}
-                disabled={busy}
-                className={`px-3 py-1.5 text-sm transition ${
-                  dateRange === opt.value
-                    ? "bg-ink text-white"
-                    : "bg-white text-ink hover:bg-canvas"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+          {/* Date range selector — controls what a NEW search asks for. */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-ink/40">Search window</span>
+            <div className="flex overflow-hidden rounded-md border border-slate">
+              {DATE_RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDateRange(opt.value)}
+                  disabled={busy}
+                  className={`px-3 py-1.5 text-sm transition ${
+                    dateRange === opt.value
+                      ? "bg-ink text-white"
+                      : "bg-white text-ink hover:bg-canvas"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <button
@@ -149,6 +181,29 @@ export default function Discover() {
           </button>
         </div>
       </div>
+
+      {showWindowFilter && !busy && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-medium text-ink/40">
+            Show ({startups.length})
+          </span>
+          <div className="flex flex-wrap overflow-hidden rounded-md border border-slate">
+            {windowFilterOptions.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setWindowFilter(opt.value)}
+                className={`px-3 py-1 text-xs transition ${
+                  windowFilter === opt.value
+                    ? "bg-ink text-white"
+                    : "bg-white text-ink hover:bg-canvas"
+                }`}
+              >
+                {opt.label} ({opt.count})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {busy && (
         <div className="py-12">
@@ -162,9 +217,21 @@ export default function Discover() {
         </div>
       )}
 
-      {!busy && !error && displayed.length === 0 && (
+      {!busy && !error && displayed.length === 0 && !hiddenByFilter && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
           No saved results yet. Click &quot;Discover&quot; to fetch.
+        </div>
+      )}
+
+      {!busy && !error && hiddenByFilter && (
+        <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
+          No companies in this window.{" "}
+          <button
+            onClick={() => setWindowFilter("all")}
+            className="underline-offset-2 hover:underline"
+          >
+            Show all {startups.length}
+          </button>
         </div>
       )}
 
@@ -184,6 +251,7 @@ export default function Discover() {
                   {s.stage && <Tag>{s.stage}</Tag>}
                   {s.raised && <Tag>{s.raised}</Tag>}
                   {s.category && <Tag>{s.category}</Tag>}
+                  <Tag>{rangeLabel(s.discovered_range)}</Tag>
                   {s.headquarters && (
                     <span className="text-xs text-ink/40">{s.headquarters}</span>
                   )}
