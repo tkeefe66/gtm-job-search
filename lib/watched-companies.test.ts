@@ -16,9 +16,14 @@ describe("isCompanyWatched", () => {
   });
 
   test("a name with U+00A0 normalizes the same as one with a regular space", () => {
-    // Escaped explicitly (not pasted) — a literal U+00A0 is invisible in a
-    // diff, and a previous build in this repo lost one exactly that way.
-    const watched = keysFor(["Big Co"]);
+    // Built with an explicit \xa0 escape, not a pasted character — a literal
+    // U+00A0 is invisible in a diff, and a previous build in this repo lost
+    // one exactly that way. The watched set is keyed from the
+    // non-breaking-space spelling; the lookup uses a regular space, so this
+    // fails unless isCompanyWatched routes through a whitespace-collapsing
+    // normalizer.
+    const nbspName = "Big" + "\xa0" + "Co";
+    const watched = keysFor([nbspName]);
     expect(isCompanyWatched("Big Co", watched)).toBe(true);
   });
 
