@@ -108,8 +108,8 @@ company gone quiet" — without it, a silently failing crawler is indistinguisha
 from a company that genuinely is not hiring.
 
 `role_titles` holds the normalized titles seen on that run. It exists so stale-posting
-closure (§3.3) can compare consecutive successful runs; counts alone cannot tell you
-*which* role disappeared.
+closure (§3.3) can compare consecutive trustworthy runs (`status` `'ok'` or `'empty'`);
+counts alone cannot tell you *which* role disappeared.
 
 ### 1.3 Role deduplication
 
@@ -230,13 +230,39 @@ skips the fetch tier and goes straight to search.
 
 ### 3.3 Closing stale postings
 
-A role in `jobs` for this company with an active status, absent from the crawl
-results, is a candidate for closure. It is only marked `Posting Closed` after
-**two consecutive successful crawls** in which it was absent — determined by
-checking the role's normalized title against `role_titles` on the two most recent
-`crawl_runs` rows for that company with `status = 'ok'`. Crawls with
-`status` of `error`, `empty`, or `needs_url` never close anything. A fetch failure
+**Scope (corrected 2026-08-12 after review of Task 6):** closure candidates are
+only jobs the crawler itself created AND that the user has never acted on —
+`source = 'Crawl' AND status = 'New'`. The original draft of this section made
+every non-terminal job at the company a candidate, which was wrong in two ways:
+a crawl only looks for target titles on one careers page, so a job added
+manually, found by Find Roles, or simply titled outside the target list is
+absent from every crawl *by construction* and would be closed on the second run;
+and because only terminal statuses were excluded, a job at `Panel Interviews` or
+`Offer` was eligible to have its status overwritten and its stage lost
+irrecoverably. A crawler may only retract its own untouched findings.
+
+A qualifying role, absent from the crawl results, is marked `Posting Closed`
+only after **two consecutive runs that each produced a trustworthy signal**
+in which it was absent — determined by checking the role's normalized title
+against `role_titles` on the current run and the most recent prior
+`crawl_runs` row for that company with `status IN ('ok', 'empty')`. Crawls
+with `status` of `error` or `needs_url` never close anything. A fetch failure
 must never mark a live job closed.
+
+**Ruling (2026-08-12, consolidated fix wave — corrects the paragraph above as
+originally written):** the original text scoped the "two consecutive" check
+to `status = 'ok'` only, and gated closure itself on the current run being
+`'ok'`, so an `'empty'` run — the page was fetched or searched successfully
+and genuinely listed nothing — could never close anything. That was wrong:
+a company taking down its *last* remaining posting is the single most common
+real case, and under the original rule it silently never closed. `'empty'`
+is not a failure mode; it means the tier ran to completion and the answer was
+"nothing." A human ruling corrected this: `'empty'` now counts everywhere
+`'ok'` does for closure purposes — both as the current run and as the
+previous run being compared against. The safety property this section exists
+to protect is unchanged and unrelated to this fix: `'error'` and `'needs_url'`
+still never close anything, because neither one means "we looked and saw
+nothing" — a fetch failure is not evidence a role is gone.
 
 ### 3.4 Cost
 

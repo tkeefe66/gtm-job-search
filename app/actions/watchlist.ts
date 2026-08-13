@@ -60,7 +60,13 @@ export async function markChecked(company: string): Promise<{ error?: string }> 
 }
 
 export async function getWatchedCompanyNames(): Promise<Set<string>> {
-  const { data } = await supabase.from("watchlist").select("company");
+  // Only rows still actively tracked count as "watched" — a company the user
+  // stopped tracking (tracking_enabled = false) must be able to show up
+  // un-starred in Discover again, not read as permanently claimed.
+  const { data } = await supabase
+    .from("watchlist")
+    .select("company")
+    .eq("tracking_enabled", true);
   return new Set((data ?? []).map((r: { company: string }) => r.company));
 }
 
@@ -84,8 +90,22 @@ export async function getTrackedCompanies(): Promise<{
 export async function trackCompanyByName(
   name: string
 ): Promise<{ outcome?: CrawlOutcome; error?: string }> {
-  const company = name.trim();
-  if (!company) return { error: "Enter a company name." };
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "Enter a company name." };
+
+  // Company identity is case-insensitive everywhere else in the tracking
+  // pipeline (ingest-roles.ts's dedupe lookup is lower()-based), but the
+  // watchlist's unique index is on raw text. Without this lookup, typing
+  // "clay" when "Clay" is already tracked would upsert a second row —
+  // billed separately — and ingestRoles' now-case-insensitive dedupe query
+  // would still find nothing under the new casing's exact string, so every
+  // role would re-insert as a duplicate "New" job. Reusing the exact stored
+  // string keeps it to one row.
+  const { data: existingRows } = await rawQuery<{ company: string }>(
+    `select company from watchlist where lower(company) = lower($1) limit 1`,
+    [trimmed]
+  );
+  const company = existingRows?.[0]?.company ?? trimmed;
 
   const { error } = await supabase.from("watchlist").upsert(
     {
@@ -129,6 +149,12 @@ export async function setCareersUrl(
     .from("watchlist")
     .update({
       careers_url: trimmed,
+      // A new careers URL invalidates whatever the crawler learned about the
+      // old one — a page misclassified as a JS shell (see lib/page-extract.ts's
+      // MIN_JOB_LINKS/JOB_LINK_PATTERN gaps) pins crawl_method to 'search'
+      // forever with no other reset path. Clearing it here is also the only
+      // manual reset the user has.
+      crawl_method: null,
       last_crawl_status: null,
       last_crawl_error: null,
       consecutive_failures: 0,

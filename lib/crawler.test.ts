@@ -1,7 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildExtractionPrompt,
   classifyFetchOutcome,
+  LAST_TRUSTWORTHY_RUN_SQL,
+  rolesFromRaw,
   STALE_POSTING_CANDIDATES_SQL,
   titlesToClose,
 } from "./crawler";
@@ -87,6 +89,44 @@ describe("titlesToClose", () => {
     const runs = [[], ["gtm engineer"]];
     expect(titlesToClose(runs, ["gtm engineer"])).toEqual([]);
   });
+
+  // Fix 2 (2026-08-12 consolidated wave): closeStalePostings now calls this
+  // with runs drawn from status IN ('ok', 'empty') instead of status = 'ok'
+  // only, and is invoked for an 'empty' current run too — an 'empty' crawl_runs
+  // row always has role_titles = []. titlesToClose itself is agnostic to why
+  // an array is empty, so these pin the actual scenario that changed: two
+  // consecutive 'empty' runs (a company whose last posting came down) must
+  // still close, exactly like two 'ok' runs that stopped mentioning a title.
+  test("closes a title when both current and previous runs are empty (two consecutive 'empty'-status crawls)", () => {
+    const runs: string[][] = [[], []];
+    expect(titlesToClose(runs, ["gtm engineer"])).toEqual(["gtm engineer"]);
+  });
+
+  test("an 'empty' previous run still debounces a title missing from the current run", () => {
+    // Mirrors the existing debounce test above, but with the previous run's
+    // slot representing what an 'empty' crawl_runs row looks like (role_titles
+    // = []) rather than a genuine "found nothing" for THIS title — either way,
+    // one run's absence must never be enough on its own.
+    const runs = [["gtm engineer"], []];
+    expect(titlesToClose(runs, ["gtm engineer"])).toEqual([]);
+  });
+});
+
+describe("LAST_TRUSTWORTHY_RUN_SQL", () => {
+  // Same rationale as STALE_POSTING_CANDIDATES_SQL below: no database in this
+  // repo's test setup, so this only pins the query's text, not its execution.
+  // Its job is to fail loudly if a future edit narrows the scope back to
+  // status = 'ok' only (reintroducing the empty-crawl bug fix 2 corrects) or
+  // widens it to include 'error'/'needs_url' (breaking the safety property
+  // that a fetch failure must never be read as "role is gone").
+
+  test("includes both trustworthy statuses", () => {
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("status in ('ok', 'empty')");
+  });
+
+  test("does not scope to 'ok' alone", () => {
+    expect(LAST_TRUSTWORTHY_RUN_SQL).not.toContain("status = 'ok'");
+  });
 });
 
 describe("STALE_POSTING_CANDIDATES_SQL", () => {
@@ -104,6 +144,38 @@ describe("STALE_POSTING_CANDIDATES_SQL", () => {
 
   test("scopes candidates to untouched jobs only (status = 'New')", () => {
     expect(STALE_POSTING_CANDIDATES_SQL).toContain("status = 'New'");
+  });
+});
+
+describe("rolesFromRaw", () => {
+  test("returns a bare array as-is", () => {
+    const raw = JSON.stringify([{ role_title: "GTM Engineer" }]);
+    expect(rolesFromRaw(raw)).toEqual([{ role_title: "GTM Engineer" }]);
+  });
+
+  test("unwraps a {roles: [...]} object", () => {
+    const raw = JSON.stringify({ roles: [{ role_title: "Head of RevOps" }], message: "ok" });
+    expect(rolesFromRaw(raw)).toEqual([{ role_title: "Head of RevOps" }]);
+  });
+
+  test("treats a {roles: null} object as empty", () => {
+    const raw = JSON.stringify({ roles: null });
+    expect(rolesFromRaw(raw)).toEqual([]);
+  });
+
+  // Fix 7 (2026-08-12 consolidated wave): parseJson failures used to throw
+  // straight through with no diagnostic trail. rolesFromRaw now logs the
+  // raw response head before rethrowing, so this failure mode is
+  // diagnosable from logs instead of just "JSON parse error" with no
+  // context on what the model actually returned.
+  test("logs the raw response head and rethrows on malformed JSON", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const raw = "Sorry, I could not find any roles for this company.";
+    expect(() => rolesFromRaw(raw)).toThrow();
+    expect(spy).toHaveBeenCalledTimes(1);
+    const logged = spy.mock.calls[0][0] as string;
+    expect(logged).toContain(raw.slice(0, 500));
+    spy.mockRestore();
   });
 });
 

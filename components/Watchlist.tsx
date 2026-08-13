@@ -100,7 +100,12 @@ export default function Watchlist() {
   }
 
   async function handleSaveUrl(company: string) {
-    const url = (urlDrafts[company] ?? "").trim();
+    // Fall back to the row's current careers_url, not "": the field is now
+    // pre-filled from it for every tracked row, so clicking Save without
+    // editing must resubmit what's displayed, not an empty string that would
+    // fail setCareersUrl's http(s):// check.
+    const current = companies.find((c) => c.company === company)?.careers_url ?? "";
+    const url = (urlDrafts[company] ?? current).trim();
     setRowBusy(company, true);
     try {
       const res = await setCareersUrl(company, url);
@@ -108,7 +113,13 @@ export default function Watchlist() {
         setNotice(res.error);
         return;
       }
-      setUrlDrafts((prev) => ({ ...prev, [company]: "" }));
+      // Drop the draft entirely (not set to "") so the input falls back to
+      // the freshly-reloaded c.careers_url instead of displaying blank.
+      setUrlDrafts((prev) => {
+        const next = { ...prev };
+        delete next[company];
+        return next;
+      });
       await handleCheckNow(company);
     } finally {
       setRowBusy(company, false);
@@ -174,11 +185,24 @@ export default function Watchlist() {
             </p>
           )}
 
-          {c.tracking_enabled && c.last_crawl_status === "needs_url" && (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+          {c.tracking_enabled && (
+            <div
+              className={`mt-2 flex flex-wrap items-center gap-2 ${
+                c.last_crawl_status === "needs_url"
+                  ? "rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-2"
+                  : ""
+              }`}
+            >
+              {c.last_crawl_status === "needs_url" ? (
+                <span className="text-xs font-medium text-[#92400E]">
+                  No careers page found — add one:
+                </span>
+              ) : (
+                <span className="text-xs text-ink/40">Careers URL:</span>
+              )}
               <input
                 type="text"
-                value={urlDrafts[c.company] ?? ""}
+                value={urlDrafts[c.company] ?? c.careers_url ?? ""}
                 onChange={(e) =>
                   setUrlDrafts((prev) => ({ ...prev, [c.company]: e.target.value }))
                 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { discoverStartups, getAllDiscoveredStartups, type DateRange } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
-import { addToWatchlist, removeFromWatchlist, getWatchedCompanyNames } from "@/app/actions/watchlist";
+import { addToWatchlist, setTracking, getWatchedCompanyNames } from "@/app/actions/watchlist";
 import type { Startup } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
 
@@ -78,7 +78,12 @@ export default function Discover() {
   async function handleWatch(startup: Startup) {
     setWatchingCompany(startup.company);
     if (watched.has(startup.company)) {
-      await removeFromWatchlist(startup.company);
+      // Soft-disable, not delete: crawl history, the learned careers_url,
+      // crawl_method, and failure counters must survive an un-star so
+      // re-watching doesn't cost a fresh resolveCareersUrl() search. The
+      // Watchlist page's own "Stop tracking" button already works this way;
+      // removeFromWatchlist stays exported as the explicit hard-delete.
+      await setTracking(startup.company, false);
       setWatched((prev) => { const n = new Set(prev); n.delete(startup.company); return n; });
       setStartups((prev) => [...prev, startup]);
     } else {

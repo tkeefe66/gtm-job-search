@@ -1,8 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
-import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
-import { rawQuery } from "@/lib/supabase";
+import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
+import { getDueCompanies } from "@/app/actions/watchlist";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
 // typo in the cron command) selects every due company and crawls them all
@@ -51,24 +51,29 @@ export async function GET(req: Request) {
       ? Math.min(rawLimit, MAX_BATCH_LIMIT)
       : DEFAULT_BATCH_LIMIT;
 
-  const { data, error } = await rawQuery<{ company: string }>(
-    DUE_COMPANIES_SQL,
-    [limit]
-  );
+  // Routed through the same server action the rest of the app uses, rather
+  // than duplicating the query inline, so there is exactly one code path
+  // that decides "which companies are due" (getDueCompanies in
+  // app/actions/watchlist.ts, backed by DUE_COMPANIES_SQL).
+  const { companies: due, error } = await getDueCompanies(limit);
   if (error) {
-    console.error(`cron/crawl: could not select due companies — ${error.message}`);
+    console.error(`cron/crawl: could not select due companies — ${error}`);
     return NextResponse.json(
-      { error: `Could not select due companies: ${error.message}` },
+      { error: `Could not select due companies: ${error}` },
       { status: 500 }
     );
   }
 
-  const due = (data ?? []).map((r) => r.company);
   const results: CrawlOutcome[] = [];
 
-  // Sequential on purpose: keeps the request inside normal HTTP timeouts and
-  // avoids bursting the Anthropic API. One company failing never aborts the
-  // batch.
+  // Sequential on purpose: avoids bursting the Anthropic API by firing many
+  // concurrent web_search-tier calls at once. This does NOT keep the request
+  // inside normal HTTP timeouts — a search-tier crawl is ~60-120s, so a full
+  // batch can run well past what most timeouts allow (see DEFAULT_BATCH_LIMIT's
+  // comment in lib/crawl-schedule.ts). The batch self-heals against that:
+  // each company's last_checked_at advances as it completes, so a request
+  // that gets cut off mid-batch simply resumes with the next-due companies
+  // on the following run. One company failing never aborts the batch either.
   for (const company of due) {
     try {
       results.push(await crawlCompany(company, { dryRun }));
@@ -88,7 +93,10 @@ export async function GET(req: Request) {
 
   const totals = {
     newRoles: results.reduce((n, r) => n + r.newRoles, 0),
-    failed: results.filter((r) => r.status === "error").length,
+    // needs_url counts as failed too — a batch where every company failed to
+    // resolve a careers page is a real problem, not a silent 0.
+    failed: results.filter((r) => r.status === "error" || r.status === "needs_url")
+      .length,
   };
 
   // The response body lands in the `crawler` service's curl output, not the

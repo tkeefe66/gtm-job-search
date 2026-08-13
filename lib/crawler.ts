@@ -59,15 +59,20 @@ ${links}`;
 /**
  * Which previously-seen roles should be marked Posting Closed.
  *
- * `runs` is [currentRunTitles, previousSuccessfulRunTitles]. A role closes
- * only when it is absent from BOTH — that is, two consecutive successful
- * crawls did not list it. Passing fewer than two runs closes nothing, so a
- * company's first successful crawl never closes anything, and a role
- * discovered today (present in the current run) is never closed on the same
- * day it was found.
+ * `runs` is [currentRunTitles, previousTrustworthyRunTitles]. A role closes
+ * only when it is absent from BOTH — that is, two consecutive runs that each
+ * produced a trustworthy "here's what's currently listed" signal did not
+ * list it. Passing fewer than two runs closes nothing, so a company's first
+ * trustworthy crawl never closes anything, and a role discovered today
+ * (present in the current run) is never closed on the same day it was found.
  *
- * Failed, empty, and needs_url runs are never passed in: a fetch failure must
- * not close a live job.
+ * A run counts as trustworthy — and only ever appears in `runs` — when its
+ * status is 'ok' (roles found) or 'empty' (page fetched/searched
+ * successfully, genuinely zero matches; ruling 2026-08-12, see
+ * closeStalePostings and spec §3.3 — empty is not a failure, and excluding
+ * it meant the single most common real case, a company taking down its last
+ * remaining posting, never closed anything). 'error' and 'needs_url' runs
+ * are never passed in: a fetch failure must not close a live job.
  */
 export function titlesToClose(runs: string[][], activeTitles: string[]): string[] {
   if (runs.length < 2) return [];
@@ -117,8 +122,27 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
   }
 }
 
-function rolesFromRaw(raw: string): Role[] {
-  const parsed = parseJson<Role[] | RolesResult>(raw);
+// Exported for testing: pure function of a raw model response string, no
+// network involved, so the parse-failure logging (fix 7, 2026-08-12
+// consolidated wave) can be pinned directly.
+export function rolesFromRaw(raw: string): Role[] {
+  let parsed: Role[] | RolesResult;
+  try {
+    parsed = parseJson<Role[] | RolesResult>(raw);
+  } catch (err) {
+    // parseJson throwing straight through here left this failure mode with
+    // no diagnostic trail — err.message alone doesn't say what the model
+    // actually returned. Truncation-before-JSON is a failure this codebase
+    // has already hit once (see the maxTokens comment on extractViaSearch's
+    // call); log enough of the raw response to tell that case apart from a
+    // genuinely malformed one, then let the caller's existing error handling
+    // (crawlCompany's try/catch → status "error") take over.
+    console.error(
+      `crawler: failed to parse roles JSON — ${err instanceof Error ? err.message : String(err)}. ` +
+        `Raw response (first 500 chars): ${raw.slice(0, 500)}`
+    );
+    throw err;
+  }
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === "object" && "roles" in parsed) {
     return parsed.roles ?? [];
@@ -250,13 +274,24 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
   return rolesFromRaw(raw);
 }
 
-/** Titles seen on the single most recent successful run, or [] if there is none. */
+// Exported (rather than inlined) so the 'ok'/'empty' scoping — the whole
+// point of fix 2 in the 2026-08-12 consolidated wave — can be pinned by a
+// string-content test without a database, same pattern as
+// STALE_POSTING_CANDIDATES_SQL below. 'error' and 'needs_url' must never
+// appear here: a fetch failure is not evidence a role is gone.
+export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles from crawl_runs
+      where company = $1 and status in ('ok', 'empty')
+      order by started_at desc
+      limit 1`;
+
+/**
+ * Titles seen on the single most recent run that produced a trustworthy
+ * "here's what's currently listed" signal (status 'ok' or 'empty'), or []
+ * if there is none.
+ */
 async function lastSuccessfulTitles(company: string): Promise<string[][]> {
   const { data } = await rawQuery<{ role_titles: string[] }>(
-    `select role_titles from crawl_runs
-      where company = $1 and status = 'ok'
-      order by started_at desc
-      limit 1`,
+    LAST_TRUSTWORTHY_RUN_SQL,
     [company]
   );
   return (data ?? []).map((r) => r.role_titles ?? []);
@@ -308,11 +343,20 @@ async function closeStalePostings(
   const closing = new Set(toClose);
   for (const job of active) {
     if (!closing.has(job.key)) continue;
-    await supabase
+    const { error: closeError } = await supabase
       .from("jobs")
       .update({ status: "Posting Closed", updated_at: new Date().toISOString() })
       .eq("id", job.id);
-    console.log(`crawler: closed stale posting ${company} / ${job.key}`);
+    // The update's result was previously discarded, so a failed write still
+    // logged "closed stale posting" as though it had succeeded. Log the
+    // truth instead.
+    if (closeError) {
+      console.error(
+        `crawler: failed to close stale posting ${company} / ${job.key} — ${closeError.message}`
+      );
+    } else {
+      console.log(`crawler: closed stale posting ${company} / ${job.key}`);
+    }
   }
 }
 
@@ -438,7 +482,7 @@ export async function crawlCompany(
         roles = await extractViaSearch(company, careersUrl);
       }
 
-      // Read the previous successful run BEFORE this run's row is finalized.
+      // Read the previous trustworthy run BEFORE this run's row is finalized.
       const previousRun = await lastSuccessfulTitles(company);
 
       const result = await ingestRoles({
@@ -460,8 +504,15 @@ export async function crawlCompany(
       seenTitles = result.seenTitles;
       status = roles.length > 0 ? "ok" : "empty";
 
-      if (!dryRun && status === "ok") {
-        // [current run, previous successful run] — a role closes only when
+      // Ruling 2026-08-12: empty crawls may close too, not just 'ok' ones —
+      // a company taking down its last remaining posting is the most common
+      // real case, and excluding 'empty' meant it never closed. 'error' and
+      // 'needs_url' still never reach this branch at all (status is only
+      // ever "ok" or "empty" here, set two lines above from roles.length) —
+      // that's the safety property, and it holds structurally, not just by
+      // this check: a fetch failure must never close a live job.
+      if (!dryRun) {
+        // [current run, previous trustworthy run] — a role closes only when
         // absent from both, so nothing found today is ever closed today.
         await closeStalePostings(company, [seenTitles, ...previousRun]);
       }

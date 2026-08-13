@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { rawQuery } from "@/lib/supabase";
 import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { checkJobUrl } from "@/lib/verify-url";
@@ -40,10 +40,18 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   const ctx = opts.companyContext ?? {};
   const seenTitles = roles.map((r) => normalizeTitle(r.role_title));
 
-  const { data: existing, error } = await supabase
-    .from("jobs")
-    .select("role_title, job_url")
-    .eq("company", company);
+  // Case-insensitive on purpose: normalizeRoleKey lowercases both sides for
+  // the dedupe comparison below, but an exact-match lookup here would make
+  // that lowercasing decorative — a row stored as "Clay" would be invisible
+  // to a crawl passing "clay", so every role would look new and re-insert as
+  // a duplicate. rawQuery is the escape hatch since the builder's filter
+  // surface (.eq/.neq) can't express lower().
+  const { data: existing, error } = await rawQuery<{
+    role_title: string;
+    job_url: string | null;
+  }>(`select role_title, job_url from jobs where lower(company) = lower($1)`, [
+    company,
+  ]);
 
   if (error) {
     throw new Error(`ingestRoles: could not read existing jobs — ${error.message}`);

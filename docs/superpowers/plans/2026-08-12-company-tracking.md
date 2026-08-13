@@ -1418,10 +1418,18 @@ async function closeStalePostings(
   company: string,
   runs: string[][]
 ): Promise<void> {
+  // Scope corrected after Task 6 review (human ruling): the crawler may only
+  // retract its OWN findings that the user has never acted on. A crawl looks
+  // only for target titles on one careers page, so jobs from Find Roles,
+  // recruiters, or manual entry are absent from every run by construction —
+  // the original `status not in (terminal)` predicate would have closed them
+  // on the second crawl, and would have overwritten the stage of a job sitting
+  // at Panel Interviews or Offer, irrecoverably.
   const { data } = await rawQuery<{ id: string; role_title: string }>(
     `select id, role_title from jobs
       where company = $1
-        and status not in ('Posting Closed', 'Rejected', 'Not Interested', 'Passed')`,
+        and source = 'Crawl'
+        and status = 'New'`,
     [company]
   );
 
@@ -2239,12 +2247,23 @@ Expected: same shape as local. A 401 means `CRON_SECRET` did not reach the deplo
 In the `gtm-job-search` project, add a service named `crawler` with a daily cron schedule and this start command:
 
 ```bash
-curl -fsS -H "Authorization: Bearer $CRON_SECRET" "$WEB_URL/api/cron/crawl"
+curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" "$WEB_URL/api/cron/crawl"
 ```
+
+`--max-time 300` (5 min) so a hung request fails fast rather than holding a
+connection open indefinitely — a search-tier crawl is ~60-120s, so this covers
+several companies' worth of runway without letting one wedged request hang
+the cron service until the next scheduled fire.
 
 Set `CRON_SECRET` (same value) and `WEB_URL` (the `web` service's public domain) on the `crawler` service.
 
-With `BATCH_LIMIT = 10`, a daily schedule, and the 7-day default interval, this sustains about 70 tracked companies. Beyond that, companies age past their interval and are picked up in `last_checked_at` order — nothing starves, checks just stretch out. `limit` is the lever.
+With `DEFAULT_BATCH_LIMIT = 3` (lowered from 10 in the consolidated fix wave,
+2026-08-12, until real per-company crawl duration is known), a daily schedule,
+and the 7-day default interval, this sustains about 21 tracked companies.
+Beyond that, companies age past their interval and are picked up in
+`last_checked_at` order — nothing starves, checks just stretch out. `limit`
+(the query param, or raising `DEFAULT_BATCH_LIMIT` once duration is measured)
+is the lever.
 
 - [ ] **Step 8: Confirm the first scheduled run**
 

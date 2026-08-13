@@ -2,7 +2,14 @@
 // helpers must agree: the SQL drives the cron batch, the helpers drive the
 // "next check" display on the Watchlist page.
 
-export const DEFAULT_BATCH_LIMIT = 10;
+// Lowered from 10 to 3 (2026-08-12 consolidated fix wave). A search-tier
+// crawl is ~60-120s plus per-role URL verification and fit-scoring, so ten
+// companies crawled sequentially in one HTTP request is realistically
+// 10-20 minutes — the route's now-corrected comment (app/api/cron/crawl/
+// route.ts) no longer claims this fits inside a normal HTTP timeout, and it
+// doesn't. 3 keeps a batch short until real per-company duration is measured
+// against a live database; raise it once that's known.
+export const DEFAULT_BATCH_LIMIT = 3;
 
 export const DUE_COMPANIES_SQL = `
   select company,
