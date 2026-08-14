@@ -58,6 +58,9 @@ export async function updateJob(
 ): Promise<{ error?: string }> {
   const { error } = await supabase
     .from("jobs")
+    // updated_at is stamped UNCONDITIONALLY on purpose: rescoreAll pages
+    // through jobs with `order by updated_at asc` (lib/rescore-scope.ts), so
+    // dropping this stamp makes every batch re-score the same rows forever.
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) {
