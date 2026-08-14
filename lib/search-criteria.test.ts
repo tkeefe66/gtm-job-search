@@ -120,9 +120,12 @@ describe("pickQueries", () => {
     expect(pickQueries(list.slice(0, 5), 10)).toEqual(list.slice(0, 5));
   });
 
-  test("returns the input unchanged when the cap exactly equals the length", () => {
-    const input = ["a", "b", "c"];
-    expect(pickQueries(input, 3)).toEqual(input);
+  test("returns the input array itself at the equality boundary", () => {
+    // toBe, not toEqual: at cap === length the striding formula yields
+    // identical CONTENT via the loop path, so only reference identity proves
+    // the early return fired. Mutating `<=` to `<` must fail this test.
+    const list = ["a", "b", "c"];
+    expect(pickQueries(list, 3)).toBe(list);
   });
 
   test("returns exactly the cap when the input exceeds it", () => {
