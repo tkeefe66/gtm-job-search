@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  tallyRescoreOutcomes,
+  type RescoreOutcome,
   DEFAULT_RESCORE_LIMIT,
   MAX_RESCORE_LIMIT,
   SCORED_JOBS_COUNT_SQL,
@@ -241,5 +243,38 @@ describe("clampRescoreLimit", () => {
   test("a non-number takes the default instead of poisoning `limit $1`", () => {
     expect(clampRescoreLimit(NaN)).toBe(DEFAULT_RESCORE_LIMIT);
     expect(clampRescoreLimit("25" as unknown as number)).toBe(DEFAULT_RESCORE_LIMIT);
+  });
+});
+
+describe("tallyRescoreOutcomes", () => {
+  test("counts each outcome into its own bucket", () => {
+    const t = tallyRescoreOutcomes([
+      "rescored", "rescored", "score-failed", "write-failed", "rescored",
+    ]);
+    expect(t).toEqual({ rescored: 3, scoreFailures: 1, writeFailures: 1 });
+  });
+
+  test("a failure is never counted as a rescore", () => {
+    // The bug this guards: parallelizing the batch and incrementing shared
+    // counters inside the callbacks, so a failed row lands in the wrong bucket
+    // or in two. Every outcome must map to exactly one increment.
+    const t = tallyRescoreOutcomes(["score-failed", "write-failed"]);
+    expect(t.rescored).toBe(0);
+    expect(t.scoreFailures + t.writeFailures).toBe(2);
+  });
+
+  test("the buckets sum to the number of rows, losing none", () => {
+    const outcomes: RescoreOutcome[] = [
+      "write-failed", "rescored", "score-failed", "rescored", "score-failed",
+    ];
+    expect(outcomes.length).toBeGreaterThan(0);
+    const t = tallyRescoreOutcomes(outcomes);
+    expect(t.rescored + t.scoreFailures + t.writeFailures).toBe(outcomes.length);
+  });
+
+  test("an empty batch tallies to zeros rather than throwing", () => {
+    expect(tallyRescoreOutcomes([])).toEqual({
+      rescored: 0, scoreFailures: 0, writeFailures: 0,
+    });
   });
 });

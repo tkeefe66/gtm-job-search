@@ -181,3 +181,26 @@ export function scoringArgsFor(row: ScoredJobRow): ScoringArgs {
     backer: row.backer ?? undefined,
   };
 }
+
+// One row's fate in a rescore batch. Named rather than counted inline because
+// the batch runs concurrently (Promise.all): tallying inside the callbacks
+// would mean several closures incrementing shared counters, which is the
+// classic way accounting quietly breaks when a serial loop is parallelized.
+// Each callback returns one of these; the tally happens once, afterward.
+export type RescoreOutcome = "rescored" | "score-failed" | "write-failed";
+
+export interface RescoreTally {
+  rescored: number;
+  scoreFailures: number;
+  writeFailures: number;
+}
+
+export function tallyRescoreOutcomes(outcomes: RescoreOutcome[]): RescoreTally {
+  const tally: RescoreTally = { rescored: 0, scoreFailures: 0, writeFailures: 0 };
+  for (const o of outcomes) {
+    if (o === "rescored") tally.rescored++;
+    else if (o === "score-failed") tally.scoreFailures++;
+    else tally.writeFailures++;
+  }
+  return tally;
+}

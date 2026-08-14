@@ -9,6 +9,8 @@ import {
   SCORED_JOBS_REMAINING_SQL,
   SCORED_JOBS_SQL,
   clampRescoreLimit,
+  tallyRescoreOutcomes,
+  type RescoreOutcome,
   passStartFrom,
   scoringArgsFor,
   type ScoredJobRow,
@@ -264,40 +266,53 @@ export async function rescoreAll(opts?: {
   }
   const rows = data ?? [];
 
-  let rescored = 0;
-  let scoreFailures = 0;
-  let writeFailures = 0;
+  // Concurrent, matching lib/ingest-roles.ts, which fires scoreFit for every
+  // new role with Promise.all. This loop was serial and a 41-role rescore took
+  // minutes of wall clock for work the repo already does in parallel
+  // elsewhere. The batch cap (clampRescoreLimit) is what makes the fan-out
+  // bounded rather than unbounded.
+  //
+  // Each callback returns an outcome instead of incrementing a shared counter,
+  // and every one is wrapped: an unhandled throw from scoreFit would reject
+  // Promise.all and discard the tally for rows that had already written
+  // successfully, reporting zero for work that actually happened.
+  const outcomes = await Promise.all(
+    rows.map(async (row): Promise<RescoreOutcome> => {
+      try {
+        // scoringArgsFor, not an inline literal: arr / exit_signal / backer are
+        // OPTIONAL on scoreFit's opts, so dropping them inline would compile and
+        // pass while rescoring blind. See lib/rescore-scope.ts.
+        const scored = await scoreFit({ ...scoringArgsFor(row), fitInputs });
 
-  for (const row of rows) {
-    // scoringArgsFor, not an inline literal: arr / exit_signal / backer are
-    // OPTIONAL on scoreFit's opts, so dropping them inline would compile and
-    // pass while rescoring blind. See lib/rescore-scope.ts.
-    const scored = await scoreFit({ ...scoringArgsFor(row), fitInputs });
+        // scoreFit returns score 0 (not a throw) when the call or the JSON parse
+        // fails. Writing that would violate the jobs.fit_score 1-5 check and, on
+        // a permissive column, would silently wipe a good score.
+        if (scored.score <= 0) return "score-failed";
 
-    // scoreFit returns score 0 (not a throw) when the call or the JSON parse
-    // fails. Writing that would violate the jobs.fit_score 1-5 check and, on a
-    // permissive column, would silently wipe a good score.
-    if (scored.score <= 0) {
-      scoreFailures++;
-      continue;
-    }
+        // Check the write before counting it. updateJob returns { error?: string };
+        // lib/crawler.ts fixed exactly this "counted a failed write as a success"
+        // bug already.
+        //
+        // fit_score ONLY. fit_summary is both an input to the prompt
+        // (`Summary: ${opts.fit_summary}`) and was the field the original plan
+        // overwrote with scored.rationale — rescore twice and the model is
+        // summarizing its own previous rationale instead of the posting.
+        const { error: updErr } = await updateJob(row.id, { fit_score: scored.score });
+        if (updErr) {
+          console.error(`rescoreAll: update failed for ${row.company} — ${updErr}`);
+          return "write-failed";
+        }
+        return "rescored";
+      } catch (err) {
+        console.error(
+          `rescoreAll: ${row.company} threw — ${err instanceof Error ? err.message : String(err)}`
+        );
+        return "score-failed";
+      }
+    })
+  );
 
-    // Check the write before counting it. updateJob returns { error?: string };
-    // lib/crawler.ts fixed exactly this "counted a failed write as a success"
-    // bug already.
-    //
-    // fit_score ONLY. fit_summary is both an input to the prompt
-    // (`Summary: ${opts.fit_summary}`) and was the field the original plan
-    // overwrote with scored.rationale — rescore twice and the model is
-    // summarizing its own previous rationale instead of the posting.
-    const { error: updErr } = await updateJob(row.id, { fit_score: scored.score });
-    if (updErr) {
-      console.error(`rescoreAll: update failed for ${row.company} — ${updErr}`);
-      writeFailures++;
-      continue;
-    }
-    rescored++;
-  }
+  const { rescored, scoreFailures, writeFailures } = tallyRescoreOutcomes(outcomes);
 
   const remaining = await countRemaining(passStartedAt);
   console.log(
