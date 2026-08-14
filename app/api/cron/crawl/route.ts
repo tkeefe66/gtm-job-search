@@ -66,36 +66,41 @@ export async function GET(req: Request) {
 
   const results: CrawlOutcome[] = [];
 
-  // Resolved ONCE for the whole batch, before the loop. Two reasons, and the
-  // first is the load-bearing one: a settings save landing halfway through a
-  // batch would otherwise crawl the first companies against the old title
-  // list and the rest against the new one, producing a run whose results
-  // cannot be interpreted. Second, it is one settings read per batch instead
-  // of one per company.
-  const ctx = await loadRunContext();
+  // Skipped entirely when nothing is due — which is most ticks. The context is
+  // a settings read plus the run-history lookups behind it, and spending them
+  // to crawl zero companies is pure waste.
+  if (due.length > 0) {
+    // Resolved ONCE for the whole batch, before the loop. Two reasons, and the
+    // first is the load-bearing one: a settings save landing halfway through a
+    // batch would otherwise crawl the first companies against the old title
+    // list and the rest against the new one, producing a run whose results
+    // cannot be interpreted. Second, it is one settings read per batch instead
+    // of one per company.
+    const ctx = await loadRunContext();
 
-  // Sequential on purpose: avoids bursting the Anthropic API by firing many
-  // concurrent web_search-tier calls at once. This does NOT keep the request
-  // inside normal HTTP timeouts — a search-tier crawl is ~60-120s, so a full
-  // batch can run well past what most timeouts allow (see DEFAULT_BATCH_LIMIT's
-  // comment in lib/crawl-schedule.ts). The batch self-heals against that:
-  // each company's last_checked_at advances as it completes, so a request
-  // that gets cut off mid-batch simply resumes with the next-due companies
-  // on the following run. One company failing never aborts the batch either.
-  for (const company of due) {
-    try {
-      results.push(await crawlCompany(company, { dryRun, ctx }));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`cron/crawl: ${company} threw — ${message}`);
-      results.push({
-        company,
-        method: null,
-        rolesFound: 0,
-        newRoles: 0,
-        status: "error",
-        error: message,
-      });
+    // Sequential on purpose: avoids bursting the Anthropic API by firing many
+    // concurrent web_search-tier calls at once. This does NOT keep the request
+    // inside normal HTTP timeouts — a search-tier crawl is ~60-120s, so a full
+    // batch can run well past what most timeouts allow (see DEFAULT_BATCH_LIMIT's
+    // comment in lib/crawl-schedule.ts). The batch self-heals against that:
+    // each company's last_checked_at advances as it completes, so a request
+    // that gets cut off mid-batch simply resumes with the next-due companies
+    // on the following run. One company failing never aborts the batch either.
+    for (const company of due) {
+      try {
+        results.push(await crawlCompany(company, { dryRun, ctx }));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`cron/crawl: ${company} threw — ${message}`);
+        results.push({
+          company,
+          method: null,
+          rolesFound: 0,
+          newRoles: 0,
+          status: "error",
+          error: message,
+        });
+      }
     }
   }
 

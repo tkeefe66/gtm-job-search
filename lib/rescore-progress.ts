@@ -62,6 +62,105 @@ export interface RescoreTotals {
   remaining: number;
 }
 
+/** What one call of the rescore action reports back. */
+export interface RescoreBatchResult extends RescoreTotals {
+  /**
+   * The pass timestamp the batch counted `remaining` against. The FIRST batch
+   * mints it (server-side, so no browser clock is involved); every later batch
+   * must be handed the same one back.
+   */
+  passStartedAt?: string;
+  error?: string;
+}
+
+export interface RescorePassResult extends RescoreTotals {
+  /** How many batches actually ran — the loop's own drain evidence. */
+  batches: number;
+  error?: string;
+}
+
+/**
+ * Drives a whole rescore pass: batch after batch until the work drains, the
+ * budget runs out, or a batch reports failure.
+ *
+ * THE reason this is a function and not a `for` loop in the component: the
+ * pass timestamp must be taken ONCE and threaded into every batch. Taken per
+ * batch instead, `remaining` counts the previous batches' finished rows as
+ * still outstanding — it never reaches zero, the loop keeps buying full extra
+ * passes (26 scored rows cost 75 scoreFit calls), and the caller is told there
+ * is work left after doing all of it. That defect exists only ACROSS batches,
+ * so it cannot be seen from inside a single call, and a loop living in a React
+ * component cannot be tested at all in this repo. Out here, a fake batch
+ * source pins it (lib/rescore-progress.test.ts).
+ *
+ * Two independent bounds, both kept: `shouldContinueRescore` requires real
+ * forward progress, and `maxRescoreBatches` caps the batch count outright so
+ * no arithmetic bug can bill indefinitely.
+ *
+ * Never throws. A rejected batch is captured as `error` with the totals earned
+ * so far intact — losing the count of work already paid for is its own bug.
+ */
+export async function runRescorePass(opts: {
+  /** Rows the page believes are scored — sizes the batch budget only. */
+  total: number;
+  runBatch: (args: {
+    passStartedAt?: string;
+    limit?: number;
+  }) => Promise<RescoreBatchResult>;
+  /** Called after every successful batch, so a long pass is not a silent one. */
+  onProgress?: (totals: RescoreTotals) => void;
+  batchSize?: number;
+}): Promise<RescorePassResult> {
+  const batchSize = opts.batchSize ?? DEFAULT_RESCORE_LIMIT;
+  const budget = maxRescoreBatches(opts.total, batchSize);
+
+  let rescored = 0;
+  let failed = 0;
+  let remaining = 0;
+  let batches = 0;
+  let error: string | undefined;
+  // Pinned by the first batch that returns one, then handed to every batch
+  // after it. Undefined on the first call: the server mints it there.
+  let passStartedAt: string | undefined;
+  // Undefined on the first call, so the action applies its own default.
+  let limit: number | undefined;
+
+  for (let i = 0; i < budget; i++) {
+    // Counted before the call, not after: a batch that threw still ran, and
+    // still spent whatever it spent before failing.
+    batches++;
+    let res: RescoreBatchResult;
+    try {
+      res = await opts.runBatch({ passStartedAt, limit });
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      break;
+    }
+    if (res.error) {
+      error = res.error;
+      break;
+    }
+    if (passStartedAt === undefined) passStartedAt = res.passStartedAt;
+
+    rescored += res.rescored;
+    failed += res.failed;
+    remaining = res.remaining;
+    opts.onProgress?.({ rescored, failed, remaining });
+
+    if (!shouldContinueRescore(res)) break;
+
+    // Ask the NEXT batch for only what is actually left. The batch query is
+    // "the oldest `limit` scored rows", and rows this pass has finished carry
+    // the newest timestamps — so a full-size batch with 1 row outstanding
+    // re-scores 24 rows it already did, at ~$0.0076 each, and reports them as
+    // rescores. Untouched rows are always the oldest, so a limit of
+    // `remaining` selects exactly them.
+    limit = Math.min(batchSize, remaining);
+  }
+
+  return { rescored, failed, remaining, batches, error };
+}
+
 /**
  * What to tell the user after a rescore stops.
  *

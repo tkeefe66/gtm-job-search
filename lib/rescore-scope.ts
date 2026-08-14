@@ -85,6 +85,10 @@ export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where ${SCORED
  * Scored jobs this pass has not finished yet: everything still carrying an
  * `updated_at` from before the pass began ($1).
  *
+ * $1 is the start of the WHOLE PASS, not of the current batch — see
+ * `passStartFrom` below for why that distinction is the difference between a
+ * loop that terminates and one that bills forever.
+ *
  * A row that failed to score keeps its old timestamp and so stays counted,
  * which is the honest answer — it still needs doing. It also means `remaining`
  * alone is not a drain condition: a caller looping until zero would spin on a
@@ -96,6 +100,34 @@ export const SCORED_JOBS_REMAINING_SQL = `select count(*) n from jobs
 
 export const DEFAULT_RESCORE_LIMIT = 25;
 export const MAX_RESCORE_LIMIT = 100;
+
+/**
+ * The timestamp SCORED_JOBS_REMAINING_SQL counts against: the moment the PASS
+ * began, carried forward from the first batch, not a fresh `now()` per batch.
+ *
+ * This is the whole fix for a defect that only exists across batches. With a
+ * per-batch timestamp, every row batch 1 finished carries an `updated_at`
+ * older than batch 2's start, so batch 2 counts batch 1's completed work as
+ * still remaining. `remaining` then never reaches zero, the client loop keeps
+ * paying for full extra passes (26 scored rows billed 75 scoreFit calls, then
+ * still reported work left), and the "pass finished" branch never fires. The
+ * server log reads plausibly the whole time, so nothing flags it.
+ *
+ * The FIRST batch has no candidate and takes the server's clock; later batches
+ * receive that value back through the client. An unparseable or missing
+ * candidate falls back to `fallback` rather than reaching Postgres, where an
+ * invalid timestamp literal would error the count and silently stop the loop.
+ * Normalizing through `toISOString` also means only one format is ever bound.
+ */
+export function passStartFrom(
+  candidate: string | undefined,
+  fallback: Date = new Date()
+): string {
+  if (typeof candidate === "string" && Number.isFinite(Date.parse(candidate))) {
+    return new Date(candidate).toISOString();
+  }
+  return fallback.toISOString();
+}
 
 /**
  * How many rows one rescore call may touch.

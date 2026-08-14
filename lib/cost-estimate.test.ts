@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { estimateRunCost, formatEstimate } from "./cost-estimate";
+import { estimateRunCost, formatEstimate, type EstimateInput } from "./cost-estimate";
 
 describe("estimateRunCost", () => {
   test("counts the title and stack grids separately", () => {
@@ -52,12 +52,39 @@ describe("formatEstimate", () => {
     ).toBe("13 titles × 3 locations = 39 queries · ~$1.17 per By Role run");
   });
 
-  test("shows the title grid, not the larger stack grid", () => {
-    // 2 × 3 = 6 title queries against 20 × 3 = 60 stack queries. The two
-    // numbers on the left multiply to 6, so showing 60 would be arithmetic
-    // the user can see is wrong.
+  test("names the grid the price is actually for", () => {
+    // 2 × 3 = 6 title queries against 20 × 3 = 60 stack queries, and
+    // estimateRunCost prices the LARGER grid. Naming titles here would put "6
+    // queries" beside a price for 60 searches — a line that contradicts
+    // itself. The factors shown must multiply out to the priced grid.
     const s = formatEstimate({ titles: 2, locations: 3, stackTerms: 20, ceiling: null });
-    expect(s).toContain("2 titles × 3 locations = 6 queries");
+    expect(s).toContain("20 stack terms × 3 locations = 60 queries");
+    expect(s).not.toContain("= 6 queries");
+  });
+
+  test("the printed query count always equals the priced grid", () => {
+    // Swept rather than spot-checked: whichever family dominates, the number
+    // on the line and the number the dollars were computed from must agree.
+    const cases: EstimateInput[] = [
+      { titles: 13, locations: 3, stackTerms: 8, ceiling: null }, // title-driven
+      { titles: 2, locations: 3, stackTerms: 20, ceiling: null }, // stack-driven
+      { titles: 5, locations: 2, stackTerms: 5, ceiling: null }, // a tie
+      { titles: 1, locations: 1, stackTerms: 1, ceiling: null },
+    ];
+    expect(cases.length).toBeGreaterThan(0);
+    for (const input of cases) {
+      const e = estimateRunCost(input);
+      expect(formatEstimate(input)).toContain(
+        `= ${e.grid} quer${e.grid === 1 ? "y" : "ies"}`
+      );
+    }
+  });
+
+  test("a tie between the grids reads as titles", () => {
+    // Arbitrary but fixed: with both grids equal the price is the same either
+    // way, and titles are the list the line sits under.
+    const s = formatEstimate({ titles: 5, locations: 2, stackTerms: 5, ceiling: null });
+    expect(s).toContain("5 titles × 2 locations = 10 queries");
   });
 
   test("states the cap when a ceiling cuts the grid down", () => {
@@ -65,6 +92,15 @@ describe("formatEstimate", () => {
     expect(s).toBe(
       "13 titles × 3 locations = 39 queries (capped at 15) · ~$0.56 per By Role run"
     );
+  });
+
+  test("states the cap when the ceiling binds against the STACK grid", () => {
+    // The case the old title-only line got most wrong: the ceiling (15) is
+    // above the title grid (6) but well below the priced stack grid (60), so
+    // the line used to report neither the real grid nor the cap while quoting
+    // a capped price.
+    const s = formatEstimate({ titles: 2, locations: 3, stackTerms: 20, ceiling: 15 });
+    expect(s).toContain("20 stack terms × 3 locations = 60 queries (capped at 15)");
   });
 
   test("says nothing about a ceiling that does not bind", () => {

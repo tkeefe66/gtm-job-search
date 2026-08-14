@@ -43,6 +43,37 @@ describe("mergeSettings", () => {
     expect(defaults.titles).toEqual(["A"]);
   });
 
+  test("hands out a COPY of an un-overridden array, never the constant itself", () => {
+    // toEqual cannot see this: the copy and the constant have identical
+    // contents, so only reference identity distinguishes the two paths.
+    // Without the copy, criteria.titles IS DEFAULT_TARGET_TITLES — the module
+    // constant every caller in the process shares as its fallback.
+    const merged = mergeSettings(DEFAULT_CRITERIA, []);
+    expect(merged.titles).toEqual(DEFAULT_CRITERIA.titles);
+    expect(merged.titles).not.toBe(DEFAULT_CRITERIA.titles);
+    expect(merged.locations).not.toBe(DEFAULT_CRITERIA.locations);
+    expect(merged.stackTerms).not.toBe(DEFAULT_CRITERIA.stackTerms);
+  });
+
+  test("mutating a merged list cannot corrupt the shipped fallback", () => {
+    // The failure the copy prevents, played out: a future in-place sort or
+    // push on a criteria list would otherwise poison the defaults the crawler
+    // and every search path degrade to, for the life of the process.
+    const before = DEFAULT_CRITERIA.titles.length;
+    expect(before).toBeGreaterThan(0);
+    const merged = mergeSettings(DEFAULT_CRITERIA, []);
+    merged.titles.push("Chief Vibes Officer");
+    expect(DEFAULT_CRITERIA.titles).toHaveLength(before);
+    expect(DEFAULT_CRITERIA.titles).not.toContain("Chief Vibes Officer");
+  });
+
+  test("a stored array is copied too, so the merged object aliases nothing", () => {
+    const stored = ["X", "Y"];
+    const merged = mergeSettings({ titles: ["A"] }, [{ key: "titles", value: stored }]);
+    expect(merged.titles).toEqual(stored);
+    expect(merged.titles).not.toBe(stored);
+  });
+
   test("ignores a value of the wrong shape rather than poisoning the crawler", () => {
     // A string here would make titleListForPrompt call .join on a string and
     // throw mid-crawl. Must fall back to the default, not merge.

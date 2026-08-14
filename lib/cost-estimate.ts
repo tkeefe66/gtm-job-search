@@ -16,6 +16,8 @@ export interface EstimateInput {
 export interface Estimate {
   titleQueries: number;
   stackQueries: number;
+  /** The grid the dollar figure is for: the larger of the two, worst case. */
+  grid: number;
   searches: number;
   dollars: number;
 }
@@ -34,7 +36,7 @@ export function estimateRunCost(input: EstimateInput): Estimate {
         searches * TOKENS_PER_SEARCH_RESULT * DOLLARS_PER_INPUT_TOKEN +
         FIT_SCORING_DOLLARS;
 
-  return { titleQueries, stackQueries, searches, dollars };
+  return { titleQueries, stackQueries, grid, searches, dollars };
 }
 
 function plural(n: number, one: string, many: string = `${one}s`): string {
@@ -45,21 +47,29 @@ function plural(n: number, one: string, many: string = `${one}s`): string {
  * The one-line estimate the settings page shows under the titles and locations
  * lists, e.g. `13 titles × 3 locations = 39 queries · ~$1.17 per By Role run`.
  *
- * The query figure is the TITLE grid, because that is the grid the two numbers
- * beside it multiply out to; the dollar figure comes from estimateRunCost,
- * which prices the larger of the two grids. When a ceiling cuts the grid down,
- * the cap is stated — otherwise the line would show 39 queries for a run the
- * user has capped at 15 and the dollar figure would look inexplicably low.
+ * The line describes the grid the DOLLAR FIGURE IS FOR, whichever family that
+ * is. A run is one family at a time and estimateRunCost prices the larger of
+ * the two, so naming the title grid unconditionally made the line contradict
+ * itself whenever the stack grid was bigger: 2 titles and 8 stack terms read
+ * "2 titles × 3 locations = 6 queries" beside a price for 24 searches. Showing
+ * whichever pair actually multiplies out to the priced grid keeps the
+ * arithmetic on the line checkable by eye.
+ *
+ * When a ceiling cuts the grid down, the cap is stated — otherwise the line
+ * would show 39 queries for a run the user has capped at 15 and the dollar
+ * figure would look inexplicably low.
  */
 export function formatEstimate(input: EstimateInput): string {
   const e = estimateRunCost(input);
+  const stackDriven = e.stackQueries > e.titleQueries;
+  const factor = stackDriven
+    ? plural(input.stackTerms, "stack term")
+    : plural(input.titles, "title");
   const capped =
-    input.ceiling !== null && e.searches < e.titleQueries
-      ? ` (capped at ${e.searches})`
-      : "";
+    input.ceiling !== null && e.searches < e.grid ? ` (capped at ${e.searches})` : "";
   return (
-    `${plural(input.titles, "title")} × ${plural(input.locations, "location")} = ` +
-    `${plural(e.titleQueries, "query", "queries")}${capped} · ` +
+    `${factor} × ${plural(input.locations, "location")} = ` +
+    `${plural(e.grid, "query", "queries")}${capped} · ` +
     `~$${e.dollars.toFixed(2)} per By Role run`
   );
 }

@@ -7,6 +7,7 @@ import {
   SCORED_JOBS_SQL,
   SCORING_INPUT_COLUMNS,
   clampRescoreLimit,
+  passStartFrom,
   scoringArgsFor,
   type ScoredJobRow,
 } from "./rescore-scope";
@@ -166,6 +167,49 @@ describe("scoringArgsFor", () => {
     expect(args.arr).toBeUndefined();
     expect(args.exit_signal).toBeUndefined();
     expect(args.backer).toBeUndefined();
+  });
+});
+
+describe("passStartFrom", () => {
+  const FALLBACK = new Date("2026-08-13T12:00:00.000Z");
+
+  test("with nothing to carry forward, the pass starts now", () => {
+    // The first batch of a pass. The server's clock, never the browser's.
+    expect(passStartFrom(undefined, FALLBACK)).toBe("2026-08-13T12:00:00.000Z");
+  });
+
+  test("carries a supplied pass start through unchanged", () => {
+    // THE property the whole fix rests on: batch 2 counts `remaining` against
+    // the moment the PASS began, not the moment this batch began. A fresh
+    // timestamp here makes batch 1's finished rows look outstanding again, so
+    // `remaining` never reaches zero and every extra click buys a full pass.
+    expect(passStartFrom("2026-08-13T11:00:00.000Z", FALLBACK)).toBe(
+      "2026-08-13T11:00:00.000Z"
+    );
+  });
+
+  test("normalizes to one format before it reaches the query", () => {
+    expect(passStartFrom("2026-08-13T11:00:00Z", FALLBACK)).toBe(
+      "2026-08-13T11:00:00.000Z"
+    );
+  });
+
+  test("an unusable value falls back instead of poisoning the count", () => {
+    // The value round-trips through a client. Bound into `updated_at < $1`,
+    // "not a date" is an invalid timestamp literal: Postgres errors, the count
+    // fails, and countRemaining answers 0 — which silently ENDS the pass.
+    expect(passStartFrom("not a date", FALLBACK)).toBe("2026-08-13T12:00:00.000Z");
+    expect(passStartFrom("", FALLBACK)).toBe("2026-08-13T12:00:00.000Z");
+    expect(passStartFrom(42 as unknown as string, FALLBACK)).toBe(
+      "2026-08-13T12:00:00.000Z"
+    );
+  });
+
+  test("defaults its fallback to the real clock", () => {
+    const before = Date.now();
+    const t = Date.parse(passStartFrom(undefined));
+    expect(t).toBeGreaterThanOrEqual(before);
+    expect(t).toBeLessThanOrEqual(Date.now());
   });
 });
 

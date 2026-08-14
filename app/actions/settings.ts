@@ -9,53 +9,46 @@ import {
   SCORED_JOBS_REMAINING_SQL,
   SCORED_JOBS_SQL,
   clampRescoreLimit,
+  passStartFrom,
   scoringArgsFor,
   type ScoredJobRow,
 } from "@/lib/rescore-scope";
-import {
-  DEFAULT_CRITERIA,
-  loadScoringInputs,
-  type Criteria,
-} from "@/lib/search-criteria";
+import { loadScoringInputs } from "@/lib/search-criteria";
 import { affectsCrawl, cachesToClear } from "@/lib/settings-effects";
 import {
   SETTING_KEYS,
-  ceilingFrom,
   deleteSetting,
   type ListSettingKey,
   type TextSettingKey,
-  mergeSettings,
-  readAllSettings,
+  readAllSettingsResult,
   readCriteriaChangedAt,
   writeCriteriaChangedAt,
   writeSetting,
   type SettingKey,
 } from "@/lib/settings-store";
+import { buildSettingsView, type SettingsView } from "@/lib/settings-view";
 import { rawQuery } from "@/lib/supabase";
-
-export interface SettingsView {
-  criteria: Criteria;
-  ceiling: number | null;
-  scoredJobCount: number;
-  fitBrainOverridden: boolean;
-  error?: string;
-}
 
 export async function getSettings(): Promise<SettingsView> {
   // ONE read of app_settings, then derive everything from those rows.
   // loadCriteria() would read it a second time, and layering readCeiling() on
   // top would make it three — three snapshots a concurrent save could split
   // the page across.
-  const [rows, scored] = await Promise.all([readAllSettings(), countScoredJobs()]);
-  return {
-    criteria: mergeSettings(DEFAULT_CRITERIA, rows),
-    ceiling: ceilingFrom(rows),
+  //
+  // readAllSettingsResult, NOT readAllSettings: this page is the one caller
+  // that must NOT degrade silently to the shipped defaults. Rendering them as
+  // if they were the user's saved values invites a save that overwrites the
+  // real ones, and there is no history table.
+  const [settings, scored] = await Promise.all([
+    readAllSettingsResult(),
+    countScoredJobs(),
+  ]);
+  return buildSettingsView({
+    rows: settings.rows,
+    settingsError: settings.error,
     scoredJobCount: scored.count,
-    // Gates the rescore prompt across page loads — a client component has no
-    // memory, so "re-show it this session" would bury it on a fresh load.
-    fitBrainOverridden: rows.some((r) => r.key === SETTING_KEYS.fitBrain),
-    error: scored.error,
-  };
+    countError: scored.error,
+  });
 }
 
 async function countScoredJobs(): Promise<{ count: number; error?: string }> {
@@ -215,6 +208,13 @@ export interface RescoreResult {
    * `remaining > 0 && rescored > 0`.
    */
   remaining: number;
+  /**
+   * The pass timestamp `remaining` was counted against. Returned so the caller
+   * can hand it back on the next batch — see `passStartFrom`. Dropping this
+   * from the loop makes every batch count the previous batches' finished rows
+   * as still outstanding, so `remaining` never reaches zero.
+   */
+  passStartedAt: string;
   error?: string;
 }
 
@@ -233,12 +233,20 @@ export interface RescoreResult {
  *
  * Sequential within the batch by design: a parallel fan-out would hit rate
  * limits rather than finish faster.
+ *
+ * `passStartedAt` scopes `remaining` to the WHOLE pass. The first batch omits
+ * it and gets the server's clock back in the result; every later batch must
+ * pass that value in. See passStartFrom in lib/rescore-scope.ts — a per-batch
+ * timestamp makes `remaining` uncloseable and bills full extra passes.
  */
-export async function rescoreAll(opts?: { limit?: number }): Promise<RescoreResult> {
-  // Taken before the first write, so `remaining` counts rows this pass has not
+export async function rescoreAll(opts?: {
+  limit?: number;
+  passStartedAt?: string;
+}): Promise<RescoreResult> {
+  // Taken before the first write, so `remaining` counts rows THE PASS has not
   // touched. updateJob stamps updated_at, which is also what moves finished
   // rows to the back of SCORED_JOBS_SQL's ordering.
-  const passStartedAt = new Date().toISOString();
+  const passStartedAt = passStartFrom(opts?.passStartedAt);
   const limit = clampRescoreLimit(opts?.limit);
   const fitInputs = await loadScoringInputs();
 
@@ -250,6 +258,7 @@ export async function rescoreAll(opts?: { limit?: number }): Promise<RescoreResu
       rescored: 0,
       failed: 0,
       remaining: 0,
+      passStartedAt,
       error: `Could not read jobs — ${error.message}`,
     };
   }
@@ -296,7 +305,12 @@ export async function rescoreAll(opts?: { limit?: number }): Promise<RescoreResu
       `${scoreFailures} scoring failures, ${writeFailures} write failures, ` +
       `${remaining} still to do`
   );
-  return { rescored, failed: scoreFailures + writeFailures, remaining };
+  return {
+    rescored,
+    failed: scoreFailures + writeFailures,
+    remaining,
+    passStartedAt,
+  };
 }
 
 async function countRemaining(passStartedAt: string): Promise<number> {

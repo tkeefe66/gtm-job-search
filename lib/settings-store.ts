@@ -93,12 +93,23 @@ export interface SettingRow {
  * nothing reads and no default documents. A stored null is treated the same
  * way as a missing row, so a bad write degrades to the default instead of
  * blanking a list the crawler depends on.
+ *
+ * Every array value is COPIED, never aliased. `{ ...defaults }` is shallow, so
+ * an un-overridden `criteria.titles` would be DEFAULT_TARGET_TITLES itself —
+ * the module constant, shared by every caller in the process. Nothing sorts or
+ * pushes onto a criteria list today, but the day something does, it would
+ * corrupt the fallback that the crawler and every search path degrade to, for
+ * the lifetime of the process, with no stored row to explain it.
  */
 export function mergeSettings<T extends Record<string, unknown>>(
   defaults: T,
   rows: SettingRow[]
 ): T {
-  const merged = { ...defaults };
+  const merged: Record<string, unknown> = { ...defaults };
+  for (const key of Object.keys(merged)) {
+    const value = merged[key];
+    if (Array.isArray(value)) merged[key] = [...value];
+  }
   for (const row of rows) {
     if (!(row.key in defaults)) continue;
     if (row.value === null || row.value === undefined) continue;
@@ -118,9 +129,12 @@ export function mergeSettings<T extends Record<string, unknown>>(
       );
       continue;
     }
-    (merged as Record<string, unknown>)[row.key] = row.value;
+    // Copied for the same reason the defaults are, above: a stored array is
+    // fresh per read today, but the merged object must not alias anything a
+    // caller could later hold on to.
+    merged[row.key] = Array.isArray(row.value) ? [...row.value] : row.value;
   }
-  return merged;
+  return merged as T;
 }
 
 /**
@@ -149,22 +163,42 @@ export async function readNumberSetting(key: SettingKey): Promise<number | null>
 
 export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
 
-export async function readAllSettings(): Promise<SettingRow[]> {
+/**
+ * The same read as `readAllSettings`, but WITH the failure channel.
+ *
+ * Two readers rather than one because the two callers need opposite things.
+ * The crawler and every search path must degrade to shipped defaults and keep
+ * running (see readAllSettings below) — that swallowing is deliberate and
+ * load-bearing. The settings PAGE must not: with no error channel, a transient
+ * failure on this one query renders the shipped defaults as if they were the
+ * user's saved values, and the next Save overwrites their stored fit brain
+ * with default-derived text. There is no history table to recover it from.
+ */
+export async function readAllSettingsResult(): Promise<{
+  rows: SettingRow[];
+  error?: string;
+}> {
   const { data, error } = await rawQuery<{ key: string; value: unknown }>(
     `select key, value from app_settings`
   );
+  if (error) return { rows: [], error: error.message };
+  return { rows: data ?? [] };
+}
+
+export async function readAllSettings(): Promise<SettingRow[]> {
+  const { rows, error } = await readAllSettingsResult();
   if (error) {
     // Deliberately not thrown: the crawler calls this on every run, and an
     // empty title list would make it silently report "no roles" for every
     // tracked company. Falling back to shipped defaults keeps last-known-good
     // behavior. Loud in the log, invisible in behavior.
     console.error(
-      `settings-store: could not read app_settings — ${error.message}. ` +
+      `settings-store: could not read app_settings — ${error}. ` +
         `Falling back to shipped defaults.`
     );
     return [];
   }
-  return data ?? [];
+  return rows;
 }
 
 /**

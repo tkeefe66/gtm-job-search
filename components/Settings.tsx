@@ -9,8 +9,10 @@ import {
   saveCeiling,
   saveCriteriaList,
   saveCriteriaText,
-  type SettingsView,
 } from "@/app/actions/settings";
+// Type-only, so nothing from lib/settings-store (and therefore nothing from
+// `pg`) is pulled into the client bundle — the import is erased at compile.
+import type { SettingsView } from "@/lib/settings-view";
 import { estimateRunCost, formatEstimate, type EstimateInput } from "@/lib/cost-estimate";
 import {
   FIT_BRAIN_MAX_CHARS,
@@ -18,11 +20,7 @@ import {
   validateText,
 } from "@/lib/criteria-validation";
 import { removedTitles, removedTitlesWarning } from "@/lib/removed-titles";
-import {
-  maxRescoreBatches,
-  rescoreSummary,
-  shouldContinueRescore,
-} from "@/lib/rescore-progress";
+import { rescoreSummary, runRescorePass } from "@/lib/rescore-progress";
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 
@@ -316,11 +314,11 @@ export default function Settings() {
   /**
    * Drives rescoreAll's batches from the client.
    *
-   * rescoreAll is ONE bounded batch (25 rows) and returns `remaining`, so
-   * finishing a large pipeline takes several calls. The loop condition is
-   * shouldContinueRescore — `remaining > 0` alone would spin forever on a row
-   * that cannot be scored — and maxRescoreBatches is a second, independent
-   * bound so no arithmetic bug can bill indefinitely.
+   * The loop itself lives in runRescorePass (lib/rescore-progress.ts) rather
+   * than here, because its load-bearing rule — take the pass timestamp ONCE
+   * and thread it into every batch — is only observable across batches, and a
+   * loop written inline in a React component cannot be tested in this repo.
+   * Out there it is pinned by a simulated multi-batch pass.
    */
   async function handleRescore() {
     const total = view?.scoredJobCount ?? 0;
@@ -328,36 +326,36 @@ export default function Settings() {
     setRescoreError(null);
     setRescoreNotice(null);
 
-    let rescored = 0;
-    let failed = 0;
-    let remaining = 0;
-
     try {
-      const budget = maxRescoreBatches(total);
-      for (let batch = 0; batch < budget; batch++) {
-        const res = await rescoreAll();
-        if (res.error) {
-          setRescoreError(res.error);
-          break;
-        }
-        rescored += res.rescored;
-        failed += res.failed;
-        remaining = res.remaining;
+      const pass = await runRescorePass({
+        total,
+        // passStartedAt is undefined on the first batch (the server mints it)
+        // and is the first batch's value on every one after; limit shrinks to
+        // whatever is actually left, so the tail batch buys no repeat work.
+        runBatch: (args) => rescoreAll(args),
         // Progress after every batch, so a long pass is not a silent one.
-        setRescoreNotice(rescoreSummary({ rescored, failed, remaining }));
-        if (!shouldContinueRescore(res)) break;
+        onProgress: (totals) => setRescoreNotice(rescoreSummary(totals)),
+      });
+
+      if (pass.error) {
+        setRescoreError(pass.error);
+        // Partial work still happened; report it rather than losing the count.
+        if (pass.rescored > 0 || pass.failed > 0) {
+          setRescoreNotice(rescoreSummary(pass));
+        }
+      } else {
+        setRescoreNotice(rescoreSummary(pass));
       }
-      setRescoreNotice(rescoreSummary({ rescored, failed, remaining }));
       // Collapse the offer only when the pass actually finished. Rows left
       // over, or rows that failed, keep the prompt on screen so a second run
       // is one click away — and a fresh page load re-offers it either way.
-      if (rescored > 0 && remaining === 0) setRescoreDismissed(true);
-    } catch (err) {
-      setRescoreError(`Rescore failed — ${message(err)}`);
-      // Partial work still happened; report it rather than losing the count.
-      if (rescored > 0) {
-        setRescoreNotice(rescoreSummary({ rescored, failed, remaining }));
+      if (!pass.error && pass.rescored > 0 && pass.remaining === 0) {
+        setRescoreDismissed(true);
       }
+    } catch (err) {
+      // runRescorePass captures a rejected batch as `error` rather than
+      // throwing, so this is a belt-and-braces net around the state updates.
+      setRescoreError(`Rescore failed — ${message(err)}`);
     } finally {
       setRescoring(false);
     }
