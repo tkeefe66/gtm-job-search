@@ -183,6 +183,13 @@ describe("runsEligibleForClosure", () => {
   test("a run with an unparseable finished_at is dropped loudly, not silently", () => {
     // crawl_runs.finished_at is nullable (db/schema.sql) — a 'running' row has
     // none. It must not be treated as newer than the cutoff.
+    //
+    // What this test actually pins is OBSERVABILITY, not the drop. Deleting
+    // the guard block changes no behavior at all: Date.parse(null) is NaN and
+    // `NaN > cutoff` is already false, so the run is excluded either way. All
+    // that disappears is the warning — and that warning is the only thing that
+    // would ever explain a closure system which had quietly stopped closing.
+    // Hence the spy assertion below; without it this test is near-vacuous.
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const withNull: ClosureRun[] = [
       { finished_at: null as unknown as string, titles: ["x"] },
@@ -251,9 +258,16 @@ describe("closureEvidenceTitles", () => {
     { finished_at: "2026-08-03T00:00:00Z", titles: ["head of revops"] },
   ];
 
+  // The cutoff is passed as a RunContext slice, not a bare string, so that a
+  // literal `null` in that argument position — which silently disables the
+  // gate — cannot type-check. Sealing only closeStalePostings left this use
+  // site open; the review caught it surviving.
+  const CHANGED = { criteriaChangedAt: "2026-08-05T00:00:00Z" };
+  const NEVER_CHANGED = { criteriaChangedAt: null };
+
   test("drops the title lists of runs that predate the criteria change", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const evidence = closureEvidenceTitles("Clay", RUNS, "2026-08-05T00:00:00Z");
+    const evidence = closureEvidenceTitles("Clay", RUNS, CHANGED);
     expect(evidence).toEqual([["gtm engineer"]]);
     spy.mockRestore();
   });
@@ -263,7 +277,7 @@ describe("closureEvidenceTitles", () => {
     // are actually composed: one eligible run is not enough to close anything,
     // so a role the crawler stopped looking for survives the edit.
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const evidence = closureEvidenceTitles("Clay", RUNS, "2026-08-05T00:00:00Z");
+    const evidence = closureEvidenceTitles("Clay", RUNS, CHANGED);
     expect(evidence.length).toBe(1);
     expect(titlesToClose(evidence, ["head of revops"])).toEqual([]);
     spy.mockRestore();
@@ -272,18 +286,21 @@ describe("closureEvidenceTitles", () => {
   test("without a criteria change both runs stay as evidence and closure still works", () => {
     // Guards against over-correction: the debounce must keep closing roles in
     // the ordinary no-edit case.
-    const evidence = closureEvidenceTitles("Clay", RUNS, null);
+    const evidence = closureEvidenceTitles("Clay", RUNS, NEVER_CHANGED);
     expect(evidence).toEqual([["gtm engineer"], ["head of revops"]]);
     expect(titlesToClose(evidence, ["marketing ops manager"])).toEqual([
       "marketing ops manager",
     ]);
   });
 
-  test("logs the suppression, naming the company and how many runs were dropped", () => {
+  test("logs the suppression, naming the emitting function, the company, and how many runs were dropped", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    closureEvidenceTitles("Clay", RUNS, "2026-08-05T00:00:00Z");
+    closureEvidenceTitles("Clay", RUNS, CHANGED);
     expect(spy).toHaveBeenCalledTimes(1);
     const logged = spy.mock.calls[0][0] as string;
+    // The prefix must name the function that actually emits the line, or
+    // grepping it out of production logs lands in the wrong place.
+    expect(logged).toContain("closureEvidenceTitles");
     expect(logged).toContain("Clay");
     expect(logged).toContain("1 run(s)");
     spy.mockRestore();
@@ -291,7 +308,7 @@ describe("closureEvidenceTitles", () => {
 
   test("logs nothing when no run was excluded", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    closureEvidenceTitles("Clay", RUNS, null);
+    closureEvidenceTitles("Clay", RUNS, NEVER_CHANGED);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });

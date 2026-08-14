@@ -435,16 +435,21 @@ export const STALE_POSTING_CANDIDATES_SQL = `select id, role_title from jobs
  * compiles, type-checks, passes every runsEligibleForClosure test, and quietly
  * reinstates the exact auto-closure bug this task exists to prevent. Out here
  * that mutation is a one-line test instead of an untestable seam.
+ *
+ * The cutoff arrives as `Pick<RunContext, "criteriaChangedAt">`, not a bare
+ * `string | null`, for the same reason closeStalePostings takes the whole
+ * RunContext: a literal `null` in this argument position disables the gate and
+ * would otherwise type-check. Sealing only the caller left this use site open.
  */
 export function closureEvidenceTitles(
   company: string,
   runs: ClosureRun[],
-  criteriaChangedAt: string | null
+  ctx: Pick<RunContext, "criteriaChangedAt">
 ): string[][] {
-  const eligible = runsEligibleForClosure(runs, criteriaChangedAt);
+  const eligible = runsEligibleForClosure(runs, ctx.criteriaChangedAt);
   if (eligible.length < runs.length) {
     console.log(
-      `closeStalePostings(${company}): ${runs.length - eligible.length} run(s) predate ` +
+      `closureEvidenceTitles(${company}): ${runs.length - eligible.length} run(s) predate ` +
         `the last criteria change and were excluded from closure evidence`
     );
   }
@@ -471,7 +476,7 @@ async function closeStalePostings(
     key: normalizeTitle(r.role_title),
   }));
   const toClose = titlesToClose(
-    closureEvidenceTitles(company, runs, ctx.criteriaChangedAt),
+    closureEvidenceTitles(company, runs, ctx),
     active.map((a) => a.key)
   );
   if (toClose.length === 0) return;
