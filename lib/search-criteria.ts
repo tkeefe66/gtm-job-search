@@ -86,13 +86,13 @@ export function roleExtractionSchema(): string {
 
 export const DEFAULT_LOCATION_TERMS = ["Denver", "Colorado", "remote"];
 
-export interface Criteria {
+export type Criteria = {
   titles: string[];
   locations: string[];
   stackTerms: string[];
   locationRule: string;
   fitBrain: string;
-}
+};
 
 export const DEFAULT_CRITERIA: Criteria = {
   titles: DEFAULT_TARGET_TITLES,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
+  dateContextLine,
   pickQueries,
   roleExtractionSchema,
   stackQueries,
@@ -119,6 +120,11 @@ describe("pickQueries", () => {
     expect(pickQueries(list.slice(0, 5), 10)).toEqual(list.slice(0, 5));
   });
 
+  test("returns the input unchanged when the cap exactly equals the length", () => {
+    const input = ["a", "b", "c"];
+    expect(pickQueries(input, 3)).toEqual(input);
+  });
+
   test("returns exactly the cap when the input exceeds it", () => {
     expect(pickQueries(list, 15).length).toBe(15);
   });
@@ -149,6 +155,24 @@ describe("pickQueries", () => {
     }
   });
 
+  test("covers every entry in DEFAULT_CRITERIA.locations", () => {
+    const queries = titleQueries(DEFAULT_CRITERIA);
+    const picked = pickQueries(queries, 15);
+    expect(picked.length).toBe(15);
+    for (const place of DEFAULT_CRITERIA.locations) {
+      expect(picked.some((q) => q.includes(place))).toBe(true);
+    }
+  });
+
+  test("stack queries: covers every entry in DEFAULT_CRITERIA.stackTerms at cap 15", () => {
+    const queries = stackQueries(DEFAULT_CRITERIA);
+    const picked = pickQueries(queries, 15);
+    expect(picked.length).toBe(15);
+    for (const tool of DEFAULT_CRITERIA.stackTerms) {
+      expect(picked.some((q) => q.includes(`"${tool}"`))).toBe(true);
+    }
+  });
+
   test("a cap of zero or less yields nothing", () => {
     expect(pickQueries(list, 0)).toEqual([]);
     expect(pickQueries(list, -1)).toEqual([]);
@@ -176,5 +200,23 @@ describe("roleExtractionSchema", () => {
     ]) {
       expect(schema).toContain(field);
     }
+  });
+});
+
+describe("dateContextLine", () => {
+  test("states the supplied date in ISO form", () => {
+    expect(dateContextLine(new Date("2026-08-13T12:00:00Z"))).toContain("2026-08-13");
+  });
+
+  test("tracks the clock rather than hardcoding a year", () => {
+    // The bug this exists to prevent was a hardcoded-feeling year. A literal
+    // "2026" in the implementation would pass the test above and fail this one.
+    expect(dateContextLine(new Date("2031-01-05T00:00:00Z"))).toContain("2031-01-05");
+    expect(dateContextLine(new Date("2031-01-05T00:00:00Z"))).not.toContain("2026");
+  });
+
+  test("forbids appending a year, which is the observed failure", () => {
+    const line = dateContextLine(new Date("2026-08-13T12:00:00Z"));
+    expect(line.toLowerCase()).toContain("do not append a year");
   });
 });
