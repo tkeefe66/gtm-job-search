@@ -3,12 +3,15 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { normalizeTitle } from "@/lib/role-key";
+import type { FitInputs } from "@/lib/fit-inputs";
 import {
-  LOCATION_RULE,
   ROLE_SEARCH_SYSTEM,
+  loadCriteria,
   roleExtractionSchema,
   titleListForPrompt,
+  type Criteria,
 } from "@/lib/search-criteria";
+import { readCriteriaChangedAt } from "@/lib/settings-store";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type {
   CrawlMethod,
@@ -31,9 +34,38 @@ export interface CrawlOutcome {
   error?: string;
 }
 
+/**
+ * Everything a crawl run needs from settings, resolved once and passed down.
+ *
+ * Bundled as one object rather than three sibling parameters because the
+ * companion compensation plan adds a field here and no signature reopens.
+ * The cron route builds it ONCE before its batch loop and hands the same
+ * object to every iteration: a settings save landing mid-batch must not split
+ * one run across two title lists.
+ */
+export interface RunContext {
+  criteria: Criteria;
+  fitInputs: FitInputs;
+  criteriaChangedAt: string | null;
+}
+
+/**
+ * Resolves a RunContext from the database. One settings read (inside
+ * loadCriteria) plus one timestamp read — fitInputs is derived from the
+ * criteria already in hand rather than re-reading via loadScoringInputs.
+ */
+export async function loadRunContext(): Promise<RunContext> {
+  const [criteria, criteriaChangedAt] = await Promise.all([
+    loadCriteria(),
+    readCriteriaChangedAt(),
+  ]);
+  return { criteria, fitInputs: { fitBrain: criteria.fitBrain }, criteriaChangedAt };
+}
+
 export function buildExtractionPrompt(
   company: string,
-  page: ExtractedPage
+  page: ExtractedPage,
+  criteria: Criteria
 ): string {
   const links = page.links
     .map((l) => `${l.text || "(no text)"} -> ${l.href}`)
@@ -41,9 +73,9 @@ export function buildExtractionPrompt(
 
   return `Below is the text and link list scraped from the careers page of "${company}".
 
-Identify every open role matching any of these titles or close variants: ${titleListForPrompt()}.
+Identify every open role matching any of these titles or close variants: ${titleListForPrompt(criteria)}.
 
-${LOCATION_RULE}
+${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
@@ -73,11 +105,56 @@ ${links}`;
  * it meant the single most common real case, a company taking down its last
  * remaining posting, never closed anything). 'error' and 'needs_url' runs
  * are never passed in: a fetch failure must not close a live job.
+ *
+ * runsEligibleForClosure below extends the same principle one step further:
+ * a run from before the user last edited the search criteria was looking for
+ * a different title list, so it is also not evidence, and is filtered out
+ * before it ever reaches this function.
  */
 export function titlesToClose(runs: string[][], activeTitles: string[]): string[] {
   if (runs.length < 2) return [];
   const stillListed = new Set(runs.flat());
   return activeTitles.filter((t) => !stillListed.has(t));
+}
+
+/** One past crawl run, as closure evidence: when it finished, what it saw. */
+export interface ClosureRun {
+  finished_at: string;
+  titles: string[];
+}
+
+/**
+ * Which past crawl runs may be used as evidence that a posting is gone.
+ *
+ * titlesToClose already refuses to close on 'error' or 'needs_url' runs,
+ * because a fetch failure is not evidence a job vanished. Editing the title
+ * list is the same class of non-evidence: the crawler simply stopped looking
+ * for that title, so its absence from a later run says nothing about whether
+ * the posting is still up. Runs from before the change are therefore dropped,
+ * which pushes the count under titlesToClose's two-run minimum and closes
+ * nothing until two clean runs have happened under the current criteria.
+ *
+ * A run exactly at the change timestamp is excluded: it may have been in
+ * flight when the save landed.
+ */
+export function runsEligibleForClosure(
+  runs: ClosureRun[],
+  criteriaChangedAt: string | null
+): ClosureRun[] {
+  if (!criteriaChangedAt) return runs;
+  const cutoff = Date.parse(criteriaChangedAt);
+  if (Number.isNaN(cutoff)) return runs;
+  return runs.filter((r) => {
+    const at = Date.parse(r.finished_at);
+    if (Number.isNaN(at)) {
+      // A nullable/unfinalized finished_at must not silently count as evidence.
+      console.warn(
+        `runsEligibleForClosure: run with unparseable finished_at "${r.finished_at}" excluded`
+      );
+      return false;
+    }
+    return at > cutoff;
+  });
 }
 
 async function fetchPage(url: string): Promise<string | null> {
@@ -229,7 +306,8 @@ type FetchTierResult =
 
 async function extractViaFetch(
   company: string,
-  careersUrl: string
+  careersUrl: string,
+  criteria: Criteria
 ): Promise<FetchTierResult> {
   if (!(await fetchAllowed(careersUrl))) {
     console.log(
@@ -249,7 +327,7 @@ async function extractViaFetch(
 
   const raw = await callStructured({
     system: ROLE_SEARCH_SYSTEM,
-    prompt: buildExtractionPrompt(company, classification.page),
+    prompt: buildExtractionPrompt(company, classification.page, criteria),
     maxTokens: 4000,
   });
   return { kind: "roles", roles: rolesFromRaw(raw) };
@@ -257,12 +335,13 @@ async function extractViaFetch(
 
 async function extractViaSearch(
   company: string,
-  careersUrl: string | null
+  careersUrl: string | null,
+  criteria: Criteria
 ): Promise<Role[]> {
   const hint = careersUrl ? ` Their careers page may be: ${careersUrl}.` : "";
   const raw = await callWithWebSearch({
     system: ROLE_SEARCH_SYSTEM,
-    prompt: `Search for open go-to-market and revenue operations roles at "${company}".${hint} Look for these titles: ${titleListForPrompt()}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${LOCATION_RULE}
+    prompt: `Search for open go-to-market and revenue operations roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
@@ -279,22 +358,47 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
 // string-content test without a database, same pattern as
 // STALE_POSTING_CANDIDATES_SQL below. 'error' and 'needs_url' must never
 // appear here: a fetch failure is not evidence a role is gone.
-export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles from crawl_runs
+// finished_at is selected alongside role_titles because runsEligibleForClosure
+// dates each run against the criteria-change stamp. rawQuery's row type is an
+// assertion rather than something inferred from this string, so dropping the
+// column compiles clean and silently disables closure — hence the string test.
+export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles, finished_at from crawl_runs
       where company = $1 and status in ('ok', 'empty')
       order by started_at desc
       limit 1`;
 
+/** A crawl_runs row as LAST_TRUSTWORTHY_RUN_SQL returns it. */
+export interface TrustworthyRunRow {
+  role_titles: string[] | null;
+  finished_at: string | null;
+}
+
 /**
- * Titles seen on the single most recent run that produced a trustworthy
- * "here's what's currently listed" signal (status 'ok' or 'empty'), or []
- * if there is none.
+ * Maps crawl_runs rows onto closure evidence.
+ *
+ * Exported only so it can be tested without a database, and it is worth
+ * testing because it is the last link in the finished_at chain: the SQL
+ * selecting the column and runsEligibleForClosure reading it are both pinned,
+ * but a mapper that quietly failed to carry finished_at across would leave
+ * every previous run unparseable — dropped, closure disabled after the first
+ * criteria edit, no error anywhere.
  */
-async function lastSuccessfulTitles(company: string): Promise<string[][]> {
-  const { data } = await rawQuery<{ role_titles: string[] }>(
-    LAST_TRUSTWORTHY_RUN_SQL,
-    [company]
-  );
-  return (data ?? []).map((r) => r.role_titles ?? []);
+export function closureRunsFromRows(rows: TrustworthyRunRow[]): ClosureRun[] {
+  return rows.map((r) => ({
+    finished_at: r.finished_at as string,
+    titles: r.role_titles ?? [],
+  }));
+}
+
+/**
+ * The single most recent run that produced a trustworthy "here's what's
+ * currently listed" signal (status 'ok' or 'empty'), or [] if there is none.
+ */
+async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
+  const { data } = await rawQuery<TrustworthyRunRow>(LAST_TRUSTWORTHY_RUN_SQL, [
+    company,
+  ]);
+  return closureRunsFromRows(data ?? []);
 }
 
 // The crawler may only retract its OWN findings that the user has never
@@ -321,9 +425,46 @@ export const STALE_POSTING_CANDIDATES_SQL = `select id, role_title from jobs
         and source = 'Crawl'
         and status = 'New'`;
 
+/**
+ * The title lists titlesToClose is allowed to weigh, with any run predating
+ * the last criteria change removed.
+ *
+ * Exported and lifted out of closeStalePostings (which needs a database) for
+ * one specific reason: the whole gate is expressed as *which array gets
+ * mapped*, and writing `runs.map(...)` where `eligible.map(...)` belongs
+ * compiles, type-checks, passes every runsEligibleForClosure test, and quietly
+ * reinstates the exact auto-closure bug this task exists to prevent. Out here
+ * that mutation is a one-line test instead of an untestable seam.
+ *
+ * The cutoff arrives as `Pick<RunContext, "criteriaChangedAt">`, not a bare
+ * `string | null`, for the same reason closeStalePostings takes the whole
+ * RunContext: a literal `null` in this argument position disables the gate and
+ * would otherwise type-check. Sealing only the caller left this use site open.
+ */
+export function closureEvidenceTitles(
+  company: string,
+  runs: ClosureRun[],
+  ctx: Pick<RunContext, "criteriaChangedAt">
+): string[][] {
+  const eligible = runsEligibleForClosure(runs, ctx.criteriaChangedAt);
+  if (eligible.length < runs.length) {
+    console.log(
+      `closureEvidenceTitles(${company}): ${runs.length - eligible.length} run(s) predate ` +
+        `the last criteria change and were excluded from closure evidence`
+    );
+  }
+  return eligible.map((r) => r.titles);
+}
+
+// Takes the whole RunContext rather than a bare `string | null` on purpose:
+// `closeStalePostings(company, runs, null)` would otherwise type-check, and
+// silently passing null here disables the criteria gate — the one thing this
+// function exists to enforce. Requiring the context makes that a deliberate
+// object literal instead of a plausible-looking argument.
 async function closeStalePostings(
   company: string,
-  runs: string[][]
+  runs: ClosureRun[],
+  ctx: RunContext
 ): Promise<void> {
   const { data } = await rawQuery<{ id: string; role_title: string }>(
     STALE_POSTING_CANDIDATES_SQL,
@@ -335,7 +476,7 @@ async function closeStalePostings(
     key: normalizeTitle(r.role_title),
   }));
   const toClose = titlesToClose(
-    runs,
+    closureEvidenceTitles(company, runs, ctx),
     active.map((a) => a.key)
   );
   if (toClose.length === 0) return;
@@ -360,11 +501,20 @@ async function closeStalePostings(
   }
 }
 
+/**
+ * `opts.ctx` is the batch escape hatch: the cron route resolves settings once
+ * and passes the same RunContext into every company, so one batch is crawled
+ * against one consistent set of criteria (and pays for one settings read, not
+ * one per company). The two single-company callers in app/actions/watchlist.ts
+ * omit it and get a freshly-loaded context, which is what makes "save the
+ * settings, then hit Check now" reflect the edit immediately.
+ */
 export async function crawlCompany(
   company: string,
-  opts: { dryRun?: boolean } = {}
+  opts: { dryRun?: boolean; ctx?: RunContext } = {}
 ): Promise<CrawlOutcome> {
   const dryRun = opts.dryRun ?? false;
+  const ctx = opts.ctx ?? (await loadRunContext());
 
   const { data: row, error: watchlistReadError } = await supabase
     .from("watchlist")
@@ -461,7 +611,7 @@ export async function crawlCompany(
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
       let fetchResult: FetchTierResult | null = null;
       if (tracked.crawl_method !== "search") {
-        fetchResult = await extractViaFetch(company, careersUrl);
+        fetchResult = await extractViaFetch(company, careersUrl, ctx.criteria);
       }
 
       if (fetchResult?.kind === "roles") {
@@ -479,7 +629,7 @@ export async function crawlCompany(
         // what actually ran, whether or not this run taught us anything new.
         learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
         runMethod = "search";
-        roles = await extractViaSearch(company, careersUrl);
+        roles = await extractViaSearch(company, careersUrl, ctx.criteria);
       }
 
       // Read the previous trustworthy run BEFORE this run's row is finalized.
@@ -498,6 +648,7 @@ export async function crawlCompany(
         },
         source: "Crawl",
         dryRun,
+        fitInputs: ctx.fitInputs,
       });
 
       newRoles = result.added.length;
@@ -514,7 +665,18 @@ export async function crawlCompany(
       if (!dryRun) {
         // [current run, previous trustworthy run] — a role closes only when
         // absent from both, so nothing found today is ever closed today.
-        await closeStalePostings(company, [seenTitles, ...previousRun]);
+        //
+        // The current run's crawl_runs row is not finalized until after this
+        // block, so it has no finished_at to read back. Stamping "now" here is
+        // deliberate and correct: the run IS finishing, and leaving it
+        // null/undefined would make runsEligibleForClosure drop the current
+        // run as unparseable, permanently disabling closure after the first
+        // criteria edit.
+        await closeStalePostings(
+          company,
+          [{ finished_at: new Date().toISOString(), titles: seenTitles }, ...previousRun],
+          ctx
+        );
       }
     }
   } catch (err) {

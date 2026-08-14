@@ -2,8 +2,19 @@
 // location. These were duplicated across the prompts in app/actions/roles.ts
 // and app/actions/discover.ts; the crawler and role search add two more
 // callers, so they live here now.
+//
+// The DEFAULT_* constants below are the fresh-install seed and runtime
+// fallback. The actual criteria the app runs on is a `Criteria` object —
+// shipped defaults overlaid with any user-saved overrides — produced by
+// `loadCriteria()` at the bottom of this file. The pure query-building
+// functions take that object as a parameter so they stay testable without a
+// database.
 
-export const TARGET_TITLES = [
+import type { FitInputs } from "@/lib/fit-inputs";
+import { ceilingFrom, mergeSettings, readAllSettings } from "@/lib/settings-store";
+import type { RoleSearchFamily } from "@/lib/types";
+
+export const DEFAULT_TARGET_TITLES = [
   "Head of GTM Systems",
   "VP of GTM Systems",
   "Director of GTM Systems",
@@ -21,7 +32,7 @@ export const TARGET_TITLES = [
 
 // Tools that identify these roles even when the title is idiosyncratic
 // (Business Systems Manager, Growth Systems Lead, and similar).
-export const GTM_STACK_TERMS = [
+export const DEFAULT_GTM_STACK_TERMS = [
   "Salesforce",
   "HubSpot",
   "Clay",
@@ -32,7 +43,7 @@ export const GTM_STACK_TERMS = [
   "Looker",
 ];
 
-export const LOCATION_RULE =
+export const DEFAULT_LOCATION_RULE =
   "Only include roles that are fully remote OR list at least one location in " +
   "Colorado (Denver, Boulder, Colorado Springs, Fort Collins, CO). Exclude " +
   'roles available only in other cities with no remote option. If a role lists ' +
@@ -42,9 +53,19 @@ export const ROLE_SEARCH_SYSTEM =
   "You are a recruiting researcher specializing in go-to-market and revenue " +
   "operations roles. Return ONLY valid JSON, no markdown, no preamble.";
 
-export function titleListForPrompt(): string {
-  return TARGET_TITLES.join(", ");
-}
+export const DEFAULT_FIT_BRAIN = `
+Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
+- 13+ years architecting B2B revenue engines; 6+ years inside the ABM/ABX product category (Demandbase, Engagio)
+- Current: Director of GTM Experts at Demandbase — leads a team that architects GTM systems and AI workflows for enterprise customers (BlackRock, Boeing, Microsoft, SAP Concur, Snowflake); influenced $43M+ in won revenue and $96M+ in pipeline
+- Deep expertise: the quantitative spine of GTM — pipeline waterfall modeling, ICP analysis, capacity planning, attribution, predictive account scoring, forecasting; QBR / board narrative work with CMOs, CROs, and RevOps leaders
+- Tooling: Marketo, Salesforce, Tableau, Bizible, LeanData, Workato, Outreach; led Pardot→Marketo migrations and multiple acquisition data migrations
+- AI builder: ships AI-first products and agentic workflows hands-on ("vibe-codes" working prototypes) — built a live AI product demo for a flagship event, a multi-agent B2B news intelligence agent, and other agentic apps
+- Strong: GTM systems architecture, marketing/revenue operations leadership, AI/agentic GTM workflows, enterprise B2B SaaS, data-driven GTM strategy, executive storytelling, cross-functional leadership (Sales, Marketing, Product, CS, Finance)
+- Weaker fit: pure people-management roles with no systems/building, non-B2B or non-SaaS industries, roles with no AI/automation upside, deeply technical software-engineering roles
+- Looking for: Head / VP / Director of GTM Systems, RevOps, Revenue Operations, Marketing Operations, GTM Strategy, or GTM/AI Operations — plus GTM Engineer and AI-Ops practitioner-builder roles where hands-on systems + agentic AI work is the point
+- Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
+- Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
+`.trim();
 
 export function roleExtractionSchema(): string {
   return [
@@ -65,36 +86,62 @@ export function roleExtractionSchema(): string {
 // Systems Manager, Growth Systems Lead — that title search structurally
 // misses. Titles in this function vary wildly; the tooling does not.
 
-export const LOCATION_TERMS = ["Denver", "Colorado", "remote"];
+export const DEFAULT_LOCATION_TERMS = ["Denver", "Colorado", "remote"];
 
-export function titleQueries(): string[] {
+export type Criteria = {
+  titles: string[];
+  locations: string[];
+  stackTerms: string[];
+  locationRule: string;
+  fitBrain: string;
+};
+
+export const DEFAULT_CRITERIA: Criteria = {
+  titles: DEFAULT_TARGET_TITLES,
+  locations: DEFAULT_LOCATION_TERMS,
+  stackTerms: DEFAULT_GTM_STACK_TERMS,
+  locationRule: DEFAULT_LOCATION_RULE,
+  fitBrain: DEFAULT_FIT_BRAIN,
+};
+
+export function titleListForPrompt(criteria: Criteria): string {
+  return criteria.titles.join(", ");
+}
+
+export function titleQueries(criteria: Criteria): string[] {
   const queries: string[] = [];
-  for (const title of TARGET_TITLES) {
-    for (const place of LOCATION_TERMS) {
+  for (const title of criteria.titles) {
+    for (const place of criteria.locations) {
       queries.push(`"${title}" ${place} job opening`);
     }
   }
   return queries;
 }
 
-export function stackQueries(): string[] {
+export function stackQueries(criteria: Criteria): string[] {
   const queries: string[] = [];
-  for (const tool of GTM_STACK_TERMS) {
-    for (const place of LOCATION_TERMS) {
+  for (const tool of criteria.stackTerms) {
+    for (const place of criteria.locations) {
       queries.push(`"${tool}" revenue operations hiring ${place}`);
     }
   }
   return queries;
 }
 
+// The runaway rail, not a coverage ration. Measured cost of an uncapped title
+// run is ~$1.13 against ~$0.55 capped — the old fixed cap of 15 rationed
+// coverage on the most central titles to save about sixty cents, which is the
+// wrong trade for a job search. When the user sets no ceiling, max_uses is
+// this multiple of the query count: high enough never to bind in normal use,
+// low enough to stop a loop. When the user does set a ceiling, that wins.
+export const MAX_QUERY_MULTIPLIER = 2;
+
 // Web searches are billed per search, so a call gets a bounded subset of the
 // full query enumeration rather than all 39 title / 24 stack queries. Selection
 // is a proportional spread rather than a head slice: the query list is
 // title-major, so `slice(0, 15)` would cover only the first 5 of 13 titles,
 // while striding proportionally covers every title and all three location terms.
-export const MAX_QUERIES_PER_SEARCH = 15;
-
-export function pickQueries(queries: string[], cap: number = MAX_QUERIES_PER_SEARCH): string[] {
+export function pickQueries(queries: string[], cap: number): string[] {
   if (cap <= 0) return [];
   if (queries.length <= cap) return queries;
   const out: string[] = [];
@@ -102,6 +149,61 @@ export function pickQueries(queries: string[], cap: number = MAX_QUERIES_PER_SEA
     out.push(queries[Math.floor((i * queries.length) / cap)]);
   }
   return out;
+}
+
+export type QueryPlan = {
+  /** The subset actually offered to the model in the prompt. */
+  queries: string[];
+  /** `max_uses` on the web_search tool block — the hard billing ceiling. */
+  maxSearches: number;
+  /** Human-readable "why these" for the log line. */
+  reason: string;
+};
+
+/**
+ * Turns the full query enumeration plus the user's optional ceiling into the
+ * two numbers the search call needs. Extracted from findRolesByCriteria (which
+ * is unreachable from a test — it reads the database and calls Claude) so the
+ * precedence rule below is pinned by lib/search-criteria.test.ts.
+ *
+ * A stored ceiling of 0 or a negative — a bad hand-write, or a settings form
+ * that lets an empty field through as 0 — is treated as "no ceiling set", not
+ * as "run zero searches". The two decisions must agree: a naive
+ * `ceiling ? pickQueries(...) : all` is *falsy* at 0 and sends the full list,
+ * while a naive `ceiling ?? all.length * MULT` is *not nullish* at 0 and caps
+ * max_uses at 0 — handing the model 39 queries and forbidding it from running
+ * any of them, which reads as "the search found nothing" rather than as an
+ * error. Normalizing once, here, is what keeps them from disagreeing.
+ */
+export function planQueries(
+  allQueries: string[],
+  ceiling: number | null
+): QueryPlan {
+  const ignored = ceiling !== null && ceiling <= 0;
+  if (ignored) {
+    // A stored ceiling that cannot be honored must say so. Reporting it as
+    // "no ceiling set" would make the diagnostic lie about the single input
+    // it exists to explain — the user set a value, and the run ignored it.
+    console.warn(
+      `search-criteria: ignoring a stored search ceiling of ${ceiling} — a ceiling ` +
+        `must be at least 1. Running with no ceiling. Set a positive value on the ` +
+        `Settings page, or clear the field to run uncapped on purpose.`
+    );
+  }
+  const cap = ignored || ceiling === null ? null : ceiling;
+  const queries = cap === null ? allQueries : pickQueries(allQueries, cap);
+  // Floored at 1: max_uses: 0 is a request the API would reject outright, and
+  // an empty criteria list (every title deleted) would otherwise produce it.
+  const maxSearches = Math.max(1, cap ?? allQueries.length * MAX_QUERY_MULTIPLIER);
+  return {
+    queries,
+    maxSearches,
+    reason: ignored
+      ? `stored ceiling ${ceiling} ignored (must be >= 1), max_uses ${maxSearches}`
+      : cap === null
+        ? `no ceiling set, max_uses ${maxSearches}`
+        : `ceiling ${cap}, max_uses ${maxSearches}`,
+  };
 }
 
 // The model has no idea what today's date is, so a prompt that only says
@@ -117,4 +219,71 @@ export function dateContextLine(now: Date = new Date()): string {
     `the search engine already returns current results, and an invented year ` +
     `biases the results toward stale postings.`
   );
+}
+
+/**
+ * The criteria the app is actually running on: shipped defaults with any
+ * user-saved overrides on top. Never throws — a failed read logs and returns
+ * the defaults (see readAllSettings), because the crawler calls this on every
+ * run and an empty title list would make it silently find nothing.
+ */
+export async function loadCriteria(): Promise<Criteria> {
+  const rows = await readAllSettings();
+  return mergeSettings(DEFAULT_CRITERIA, rows);
+}
+
+/**
+ * Everything a role search needs from settings, off ONE read of app_settings.
+ *
+ * Not `loadCriteria()` followed by `readCeiling()`: that is two round trips,
+ * and a save landing between them would run the search with one version's
+ * title list and another version's ceiling. Same consistency rule the crawl
+ * batch gets from RunContext.
+ */
+export async function loadSearchInputs(): Promise<{
+  criteria: Criteria;
+  ceiling: number | null;
+}> {
+  const rows = await readAllSettings();
+  return { criteria: mergeSettings(DEFAULT_CRITERIA, rows), ceiling: ceilingFrom(rows) };
+}
+
+/**
+ * Why a search cannot run at all, or null when it can.
+ *
+ * With every title (or every location) deleted the enumeration is empty, and
+ * the search below would still build a prompt with an empty bullet list, spend
+ * a Claude call, and return nothing — indistinguishable from "the market has
+ * no matching roles". Pure and exported so the guard is testable;
+ * findRolesByCriteria itself reads the database and calls the model.
+ */
+export function emptySearchReason(
+  family: RoleSearchFamily,
+  criteria: Criteria
+): string | null {
+  const missing: string[] = [];
+  if (family === "title" && criteria.titles.length === 0) missing.push("target titles");
+  if (family === "stack" && criteria.stackTerms.length === 0) missing.push("stack terms");
+  if (criteria.locations.length === 0) missing.push("location terms");
+  if (missing.length === 0) return null;
+  return (
+    `Cannot run the ${family} search: your ${missing.join(" and ")} list is empty, ` +
+    `so there are no queries to send. Add at least one entry on the Settings page, ` +
+    `or reset that list to its default.`
+  );
+}
+
+/**
+ * The fit-scoring inputs, resolved the same way `loadCriteria` resolves the
+ * search criteria. Lives here rather than in lib/settings-store.ts because the
+ * shipped default it falls back to (`DEFAULT_FIT_BRAIN`, via DEFAULT_CRITERIA)
+ * lives here, and settings-store must not import this file — search-criteria
+ * already imports settings-store.
+ *
+ * Callers that already hold a `Criteria` should build `{ fitBrain: c.fitBrain }`
+ * directly instead of calling this: it costs a second settings read.
+ */
+export async function loadScoringInputs(): Promise<FitInputs> {
+  const rows = await readAllSettings();
+  return { fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain };
 }

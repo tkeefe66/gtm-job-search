@@ -5,14 +5,15 @@ import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
-  LOCATION_RULE,
-  dateContextLine,
-  MAX_QUERIES_PER_SEARCH,
   ROLE_SEARCH_SYSTEM,
-  pickQueries,
+  dateContextLine,
+  emptySearchReason,
+  loadSearchInputs,
+  planQueries,
   roleExtractionSchema,
   stackQueries,
   titleQueries,
+  type Criteria,
 } from "@/lib/search-criteria";
 import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
@@ -33,16 +34,23 @@ const FAMILY_INTRO: Record<RoleSearchFamily, string> = {
     "Search job boards and company careers pages for currently-open go-to-market / revenue operations roles that mention these tools. Titles vary — include Business Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the obvious RevOps titles. Use these searches",
 };
 
-function allQueriesFor(family: RoleSearchFamily): string[] {
-  return family === "title" ? titleQueries() : stackQueries();
+function allQueriesFor(
+  family: RoleSearchFamily,
+  criteria: Criteria
+): string[] {
+  return family === "title" ? titleQueries(criteria) : stackQueries(criteria);
 }
 
-function buildPrompt(family: RoleSearchFamily, queries: string[]): string {
+function buildPrompt(
+  family: RoleSearchFamily,
+  queries: string[],
+  criteria: Criteria
+): string {
   return `${FAMILY_INTRO[family]}:
 
 ${queries.map((q) => `- ${q}`).join("\n")}
 
-Run as many of these searches as you can and combine the results. ${dateContextLine()} Prioritize postings from the last 60 days. ${LOCATION_RULE}
+Run as many of these searches as you can and combine the results. ${dateContextLine()} Prioritize postings from the last 60 days. ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 - company (string, the hiring company name — REQUIRED, never empty)
@@ -108,24 +116,47 @@ export async function findRolesByCriteria(
   }
 
   try {
-    // Every web search Claude issues is billed separately, so send a capped,
-    // proportionally-spread subset rather than the full 39/24-query list.
-    const allQueries = allQueriesFor(family);
-    const queries = pickQueries(allQueries);
+    // ONE read of app_settings, both values derived from it. Loaded before the
+    // prompt and reused by the ingest below, so a settings save landing mid-run
+    // can neither split the run across two title lists nor pair one version's
+    // titles with another version's ceiling.
+    const { criteria, ceiling } = await loadSearchInputs();
+
+    // An empty title (or location) list enumerates to zero queries. Without
+    // this the run would build a prompt with an empty bullet list, spend a
+    // Claude call, and return nothing — reading as "no roles on the market"
+    // rather than as a misconfiguration. Checked before anything is billed.
+    const emptyReason = emptySearchReason(family, criteria);
+    if (emptyReason) {
+      console.error(`findRolesByCriteria(${family}): ${emptyReason}`);
+      return {
+        matches: [],
+        untrackedCompanies: [],
+        fetchedAt: null,
+        error: emptyReason,
+      };
+    }
+
+    // Every web search Claude issues is billed separately. With no user
+    // ceiling set the full enumeration is sent (coverage beats sixty cents,
+    // see MAX_QUERY_MULTIPLIER); a ceiling narrows it to a proportional
+    // spread. planQueries decides both the offer and the hard cap together.
+    const allQueries = allQueriesFor(family, criteria);
+    const { queries, maxSearches, reason } = planQueries(allQueries, ceiling);
     console.log(
-      `findRolesByCriteria(${family}): sending ${queries.length} of ${allQueries.length} queries — ${queries.join(" | ")}`
+      `findRolesByCriteria(${family}): sending ${queries.length} of ${allQueries.length} queries ` +
+        `(${reason}) — ${queries.join(" | ")}`
     );
 
     const raw = await callWithWebSearch({
       system: ROLE_SEARCH_SYSTEM,
-      prompt: buildPrompt(family, queries),
+      prompt: buildPrompt(family, queries, criteria),
       // Many searches per call; search narration counts against the budget.
       maxTokens: 8000,
       // The prompt's query list is advisory — the model decides how many
       // searches to actually run, and each one is billed. This is the only
       // hard ceiling on that bill (max_uses on the web_search tool block).
-      // Same number as the query list so the cap and the offer agree.
-      maxSearches: MAX_QUERIES_PER_SEARCH,
+      maxSearches,
     });
 
     const parsed = parseJson<RoleMatch[]>(raw);
@@ -170,7 +201,12 @@ export async function findRolesByCriteria(
 
     for (const [company, roles] of Array.from(byCompany)) {
       try {
-        await ingestRoles({ company, roles, source: "Role Search" });
+        await ingestRoles({
+          company,
+          roles,
+          source: "Role Search",
+          fitInputs: { fitBrain: criteria.fitBrain },
+        });
       } catch (err) {
         console.error(
           `findRolesByCriteria: ingest failed for ${company} — ${err instanceof Error ? err.message : String(err)}`

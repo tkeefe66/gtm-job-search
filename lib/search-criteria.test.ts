@@ -1,48 +1,329 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
+  DEFAULT_CRITERIA,
+  MAX_QUERY_MULTIPLIER,
   dateContextLine,
-  GTM_STACK_TERMS,
-  LOCATION_RULE,
-  LOCATION_TERMS,
-  MAX_QUERIES_PER_SEARCH,
-  TARGET_TITLES,
+  emptySearchReason,
   pickQueries,
+  planQueries,
   roleExtractionSchema,
   stackQueries,
   titleListForPrompt,
   titleQueries,
+  type Criteria,
 } from "./search-criteria";
 
-describe("search criteria", () => {
+const SMALL: Criteria = {
+  titles: ["Head of RevOps", "GTM Engineer"],
+  locations: ["Denver", "remote"],
+  stackTerms: ["Clay", "Gong"],
+  locationRule: "Remote or Colorado only.",
+  fitBrain: "A candidate.",
+};
+
+describe("DEFAULT_CRITERIA", () => {
   test("target titles cover the core GTM systems roles", () => {
-    const joined = TARGET_TITLES.join(" | ").toLowerCase();
+    const joined = DEFAULT_CRITERIA.titles.join(" | ").toLowerCase();
     expect(joined).toContain("revenue operations");
     expect(joined).toContain("gtm systems");
     expect(joined).toContain("gtm engineer");
     expect(joined).toContain("marketing operations");
   });
 
-  test("titles render as a comma-joined prompt fragment with no trailing comma", () => {
-    const rendered = titleListForPrompt();
-    expect(rendered).toContain("Revenue Operations");
-    expect(rendered.endsWith(",")).toBe(false);
-    expect(rendered).not.toContain(",,");
-  });
-
-  test("location rule names both the remote and Colorado conditions", () => {
-    expect(LOCATION_RULE.toLowerCase()).toContain("remote");
-    expect(LOCATION_RULE).toContain("Denver");
-    expect(LOCATION_RULE).toContain("Boulder");
-  });
-
   test("stack terms include the GTM tools that identify these roles", () => {
-    const joined = GTM_STACK_TERMS.join(" ").toLowerCase();
+    const joined = DEFAULT_CRITERIA.stackTerms.join(" ").toLowerCase();
     expect(joined).toContain("salesforce");
     expect(joined).toContain("clay");
     expect(joined).toContain("gong");
   });
 
-  test("extraction schema names every field the Role type requires", () => {
+  test("location rule names both the remote and Colorado conditions", () => {
+    expect(DEFAULT_CRITERIA.locationRule.toLowerCase()).toContain("remote");
+    expect(DEFAULT_CRITERIA.locationRule).toContain("Denver");
+    expect(DEFAULT_CRITERIA.locationRule).toContain("Boulder");
+  });
+
+  test("every default list is non-empty", () => {
+    expect(DEFAULT_CRITERIA.titles.length).toBeGreaterThan(0);
+    expect(DEFAULT_CRITERIA.locations.length).toBeGreaterThan(0);
+    expect(DEFAULT_CRITERIA.stackTerms.length).toBeGreaterThan(0);
+  });
+
+  test("fit brain describes the candidate and names a location preference", () => {
+    expect(DEFAULT_CRITERIA.fitBrain.length).toBeGreaterThan(200);
+    expect(DEFAULT_CRITERIA.fitBrain).toContain("Denver");
+  });
+});
+
+describe("titleListForPrompt", () => {
+  test("renders the supplied criteria, not the defaults", () => {
+    const rendered = titleListForPrompt(SMALL);
+    expect(rendered).toBe("Head of RevOps, GTM Engineer");
+    expect(rendered).not.toContain("Marketing Operations");
+  });
+
+  test("has no trailing or doubled comma", () => {
+    const rendered = titleListForPrompt(SMALL);
+    expect(rendered.endsWith(",")).toBe(false);
+    expect(rendered).not.toContain(",,");
+  });
+});
+
+describe("titleQueries", () => {
+  test("produces one query per title and location from the supplied criteria", () => {
+    const queries = titleQueries(SMALL);
+    expect(queries.length).toBe(4);
+  });
+
+  test("quotes the title so search engines match the phrase", () => {
+    expect(titleQueries(SMALL)).toContain('"Head of RevOps" Denver job opening');
+  });
+
+  test("every query carries a location term", () => {
+    const queries = titleQueries(SMALL);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const q of queries) {
+      expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
+    }
+  });
+
+  test("returns nothing when either list is empty rather than emitting a malformed query", () => {
+    expect(titleQueries({ ...SMALL, titles: [] })).toEqual([]);
+    expect(titleQueries({ ...SMALL, locations: [] })).toEqual([]);
+  });
+});
+
+describe("stackQueries", () => {
+  test("pairs tool names with hiring language", () => {
+    const queries = stackQueries(SMALL);
+    expect(queries.length).toBe(4);
+    expect(queries.some((q) => q.includes("Clay"))).toBe(true);
+    expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
+  });
+
+  test("every query carries a location term", () => {
+    const queries = stackQueries(SMALL);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const q of queries) {
+      expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
+    }
+  });
+
+  test("returns nothing when either list is empty", () => {
+    expect(stackQueries({ ...SMALL, stackTerms: [] })).toEqual([]);
+    expect(stackQueries({ ...SMALL, locations: [] })).toEqual([]);
+  });
+});
+
+describe("pickQueries", () => {
+  const list = Array.from({ length: 39 }, (_, i) => `q${i}`);
+
+  test("returns the input unchanged when it is already within the cap", () => {
+    expect(pickQueries(list.slice(0, 5), 10)).toEqual(list.slice(0, 5));
+  });
+
+  test("returns the input array itself at the equality boundary", () => {
+    // toBe, not toEqual: at cap === length the striding formula yields
+    // identical CONTENT via the loop path, so only reference identity proves
+    // the early return fired. Mutating `<=` to `<` must fail this test.
+    const list = ["a", "b", "c"];
+    expect(pickQueries(list, 3)).toBe(list);
+  });
+
+  test("returns exactly the cap when the input exceeds it", () => {
+    expect(pickQueries(list, 15).length).toBe(15);
+  });
+
+  test("returns no duplicates", () => {
+    const picked = pickQueries(list, 15);
+    expect(new Set(picked).size).toBe(picked.length);
+  });
+
+  test("every returned item comes from the input", () => {
+    const picked = pickQueries(list, 15);
+    expect(picked.length).toBeGreaterThan(0);
+    for (const q of picked) expect(list).toContain(q);
+  });
+
+  test("spreads across the whole list rather than taking a head slice", () => {
+    const picked = pickQueries(list, 15);
+    expect(picked).toContain("q0");
+    expect(picked.some((q) => list.indexOf(q) > 30)).toBe(true);
+    expect(picked).not.toEqual(list.slice(0, 15));
+  });
+
+  test("covers every title at the default cap", () => {
+    const queries = titleQueries(DEFAULT_CRITERIA);
+    const picked = pickQueries(queries, 15);
+    for (const title of DEFAULT_CRITERIA.titles) {
+      expect(picked.some((q) => q.includes(`"${title}"`))).toBe(true);
+    }
+  });
+
+  test("covers every entry in DEFAULT_CRITERIA.locations", () => {
+    const queries = titleQueries(DEFAULT_CRITERIA);
+    const picked = pickQueries(queries, 15);
+    expect(picked.length).toBe(15);
+    for (const place of DEFAULT_CRITERIA.locations) {
+      expect(picked.some((q) => q.includes(place))).toBe(true);
+    }
+  });
+
+  test("stack queries: covers every entry in DEFAULT_CRITERIA.stackTerms at cap 15", () => {
+    const queries = stackQueries(DEFAULT_CRITERIA);
+    const picked = pickQueries(queries, 15);
+    expect(picked.length).toBe(15);
+    for (const tool of DEFAULT_CRITERIA.stackTerms) {
+      expect(picked.some((q) => q.includes(`"${tool}"`))).toBe(true);
+    }
+  });
+
+  test("a cap of zero or less yields nothing", () => {
+    expect(pickQueries(list, 0)).toEqual([]);
+    expect(pickQueries(list, -1)).toEqual([]);
+  });
+});
+
+describe("planQueries", () => {
+  const list = Array.from({ length: 39 }, (_, i) => `q${i}`);
+
+  test("no ceiling sends every query and sets max_uses to the multiple", () => {
+    const plan = planQueries(list, null);
+    expect(plan.queries).toBe(list);
+    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
+    expect(plan.reason).toContain("no ceiling set");
+  });
+
+  test("a ceiling narrows the offer AND becomes the hard cap", () => {
+    // Both halves matter: the ceiling has to bind the prompt (how many we
+    // offer) and max_uses (how many are billable). A change that applied it
+    // to only one of the two would pass a test asserting only the other.
+    const plan = planQueries(list, 12);
+    expect(plan.queries.length).toBe(12);
+    expect(plan.maxSearches).toBe(12);
+    expect(plan.reason).toContain("ceiling 12");
+  });
+
+  test("a ceiling above the query count cannot inflate the offer", () => {
+    const plan = planQueries(list, 500);
+    expect(plan.queries.length).toBe(39);
+  });
+
+  test("a rejected ceiling is reported as ignored, not as absent", () => {
+    // The diagnostic must not lie about the one input it exists to explain:
+    // the user DID set a value and the run DID ignore it. "no ceiling set"
+    // would send someone looking at the wrong thing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const plan = planQueries(list, 0);
+      expect(plan.reason).not.toContain("no ceiling set");
+      expect(plan.reason).toContain("ignored");
+      expect(plan.reason).toContain("0");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("ignoring a stored search ceiling");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an honored ceiling and an absent one warn about nothing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      planQueries(list, 12);
+      planQueries(list, null);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a stored ceiling of 0 reads as 'no ceiling', never as 'zero searches'", () => {
+    // The precedence trap this function exists to close. `ceiling ? a : b` is
+    // falsy at 0 (sends all 39) while `ceiling ?? c` is NOT nullish at 0
+    // (max_uses 0) — inconsistent, and the combination silently returns no
+    // results. Whichever way 0 is resolved, the two must agree.
+    const plan = planQueries(list, 0);
+    expect(plan.queries.length).toBe(39);
+    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
+  });
+
+  test("a negative stored ceiling reads as 'no ceiling' too", () => {
+    const plan = planQueries(list, -5);
+    expect(plan.queries.length).toBe(39);
+    expect(plan.maxSearches).toBeGreaterThan(0);
+  });
+
+  test("max_uses is never zero, even with no queries to send", () => {
+    // Every title deleted → an empty enumeration → max_uses 0, which the API
+    // rejects outright rather than degrading to "no searches".
+    expect(planQueries([], null).maxSearches).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("emptySearchReason", () => {
+  test("a fully-populated criteria set can run either family", () => {
+    expect(emptySearchReason("title", SMALL)).toBeNull();
+    expect(emptySearchReason("stack", SMALL)).toBeNull();
+    expect(emptySearchReason("title", DEFAULT_CRITERIA)).toBeNull();
+  });
+
+  test("an empty title list blocks the title search before anything is billed", () => {
+    const reason = emptySearchReason("title", { ...SMALL, titles: [] });
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("target titles");
+    // Says what to do about it, not just that it failed.
+    expect(reason).toContain("Settings");
+  });
+
+  test("an empty stack list blocks the stack search", () => {
+    expect(emptySearchReason("stack", { ...SMALL, stackTerms: [] })).toContain(
+      "stack terms"
+    );
+  });
+
+  test("an empty location list blocks BOTH families", () => {
+    // titleQueries and stackQueries both cross their list with locations, so
+    // an empty locations list zeroes either enumeration.
+    const empty = { ...SMALL, locations: [] };
+    expect(emptySearchReason("title", empty)).toContain("location terms");
+    expect(emptySearchReason("stack", empty)).toContain("location terms");
+  });
+
+  test("the other family's empty list does not block this one", () => {
+    // A user who cleared stack terms can still run a title search. Blocking
+    // on the wrong list would be a self-inflicted outage.
+    expect(emptySearchReason("title", { ...SMALL, stackTerms: [] })).toBeNull();
+    expect(emptySearchReason("stack", { ...SMALL, titles: [] })).toBeNull();
+  });
+
+  test("agrees with the enumeration it guards, in both directions", () => {
+    // The guard is only worth anything if "blocked" means exactly "zero
+    // queries". Pinning it against the real query builders keeps the two from
+    // drifting apart, in a way that hand-written cases cannot.
+    const cases: Array<Partial<Criteria>> = [
+      {},
+      { titles: [] },
+      { stackTerms: [] },
+      { locations: [] },
+      { titles: [], stackTerms: [] },
+      { titles: [], locations: [] },
+    ];
+    for (const patch of cases) {
+      const c = { ...SMALL, ...patch };
+      expect(emptySearchReason("title", c) === null).toBe(titleQueries(c).length > 0);
+      expect(emptySearchReason("stack", c) === null).toBe(stackQueries(c).length > 0);
+    }
+  });
+});
+
+describe("MAX_QUERY_MULTIPLIER", () => {
+  test("is pinned so changing the runaway rail is deliberate", () => {
+    expect(MAX_QUERY_MULTIPLIER).toBe(2);
+  });
+});
+
+describe("roleExtractionSchema", () => {
+  test("names every field the Role type requires", () => {
     const schema = roleExtractionSchema();
     for (const field of [
       "role_title",
@@ -55,101 +336,6 @@ describe("search criteria", () => {
       "ic_flag",
     ]) {
       expect(schema).toContain(field);
-    }
-  });
-});
-
-describe("titleQueries", () => {
-  test("produces one query per title and location term", () => {
-    expect(titleQueries().length).toBe(TARGET_TITLES.length * LOCATION_TERMS.length);
-  });
-
-  test("quotes the title so search engines match the phrase", () => {
-    expect(
-      titleQueries().some(
-        (q) => q.includes('"Revenue Operations"') || q.includes('"Head of Revenue Operations"'),
-      ),
-    ).toBe(true);
-  });
-
-  test("every query carries a location term", () => {
-    const queries = titleQueries();
-    expect(queries.length).toBe(TARGET_TITLES.length * LOCATION_TERMS.length);
-    for (const q of queries) {
-      expect(LOCATION_TERMS.some((t) => q.includes(t))).toBe(true);
-    }
-  });
-});
-
-describe("stackQueries", () => {
-  test("pairs tool names with hiring language", () => {
-    const queries = stackQueries();
-    expect(queries.length).toBe(GTM_STACK_TERMS.length * LOCATION_TERMS.length);
-    expect(queries.some((q) => q.includes("Clay"))).toBe(true);
-    expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
-  });
-
-  test("every query carries a location term", () => {
-    const queries = stackQueries();
-    expect(queries.length).toBe(GTM_STACK_TERMS.length * LOCATION_TERMS.length);
-    for (const q of queries) {
-      expect(LOCATION_TERMS.some((t) => q.includes(t))).toBe(true);
-    }
-  });
-});
-
-describe("MAX_QUERIES_PER_SEARCH", () => {
-  test("is pinned to 15 so changing the cap is a deliberate act", () => {
-    expect(MAX_QUERIES_PER_SEARCH).toBe(15);
-  });
-});
-
-describe("pickQueries", () => {
-  test("returns the input unchanged when queries.length <= cap", () => {
-    const input = ["a", "b", "c"];
-    expect(pickQueries(input, 5)).toEqual(input);
-    expect(pickQueries(input, 3)).toEqual(input);
-  });
-
-  test("returns exactly cap items when queries.length > cap", () => {
-    const input = Array.from({ length: 20 }, (_, i) => `q${i}`);
-    expect(pickQueries(input, 7).length).toBe(7);
-  });
-
-  test("returns no duplicates", () => {
-    const picked = pickQueries(titleQueries());
-    expect(new Set(picked).size).toBe(picked.length);
-  });
-
-  test("every returned item is a member of the input", () => {
-    const input = titleQueries();
-    const picked = pickQueries(input);
-    for (const q of picked) {
-      expect(input.includes(q)).toBe(true);
-    }
-  });
-
-  test("covers every entry in TARGET_TITLES — this is the assertion that kills slice(0, cap)", () => {
-    const picked = pickQueries(titleQueries());
-    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
-    for (const title of TARGET_TITLES) {
-      expect(picked.some((q) => q.includes(`"${title}"`))).toBe(true);
-    }
-  });
-
-  test("covers every entry in LOCATION_TERMS", () => {
-    const picked = pickQueries(titleQueries());
-    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
-    for (const place of LOCATION_TERMS) {
-      expect(picked.some((q) => q.includes(place))).toBe(true);
-    }
-  });
-
-  test("stack queries: covers every entry in GTM_STACK_TERMS at cap 15", () => {
-    const picked = pickQueries(stackQueries());
-    expect(picked.length).toBe(MAX_QUERIES_PER_SEARCH);
-    for (const tool of GTM_STACK_TERMS) {
-      expect(picked.some((q) => q.includes(`"${tool}"`))).toBe(true);
     }
   });
 });

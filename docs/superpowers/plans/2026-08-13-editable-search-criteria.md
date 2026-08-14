@@ -1483,4 +1483,4 @@ git commit -m "feat: add settings page for editable search criteria"
 - [ ] Rescoring updates `fit_score` on existing rows.
 - [ ] A crawl after a criteria change closes nothing; the suppression log line appears.
 - [ ] Reset to defaults restores the shipped values.
-- [ ] With `app_settings` empty, every search feature behaves exactly as it did before this plan.
+- [ ] With `app_settings` empty, every search feature runs on the same criteria it did before this plan — with the one intended exception that the By Role run is uncapped by default (`max_uses` at `MAX_QUERY_MULTIPLIER ×` the query count) rather than capped at the old fixed `MAX_QUERIES_PER_SEARCH = 15`, i.e. ~$1.13 per run against ~$0.55.

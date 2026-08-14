@@ -2,12 +2,17 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildExtractionPrompt,
   classifyFetchOutcome,
+  closureEvidenceTitles,
+  closureRunsFromRows,
   LAST_TRUSTWORTHY_RUN_SQL,
   rolesFromRaw,
+  runsEligibleForClosure,
   STALE_POSTING_CANDIDATES_SQL,
   titlesToClose,
+  type ClosureRun,
 } from "./crawler";
 import { stripHtml } from "./page-extract";
+import { DEFAULT_CRITERIA, type Criteria } from "./search-criteria";
 
 // Reused from lib/page-extract.test.ts's own fixtures so the shell/content
 // boundary this test relies on stays the one that file already pins.
@@ -36,21 +41,42 @@ describe("buildExtractionPrompt", () => {
   );
 
   test("names the company", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("Clay");
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Clay");
   });
 
   test("includes the location rule", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("Denver");
+    // "Denver" reaches the prompt only through criteria.locationRule — it
+    // appears nowhere else in the template. Keep this assertion as-is.
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Denver");
   });
 
   test("includes the page text and its links", () => {
-    const prompt = buildExtractionPrompt("Clay", page);
+    const prompt = buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA);
     expect(prompt).toContain("Open roles");
     expect(prompt).toContain("/careers/revops");
   });
 
   test("asks for an empty array rather than prose when nothing matches", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("[]");
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("[]");
+  });
+
+  // The point of the whole task: the prompt renders the criteria it is HANDED,
+  // not the shipped defaults. Without this, every assertion above would still
+  // pass an implementation that ignored its third argument and kept importing
+  // the constants.
+  test("renders the supplied criteria rather than the defaults", () => {
+    const edited: Criteria = {
+      titles: ["Chief Waffle Officer"],
+      locations: ["Reykjavik"],
+      stackTerms: ["Syrup"],
+      locationRule: "Reykjavik only.",
+      fitBrain: "irrelevant here",
+    };
+    const prompt = buildExtractionPrompt("Clay", page, edited);
+    expect(prompt).toContain("Chief Waffle Officer");
+    expect(prompt).toContain("Reykjavik only.");
+    expect(prompt).not.toContain("Denver");
+    expect(prompt).not.toContain("Head of Revenue Operations");
   });
 });
 
@@ -112,6 +138,182 @@ describe("titlesToClose", () => {
   });
 });
 
+describe("runsEligibleForClosure", () => {
+  const RUNS: ClosureRun[] = [
+    { finished_at: "2026-08-10T00:00:00Z", titles: ["a"] },
+    { finished_at: "2026-08-03T00:00:00Z", titles: ["a"] },
+  ];
+
+  test("all runs count when criteria have never changed", () => {
+    expect(runsEligibleForClosure(RUNS, null).length).toBe(2);
+  });
+
+  test("returns the input array itself when criteria have never changed", () => {
+    // toBe, not toEqual: before the first criteria edit this function must be
+    // a literal no-op on the evidence list, i.e. the early return fired rather
+    // than a filter that happened to keep everything. Only reference identity
+    // can tell those two apart.
+    expect(runsEligibleForClosure(RUNS, null)).toBe(RUNS);
+  });
+
+  test("runs older than the criteria change are excluded", () => {
+    expect(runsEligibleForClosure(RUNS, "2026-08-05T00:00:00Z").length).toBe(1);
+  });
+
+  test("a change newer than every run leaves nothing eligible", () => {
+    expect(runsEligibleForClosure(RUNS, "2026-08-12T00:00:00Z")).toEqual([]);
+  });
+
+  test("a run exactly at the change timestamp is excluded, not included", () => {
+    expect(runsEligibleForClosure(RUNS, "2026-08-10T00:00:00Z").length).toBe(0);
+  });
+
+  test("returns the runs themselves, not just a count", () => {
+    const eligible = runsEligibleForClosure(RUNS, "2026-08-05T00:00:00Z");
+    expect(eligible.length).toBeGreaterThan(0);
+    expect(eligible[0].titles).toEqual(["a"]);
+  });
+
+  test("an unparseable cutoff falls back to trusting every run", () => {
+    // Guards the Number.isNaN branch. Getting this wrong disables closure
+    // permanently and silently.
+    expect(runsEligibleForClosure(RUNS, "garbage").length).toBe(2);
+  });
+
+  test("a run with an unparseable finished_at is dropped loudly, not silently", () => {
+    // crawl_runs.finished_at is nullable (db/schema.sql) — a 'running' row has
+    // none. It must not be treated as newer than the cutoff.
+    //
+    // What this test actually pins is OBSERVABILITY, not the drop. Deleting
+    // the guard block changes no behavior at all: Date.parse(null) is NaN and
+    // `NaN > cutoff` is already false, so the run is excluded either way. All
+    // that disappears is the warning — and that warning is the only thing that
+    // would ever explain a closure system which had quietly stopped closing.
+    // Hence the spy assertion below; without it this test is near-vacuous.
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const withNull: ClosureRun[] = [
+      { finished_at: null as unknown as string, titles: ["x"] },
+      ...RUNS,
+    ];
+    const eligible = runsEligibleForClosure(withNull, "2026-08-05T00:00:00Z");
+    expect(eligible.some((r) => r.titles[0] === "x")).toBe(false);
+    expect(eligible.length).toBe(1);
+    // "loudly": the drop is a data-integrity signal, not a routine filter.
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  test("every surviving run is strictly newer than the cutoff", () => {
+    const cutoff = "2026-08-05T00:00:00Z";
+    const eligible = runsEligibleForClosure(RUNS, cutoff);
+    // .every on an empty array is vacuously true, so the length assertion is
+    // load-bearing, not decoration.
+    expect(eligible.length).toBe(1);
+    expect(
+      eligible.every((r) => Date.parse(r.finished_at) > Date.parse(cutoff))
+    ).toBe(true);
+  });
+});
+
+describe("closureRunsFromRows", () => {
+  test("carries finished_at across, not just the titles", () => {
+    // The silent-disable link: SQL selecting the column and
+    // runsEligibleForClosure reading it are both pinned elsewhere, but a
+    // mapper that dropped it would leave every previous run unparseable and
+    // kill closure permanently after the first criteria edit.
+    expect(
+      closureRunsFromRows([
+        { role_titles: ["gtm engineer"], finished_at: "2026-08-10T00:00:00Z" },
+      ])
+    ).toEqual([{ finished_at: "2026-08-10T00:00:00Z", titles: ["gtm engineer"] }]);
+  });
+
+  test("the mapped rows survive the eligibility filter they feed", () => {
+    // End-to-end on the pair: a mapper that lost finished_at would produce
+    // rows that look fine by shape but get dropped as unparseable here.
+    const runs = closureRunsFromRows([
+      { role_titles: ["gtm engineer"], finished_at: "2026-08-10T00:00:00Z" },
+    ]);
+    expect(runsEligibleForClosure(runs, "2026-08-05T00:00:00Z").length).toBe(1);
+  });
+
+  test("a null role_titles becomes an empty title list", () => {
+    expect(
+      closureRunsFromRows([{ role_titles: null, finished_at: "2026-08-10T00:00:00Z" }])
+    ).toEqual([{ finished_at: "2026-08-10T00:00:00Z", titles: [] }]);
+  });
+
+  test("no trustworthy run maps to no evidence", () => {
+    expect(closureRunsFromRows([])).toEqual([]);
+  });
+});
+
+describe("closureEvidenceTitles", () => {
+  // This is the gate itself, not just its predicate: closeStalePostings feeds
+  // this function's return value straight into titlesToClose, so mapping the
+  // unfiltered `runs` here would restore the auto-closure bug while every
+  // runsEligibleForClosure test still passed.
+  const RUNS: ClosureRun[] = [
+    { finished_at: "2026-08-10T00:00:00Z", titles: ["gtm engineer"] },
+    { finished_at: "2026-08-03T00:00:00Z", titles: ["head of revops"] },
+  ];
+
+  // The cutoff is passed as a RunContext slice, not a bare string, so that a
+  // literal `null` in that argument position — which silently disables the
+  // gate — cannot type-check. Sealing only closeStalePostings left this use
+  // site open; the review caught it surviving.
+  const CHANGED = { criteriaChangedAt: "2026-08-05T00:00:00Z" };
+  const NEVER_CHANGED = { criteriaChangedAt: null };
+
+  test("drops the title lists of runs that predate the criteria change", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const evidence = closureEvidenceTitles("Clay", RUNS, CHANGED);
+    expect(evidence).toEqual([["gtm engineer"]]);
+    spy.mockRestore();
+  });
+
+  test("a criteria change pushes the evidence under titlesToClose's two-run minimum", () => {
+    // The end-to-end point of the task, asserted on the two functions as they
+    // are actually composed: one eligible run is not enough to close anything,
+    // so a role the crawler stopped looking for survives the edit.
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const evidence = closureEvidenceTitles("Clay", RUNS, CHANGED);
+    expect(evidence.length).toBe(1);
+    expect(titlesToClose(evidence, ["head of revops"])).toEqual([]);
+    spy.mockRestore();
+  });
+
+  test("without a criteria change both runs stay as evidence and closure still works", () => {
+    // Guards against over-correction: the debounce must keep closing roles in
+    // the ordinary no-edit case.
+    const evidence = closureEvidenceTitles("Clay", RUNS, NEVER_CHANGED);
+    expect(evidence).toEqual([["gtm engineer"], ["head of revops"]]);
+    expect(titlesToClose(evidence, ["marketing ops manager"])).toEqual([
+      "marketing ops manager",
+    ]);
+  });
+
+  test("logs the suppression, naming the emitting function, the company, and how many runs were dropped", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    closureEvidenceTitles("Clay", RUNS, CHANGED);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const logged = spy.mock.calls[0][0] as string;
+    // The prefix must name the function that actually emits the line, or
+    // grepping it out of production logs lands in the wrong place.
+    expect(logged).toContain("closureEvidenceTitles");
+    expect(logged).toContain("Clay");
+    expect(logged).toContain("1 run(s)");
+    spy.mockRestore();
+  });
+
+  test("logs nothing when no run was excluded", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    closureEvidenceTitles("Clay", RUNS, NEVER_CHANGED);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
 describe("LAST_TRUSTWORTHY_RUN_SQL", () => {
   // Same rationale as STALE_POSTING_CANDIDATES_SQL below: no database in this
   // repo's test setup, so this only pins the query's text, not its execution.
@@ -126,6 +328,18 @@ describe("LAST_TRUSTWORTHY_RUN_SQL", () => {
 
   test("does not scope to 'ok' alone", () => {
     expect(LAST_TRUSTWORTHY_RUN_SQL).not.toContain("status = 'ok'");
+  });
+
+  test("selects finished_at as well as role_titles", () => {
+    // runsEligibleForClosure compares finished_at against the criteria-change
+    // stamp. rawQuery's row type is an assertion, not something inferred from
+    // the SQL, so dropping this column compiles clean: every previous run
+    // would then arrive with finished_at undefined, be dropped as unparseable,
+    // and closure would be permanently disabled after the first criteria edit
+    // with nothing to point at. A string check is the only guard available
+    // without a database.
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("role_titles");
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("finished_at");
   });
 });
 

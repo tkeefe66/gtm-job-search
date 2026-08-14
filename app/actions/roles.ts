@@ -5,8 +5,8 @@ import { supabase } from "@/lib/supabase";
 import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
-  LOCATION_RULE,
   ROLE_SEARCH_SYSTEM,
+  loadCriteria,
   roleExtractionSchema,
   titleListForPrompt,
 } from "@/lib/search-criteria";
@@ -50,11 +50,14 @@ export async function findAndSaveRoles(
   }
 
   try {
+    // Loaded once here and reused for the prompt and the ingest below, so a
+    // save landing mid-call cannot split one run across two title lists.
+    const criteria = await loadCriteria();
     const hint = startup.careers_url
       ? ` Their careers page may be: ${startup.careers_url}.`
       : "";
 
-    const prompt = `Search for open go-to-market and revenue operations roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt()}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${LOCATION_RULE}
+    const prompt = `Search for open go-to-market and revenue operations roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
@@ -103,6 +106,7 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
         stage: startup.stage,
       },
       source: "Discover",
+      fitInputs: { fitBrain: criteria.fitBrain },
     });
 
     return { roles, message };

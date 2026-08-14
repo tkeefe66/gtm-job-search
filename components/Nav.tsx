@@ -8,6 +8,7 @@ const TABS = [
   { label: "Watchlist", href: "/watchlist" },
   { label: "Roles", href: "/roles" },
   { label: "Insights", href: "/insights" },
+  { label: "Settings", href: "/settings" },
 ];
 
 export default function Nav() {
