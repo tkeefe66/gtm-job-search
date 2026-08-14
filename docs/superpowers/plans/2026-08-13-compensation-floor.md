@@ -10,7 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-13-search-settings-design.md`
 
-**Prerequisite:** `docs/superpowers/plans/2026-08-13-editable-search-criteria.md` must be complete. This plan consumes its `app_settings` table and settings store (Task 1), its `Criteria` type and `loadCriteria()` (Task 2), its `scoreFit({ ..., fitBrain })` signature (Task 3), its settings server actions (Task 6), and its `components/Settings.tsx` (Task 8).
+**Prerequisite:** `docs/superpowers/plans/2026-08-13-editable-search-criteria.md` is **complete and merged** (`main` @ `5174794`). Every interface below was verified against the merged source on 2026-08-14, not inferred:
+
+| What this plan consumes | Where it actually is |
+|---|---|
+| `app_settings` table, `SETTING_KEYS` (incl. `compFloor`, camelCase), `writeSetting`, `deleteSetting`, `readNumberSetting` | `lib/settings-store.ts` |
+| `Criteria` (a **type alias**, not an interface), `DEFAULT_CRITERIA`, `loadCriteria`, `loadScoringInputs` | `lib/search-criteria.ts` |
+| `FitInputs` — carries a comment explicitly reserving the `compFloor` slot this plan adds | `lib/fit-inputs.ts` |
+| `scoreFit({ …, fitInputs: FitInputs \| null })` — **not** `{ …, fitBrain }` | `app/actions/parse-role.ts` |
+| `SCORING_INPUT_COLUMNS`, `scoringArgsFor`, `ScoringArgs`, `SCORED_JOBS_SQL` | `lib/rescore-scope.ts` |
+| `runRescorePass` — the multi-batch driver; do **not** loop `rescoreAll` by hand | `lib/rescore-progress.ts` |
+| `SettingsView`, `buildSettingsView` (pure, testable) | `lib/settings-view.ts` |
+| `getSettings`, `saveCeiling`, `resetSetting`, `rescoreAll` | `app/actions/settings.ts` |
+| `<RescorePrompt count onRescore onDismiss busy />` | `components/RescorePrompt.tsx` |
+| `CACHES_TO_CLEAR` (`Record<SettingKey, string[]>`, **no fallback**), `AFFECTS_CRAWL` | `lib/settings-effects.ts` |
+
+**Five steps in the task bodies below are already done** and should be treated as no-ops: the `compFloor` key exists; `RescorePrompt` is extracted; `readNumberSetting` exists so `readCompFloor` is a one-liner; `FitInputs` has the reserved slot; and `CACHES_TO_CLEAR` is a total `Record<SettingKey, …>` with no `?? []`, so `compFloor` already has an entry — "no cache clearing" is structurally enforced, not a decision to make.
 
 ## Global Constraints
 
@@ -22,222 +37,6 @@
 - **Explicit over silent.** An unparseable salary string is logged, never silently treated as absent.
 - **Pure logic lives in `lib/*.ts` with a sibling `lib/*.test.ts`** (vitest). Server actions and React components are not unit-tested in this repo.
 - **Every test must fail against a broken implementation.** Pair any `.every` assertion with a non-empty length assertion.
-
----
-
-# REVIEW CORRECTIONS — authoritative, supersede the tasks below
-
-Two independent reviews, then a cross-review. Where this section and a task
-disagree, **this section wins**. The parser was hand-traced and executed against
-all six real production strings by a reviewer, and independently re-run by the
-controller.
-
-## R1 (Critical, Task 3) — OTE-only roles get hidden by the floor filter, contradicting the spec
-
-`salaryBucketFor` returns `"below"` when `baseMaxFor` is null (the OTE case), and
-Step 5 hides `below`. So `$300,000 - $340,000 OTE` — a role whose base almost
-certainly clears any realistic floor — **disappears the moment the toggle is on**,
-grouped with genuinely underpaying roles. The spec says the opposite: *"An
-OTE-only figure is not base. Surface it as OTE; do not compare it to a base
-floor."* Bucketing it with below-floor roles **is** comparing it to the floor.
-
-Make `"ote"` its own `SalaryBucket`. Group it with the "No range listed" toggle
-(it is a *didn't tell me the base* fact, not a *pays too little* fact) or give it
-its own tag and leave it always visible. Add:
-
-```ts
-expect(salaryBucketFor(job("$300,000 - $340,000 OTE"), 200000)).toBe("ote");
-```
-
-The existing test asserts `.not.toBe("meets")`, which passes for `below`,
-`no-range`, and `unreadable` alike — it cannot catch the very bug it guards.
-
-## R2 (Critical, Task 1) — `labeledBase` is dead code; the headline rule is unpinned
-
-Base-over-OTE precedence is the most consequential decision in this plan, and
-**deleting the `labeledBase` branch leaves all six production strings byte-identical
-and all 9 tests passing.** Verified by execution, not inspection.
-
-The two tests that look like they cover it do not: in
-`$…(base); $…OTE`, `labeledBase` and `nonOte` are the same object; in
-`$165,000 - $175,000 base + annual bonus` there is only one segment. Add a
-fixture where the base label is **not** on the first segment:
-
-```ts
-expect(parseSalaryRange("$120,000 - $140,000 (Denver); $180,000 - $200,000 base (SF)"))
-  .toEqual({ kind: "base", min: 180000, max: 200000 });
-```
-
-Verified: with `labeledBase` → `180000–200000`; without → `120000–140000`.
-
-## R3 (Critical, Task 3/4) — no delivery path for `compFloor` into `RolesTable`
-
-`components/RolesTable.tsx` is `"use client"`, loads via its own `getJobs()`, and
-`app/roles/page.tsx` renders `<RolesTable />` with **zero props** (verified — the
-file is five lines). The plan's "or wherever `RolesTable` receives its data"
-resolves to nowhere.
-
-Preferred fix: make `app/roles/page.tsx` a server component that awaits the floor
-and passes `<RolesTable compFloor={…} />` — one read, no client round trip, no new
-endpoint. Fallback if that is not workable: `getCompFloor()` in
-`app/actions/settings.ts`, awaited alongside `getJobs()` in `load()`.
-
-`readCompFloor` belongs in `lib/settings-store.ts` as a three-line wrapper over
-the `readNumberSetting` primitive the prerequisite plan now ships:
-
-```ts
-export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
-```
-
-## R4 (Critical, Task 4) — the final `scoreFit` signature, adjudicated
-
-`scoreFit` has **three** callers, not one: `lib/ingest-roles.ts:141`,
-`components/RolesTable.tsx:514`, `components/RecruiterPanel.tsx:74`. The two
-client callers cannot resolve settings themselves (`loadCriteria` transitively
-imports `pg`). Final shape, agreed with the prerequisite plan:
-
-```ts
-salary_range: string;            // REQUIRED — per-role data, no fallback exists
-fitInputs: FitInputs | null;     // REQUIRED key. null = "load from settings now"
-```
-
-`FitInputs` is `{ fitBrain: string; compFloor: number | null }`, defined by the
-prerequisite plan. This plan adds `compFloor` to that interface and to
-`loadScoringInputs()` — it does **not** re-open `scoreFit`'s argument list.
-
-The outer `null` means "load the user's real stored values"; `compFloor: null`
-*inside* the object means "the floor is off". Different positions, unambiguous,
-no `??` disambiguation needed. Batch paths pass explicitly; only the two client
-call sites pass `null`, and both already have `form.salary_range` in scope.
-
-## R5 (Critical, Task 5) — do not ship until the prerequisite's `rescoreAll` is fixed
-
-The prerequisite's `rescoreAll` uses `.neq("fit_score", null)`, which compiles to
-`"fit_score" <> $1` with `$1 = null` and matches **zero rows**. It also drops
-`company_description`, `arr`, `exit_signal`, and `backer` — all real columns
-`scoreFit` weights (`app/actions/parse-role.ts:164-169`, :188-193).
-
-So the day-one rescue button would either do nothing, or — where it does run —
-**actively downgrade** the user's best-scored roles by rescoring them blind to
-their financial signals. Add an explicit prerequisite line to Task 5: it must not
-ship until the prerequisite plan's R4 correction is in.
-
-Task 4 Step 3's own column list must be the complete one:
-
-```ts
-`select id, company, role_title, company_description, department, location,
-        key_skills, fit_summary, arr, exit_signal, backer, salary_range
-   from jobs where fit_score is not null`
-```
-
-via `rawQuery`, not the builder. Pass nullable text as `?? undefined`, not `?? ""`.
-
-## R6 (Important, Task 1) — the parser rejects the format the app itself teaches
-
-`$200K - $280K` returns `unparseable` — and that string is the literal
-placeholder in `components/RolesTable.tsx:328`'s own salary editor. The app
-teaches a format its parser rejects. `$150k` and `$1.5M` also fail.
-
-Extend `MONEY` to accept a `k`/`K`/`m`/`M` suffix and scale it, or change the
-placeholder. Add all three as fixtures either way — a silently-unparseable
-manual entry shows as "no range listed" with no indication anything went wrong.
-
-## R7 (Important, Task 1) — a comma-separated base/OTE pair produces a mangled range
-
-`segments()` splits only on `;`. Verified:
-`"$280,000 - $325,000 base, $305,000 - $365,000 OTE"` →
-`{kind:"ote", min:280000, max:365000}` — a range spanning base-min to OTE-max,
-then bucketed `below` by Task 3. Split on `/[;\n]|(?<=\))\s*,/`, or detect ≥3
-money figures in one segment and pair them off. Add the comma case as a fixture.
-
-## R8 (Important, Task 4) — compensation must never enter `buildExtractionPrompt`
-
-An implementer threading `{criteria, compFloor}` down the crawler path may hand it
-to extraction. That would create the ingest-time compensation filter both the
-spec and this plan's Global Constraints forbid. State the prohibition in Task 4
-Step 2 explicitly.
-
-Also: `lib/crawler.ts:488`'s `ingestRoles` call sits inside `crawlCompany`, which
-has three callers (`app/api/cron/crawl/route.ts:79`, `app/actions/watchlist.ts:226`,
-`:285`). Task 4 Step 2 says "update the three `ingestRoles` callers" and names none
-of them. Carry the whole `loadScoringInputs()` result as one object on the
-`RunContext` the prerequisite plan introduces — zero extra call-site churn.
-
-## R9 (Important, Task 4) — the AI-GTM rule can override the compensation input
-
-`floorLine` is a soft preference sentence, but the prompt's AI-DRIVEN GTM
-TRANSFORMATION RULE sets an unconditional floor score of 4 when three conditions
-hold, none of which mention pay. A below-floor role at an established B2B SaaS
-company with an AI-GTM mandate still floors at 4, so the spec's promise ("a
-below-floor role scores low rather than disappearing") and the verification item
-"rescoring after setting a floor changes scores on below-floor roles" both fail.
-
-Add a compensation clause to the SCORING GUIDE and a carve-out in the floor-4
-rule: *"If the posted base is below the candidate's stated minimum, cap at 3
-regardless of this rule."*
-
-## R10 (Important, Task 5) — the rescore prompt fires forever
-
-Trigger is `scoredJobCount > 0`; behavior is "reappears until the user rescores."
-Rescoring updates scores, it does not remove them — so the count never changes and
-the prompt shows immediately after a successful rescore, forever. Write a
-`comp_scoring_rescored_at` row into `app_settings` when `rescoreAll` completes and
-suppress on it. That is a key/value **row**, not a column, so it respects the
-no-migration constraint that ruled out a version column.
-
-Also: import `<RescorePrompt />` from the prerequisite plan rather than
-re-implementing it, and use its internal `count * 0.0075` figure so both plans
-render identical copy.
-
-## R11 (Important, Task 3) — the chip pattern being matched is single-select
-
-`components/RolesTable.tsx:201-215` maps one exclusive `statusFilter`. "Match it"
-is right about styling and wrong about mechanism — this plan needs two independent
-booleans. An implementer following it literally may fold compensation into
-`statusFilter`. Say explicitly: reuse the chip className, add
-`const [meetsOnly, setMeetsOnly] = useState(false)` and
-`const [hideNoRange, setHideNoRange] = useState(false)`, and **add `meetsOnly`,
-`hideNoRange`, and `compFloor` to the `filtered` useMemo dependency array**
-(`RolesTable.tsx:121`) — omitting them is a stale-filter bug.
-
-## R12 (Important, Task 1) — Step 5 is unexecutable in the worktree
-
-"Add a temporary script printing output for all 21 production strings" needs
-`DATABASE_URL`, which is absent by design. Mark it `SKIPPED — requires
-DATABASE_URL` and move the 21-string check to the live pass, matching how the
-prerequisite handles schema application. The plan supplies only 6 of the 21.
-
-## R13 (Important) — `fit_summary` is both input and output
-
-`rescoreAll` writes `fit_summary: scored.rationale` while the prompt reads
-`Summary: ${opts.fit_summary}`. Rescore twice and the model is summarizing its own
-previous rationale rather than the posting. Stop overwriting it on rescore.
-
-## R14 (Minor, verified)
-
-- `saveCompFloor` accepts `0` and non-integers; a floor of `0` then shows a
-  "Meets minimum" toggle that does nothing. Use `!Number.isInteger(n) || n < 1`.
-- `console.warn` in `salaryBucketFor` fires once per row per recompute — on every
-  keystroke in the search box. Hoist behind a module-level `Set` of warned strings.
-- Task 1's Interfaces block omits `baseMaxFor`, which Task 3 consumes. Task 5's
-  Files list omits `CLAUDE.md` though Step 3 edits it.
-- Task 3 Step 7 stages `app/roles`, which needs no change unless R3's preferred
-  fix is taken — in which case it does.
-- Verification item "setting a floor hides below-floor roles" is wrong: both
-  toggles default off, so setting a floor hides nothing until one is enabled.
-- Comparing on `max` means `$100,000 - $200,000` meets a $200,000 floor. That is
-  spec-compliant but surprising; it deserves the justifying comment.
-
-## R15 — tests that pass against a broken implementation
-
-- `"ignores a bare year"` asserts `.not.toBe("base")`, which passes for `absent`,
-  `unparseable`, **and** `ote`. Assert the exact object.
-- `"every real production string is handled"` only checks `kind !== "unparseable"`
-  — it passes for a parser returning `{kind:"base",min:0,max:0}` for everything.
-  And `expect(REAL.length).toBe(6)` restates a literal two lines above it. Make it
-  table-driven with expected values, or delete it.
-- `"meets exactly at the floor"` tests `max === floor` with `min` $50k below. No
-  test covers `min === max === floor`; add `job("$200,000")` at floor 200000.
 
 ---
 
@@ -314,6 +113,33 @@ describe("parseSalaryRange", () => {
       min: 150000,
       max: 150000,
     });
+  });
+
+  test("prefers a labeled base range even when it is NOT the first segment", () => {
+    // THE test for the headline rule. Without it, deleting the `labeledBase`
+    // branch entirely leaves all six production strings byte-identical and the
+    // whole suite green — verified by execution, not inspection. In the
+    // `(base); …OTE` string labeledBase and nonOte are the same object, and the
+    // `base + annual bonus` string has only one segment, so neither
+    // discriminates. This one does.
+    expect(parseSalaryRange("$120,000 - $140,000 (Denver); $180,000 - $200,000 base (SF)"))
+      .toEqual({ kind: "base", min: 180000, max: 200000 });
+  });
+
+  test("handles the k/K/M suffixes the app's own editor teaches", () => {
+    // components/RolesTable.tsx's salary editor carries the placeholder
+    // "e.g. $200K–$280K" — the app teaches a format the first-draft parser
+    // rejected. A silently-unparseable manual entry shows as "no range listed"
+    // with no indication anything went wrong.
+    expect(parseSalaryRange("$200K - $280K")).toEqual({ kind: "base", min: 200000, max: 280000 });
+    expect(parseSalaryRange("$150k")).toEqual({ kind: "base", min: 150000, max: 150000 });
+  });
+
+  test("a comma-separated base/OTE pair does not merge into one mangled range", () => {
+    // Splitting only on ';' yields {kind:"ote", min:280000, max:365000} — a
+    // range spanning base-min to OTE-max, then bucketed "below". Verified.
+    expect(parseSalaryRange("$280,000 - $325,000 base, $305,000 - $365,000 OTE"))
+      .toEqual({ kind: "base", min: 280000, max: 325000 });
   });
 
   test("distinguishes empty input from unparseable input", () => {
@@ -429,9 +255,9 @@ export function baseMaxFor(parsed: ParsedSalary): number | null {
 Run: `npm test -- salary`
 Expected: PASS, 9 tests. The `kind` derivation above is the subtle part — if `nonOte` is undefined and `labeledBase` is undefined, `chosen` is `parts[0]` and the ternary must yield `"ote"`. Verify that branch explicitly rather than assuming.
 
-- [ ] **Step 5: Verify against every real row — reported, not asserted**
+- [ ] **Step 5: SKIPPED — requires DATABASE_URL**
 
-Add a temporary script printing `parseSalaryRange` output for all 21 production strings, run it, paste the output into your report, and delete the script. Any row landing on `unparseable` is a finding to report, not something to silence by loosening a test.
+The original step said to run `parseSalaryRange` over all 21 production strings. There are no credentials in the worktree, and only 6 of the 21 are reproduced above. Record `SKIPPED — requires DATABASE_URL` and move the 21-string sweep to the live pass, matching how the prerequisite plan handled schema application. Do not fabricate the output.
 
 - [ ] **Step 6: Verify the build**
 
@@ -463,6 +289,10 @@ git commit -m "feat: parse posting salary strings, preferring base over OTE"
 Add `compFloor: number | null` to the interface, read it from the rows alongside `ceiling`, using `SETTING_KEYS.compFloor`.
 
 - [ ] **Step 2: Add `saveCompFloor`**
+
+Reject `0` and non-integers, matching `saveCeiling`: a floor of `0` would render a "Meets minimum" toggle that does nothing while `floorLine`'s truthiness check treats it as off. Use `!Number.isInteger(n) || n < 1`.
+
+`saveCompFloor` must use `writeSetting`/`deleteSetting` directly — `saveCriteriaList` and `saveCriteriaText` are shape-typed to `ListSettingKey`/`TextSettingKey`, and `compFloor` is neither, so passing it to them is a compile error.
 
 ```ts
 export async function saveCompFloor(n: number | null): Promise<{ error?: string }> {
@@ -543,8 +373,10 @@ describe("salaryBucketFor", () => {
     expect(salaryBucketFor(job("Competitive DOE"), 200000)).toBe("unreadable");
   });
 
-  test("an OTE-only figure never counts as meeting a base floor", () => {
-    expect(salaryBucketFor(job("$300,000 - $340,000 OTE"), 200000)).not.toBe("meets");
+  test("an OTE-only figure is its own bucket, not lumped in with below-floor", () => {
+    // `.not.toBe("meets")` passes for below / no-range / unreadable alike — it
+    // cannot catch the very mis-bucketing it exists to guard. Assert the value.
+    expect(salaryBucketFor(job("$300,000 - $340,000 OTE"), 200000)).toBe("ote");
   });
 
   test("with no floor set, anything with a readable range meets", () => {
@@ -561,10 +393,12 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement `lib/salary-filter.ts`**
 
+**`"ote"` is its own bucket — not `"below"`.** The draft returned `"below"` when `baseMaxFor` was null, and Step 5 hides `below`, so `$300,000 - $340,000 OTE` — a role whose base almost certainly clears any realistic floor — vanished the moment the toggle was on, grouped with genuinely underpaying roles. The spec says the opposite: *"An OTE-only figure is not base. Surface it as OTE; do not compare it to a base floor."* Bucketing it with below-floor roles **is** comparing it to the floor. Group it with the "No range listed" toggle (it is a *didn't tell me the base* fact, not a *pays too little* fact) or tag it and leave it always visible.
+
 ```ts
 import { baseMaxFor, parseSalaryRange } from "@/lib/salary";
 
-export type SalaryBucket = "meets" | "below" | "no-range" | "unreadable";
+export type SalaryBucket = "meets" | "below" | "ote" | "no-range" | "unreadable";
 
 /**
  * Which compensation bucket a job falls into for display filtering.
@@ -600,7 +434,21 @@ Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Add the two controls to `components/RolesTable.tsx`**
 
-Read the file first — it already has a constant-driven filter-chip pattern for statuses. Match it.
+**Deliver `compFloor` into the component first — there is currently no path.** `RolesTable` is `"use client"`, loads via its own `getJobs()`, and `app/roles/page.tsx` is a five-line pass-through rendering `<RolesTable />` with **zero props** (verified unchanged on 2026-08-14). Preferred fix: make `app/roles/page.tsx` a server component that awaits the floor and passes `<RolesTable compFloor={…} />` — one read, no client round trip, no new endpoint. Fallback if that proves awkward: a `getCompFloor()` server action in `app/actions/settings.ts`, awaited alongside `getJobs()` in `load()`. `readCompFloor` itself is a one-liner over the existing primitive:
+
+```ts
+// lib/settings-store.ts
+export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
+```
+
+**Match the chip styling, not the chip mechanism.** `RolesTable.tsx` maps `["Open","All",...JOB_STATUSES]` onto **one exclusive** `statusFilter`. This task needs two *independent booleans*; an implementer following "match it" literally may fold compensation into `statusFilter`. Reuse the chip className (`rounded-full border`, `border-ink bg-ink text-white` when active) and add:
+
+```ts
+const [meetsOnly, setMeetsOnly] = useState(false);
+const [hideNoRange, setHideNoRange] = useState(false);
+```
+
+**Add `meetsOnly`, `hideNoRange`, and `compFloor` to the `filtered` useMemo dependency array.** Omitting them is a stale-filter bug that renders correctly on first paint and then stops updating.
 
 Two **independent** toggles, because "pays too little" and "didn't tell me" are different facts and 48% of the table is the second one:
 
@@ -631,12 +479,22 @@ git commit -m "feat: filter roles by compensation on display"
 - Modify: `app/actions/settings.ts`
 
 **Interfaces:**
-- Consumes: `scoreFit({ ..., fitBrain })` from the criteria plan's Task 3.
+- Consumes: `scoreFit({ …, fitInputs: FitInputs | null })` (`app/actions/parse-role.ts`), `FitInputs` (`lib/fit-inputs.ts`), `SCORING_INPUT_COLUMNS` / `scoringArgsFor` / `ScoringArgs` (`lib/rescore-scope.ts`), `loadScoringInputs` (`lib/search-criteria.ts`).
 - Produces: `scoreFit` additionally accepting `salary_range` and `compFloor`.
 
 `scoreFit` currently never receives compensation at all — every fit score in the table today was computed with zero compensation input.
 
-- [ ] **Step 1: Extend the `scoreFit` signature**
+- [ ] **Step 1: Extend the `scoreFit` signature — and the two things bound to it**
+
+The real signature is `scoreFit({ …, fitInputs: FitInputs | null })`. Add `salary_range` as **required** (per-role posting data has no authoritative fallback, and both client call sites already have `form.salary_range` in scope), and add `compFloor: number | null` to `FitInputs` in `lib/fit-inputs.ts` — the interface carries a comment reserving exactly that slot. Adding it to `FitInputs` rather than to `scoreFit`'s argument list means the signature does not reopen.
+
+Then update `loadScoringInputs()` in `lib/search-criteria.ts` to populate `compFloor` from the same `readAllSettings()` rows it already reads — **one read, not two**.
+
+**Two bindings in `lib/rescore-scope.ts` must move with it, and the compiler will force the issue:**
+- `SCORING_INPUT_COLUMNS` gains `"salary_range"` (it is the SELECT list).
+- `scoringArgsFor(row)` gains the mapping.
+
+`ScoringArgs` is `Omit<Parameters<typeof scoreFit>[0], "fitInputs">`, so making `salary_range` required produces a **compile error** in `scoringArgsFor` until it is updated. That is the type system enforcing the invariant — do not work around it by making the field optional.
 
 Add `salary_range: string` and `compFloor: number | null` to `opts`. In the prompt, add the posting's salary to the ROLE block, and when `compFloor` is set, append one line to the candidate block:
 
@@ -648,11 +506,19 @@ const floorLine = opts.compFloor
 
 Append `floorLine` to the fit brain in the prompt rather than mutating the stored brain — the floor is its own setting and must stay separately editable.
 
-- [ ] **Step 2: Pass it through `ingestRoles`**
+- [ ] **Step 2: Pass it through `ingestRoles` — and keep it out of extraction**
+
+**Compensation must never enter `buildExtractionPrompt`.** Threading a `{criteria, compFloor}` object down the crawler path invites handing it to extraction, which would create the ingest-time compensation filter both the spec and this plan's Global Constraints forbid. It is a scoring input only.
+
+`ingestRoles` already carries `fitInputs: FitInputs` (not `Criteria`) precisely so this addition costs no call-site churn — `compFloor` rides inside it. `crawlCompany`'s three callers (`app/api/cron/crawl/route.ts`, `app/actions/watchlist.ts` ×2) get it via `RunContext` and need no edit.
 
 `lib/ingest-roles.ts` already has `role.salary_range`. Add `compFloor` to `IngestOptions` alongside the `criteria` the prerequisite plan added, and pass both into `scoreFit`. Update the three `ingestRoles` callers to load the floor once and pass it — do not read the setting inside `ingestRoles`.
 
-- [ ] **Step 3: Pass it through `rescoreAll`**
+- [ ] **Step 3: Carve compensation out of the AI-GTM floor rule**
+
+`floorLine` is a soft candidate-preference sentence, but the prompt's AI-DRIVEN GTM TRANSFORMATION RULE sets an unconditional **floor score of 4** when its three conditions hold — none of which mention pay. A below-floor role at an established B2B SaaS company with an AI-GTM mandate still floors at 4, so the spec's promise ("a below-floor role scores low rather than disappearing") and this plan's own verification item both fail. Add a clause to the SCORING GUIDE and an explicit carve-out in the floor-4 rule: *"If the posted base is below the candidate's stated minimum, cap at 3 regardless of this rule."*
+
+- [ ] **Step 4: `rescoreAll` picks it up automatically — verify, do not re-plumb**
 
 In `app/actions/settings.ts`, `rescoreAll` must select `salary_range` alongside the other columns and pass it plus the current floor into `scoreFit`. Without this, a rescore would recompute every score *without* compensation and silently undo this task.
 
@@ -680,13 +546,23 @@ git commit -m "feat: fit scoring receives posting salary and the base floor"
 
 Shipping Task 4 makes **every existing score stale**, because `scoreFit` gained an input — not on the user's first edit. The prompt must fire once after deploy, not only after an edit.
 
+**The prerequisite gate is now satisfied.** The original text said this task must not ship until the prerequisite's `rescoreAll` was fixed — it selected zero rows (`.neq("fit_score", null)` renders `<> NULL`) and dropped four scoring columns, so it would have *degraded* your best-scored roles rather than merely failing. All of that landed in the merged plan: `rawQuery` with `is not null`, the full ten-column list, `fit_score`-only writes, checked `updateJob` errors, and a bounded batch. No longer blocking.
+
+**Use `runRescorePass`, not a hand-written loop over `rescoreAll`.** `lib/rescore-progress.ts` exports the multi-batch driver, and it exists because a hand-rolled loop shipped a defect that over-billed 2–3× and never terminated: `remaining` is **per-batch**, so each batch counted prior batches' finished rows as still outstanding. 26 scored roles cost 75 Claude calls and reported "1 still to do" forever. The driver threads one `passStartedAt` through the whole pass and requests `min(batchSize, remaining)` on later batches.
+
+`remaining > 0` alone is **not** a drain condition — a permanently failing row holds it above zero. The driver's condition is `remaining > 0 && rescored > 0`; do not reimplement it.
+
 - [ ] **Step 1: Show the prompt on load when scores predate compensation**
 
 On mount, when `scoredJobCount > 0`, show the same dismissible prompt used for a fit-brain save, worded for this case:
 
 > N roles were scored before compensation was part of fit scoring. Rescore them for about $X?
 
-Dismissal is per-session; it reappears on the next load until the user rescores. There is no version column by design, so the prompt cannot know for certain that a given row predates the change — the wording must therefore not claim more than it knows. Do not add a column to make it exact; that was explicitly ruled out of scope.
+**The trigger cannot be `scoredJobCount > 0` alone.** Rescoring updates scores, it does not remove them, so that count never changes and the prompt would reappear immediately after a successful rescore, forever. Write a `comp_scoring_rescored_at` row into `app_settings` when a pass completes and suppress on it. That is a key/value **row**, not a column, so it respects the no-migration constraint that ruled out a version column — and note `CRITERIA_CHANGED_AT_KEY` in `lib/settings-store.ts` is the established pattern for exactly this: a stamp key deliberately kept *outside* `SETTING_KEYS` so it can never merge into `Criteria`. Follow it, including keeping the new key out of `SETTING_KEYS`.
+
+There is no version column by design, so the prompt cannot know for certain that a given row predates the change — the wording must not claim more than it knows.
+
+**Import `<RescorePrompt />` from `components/RescorePrompt.tsx`; do not re-implement it.** It already computes its own dollar figure from `count` so the constant has one home, and owns its busy label.
 
 - [ ] **Step 2: Verify the build**
 
@@ -712,7 +588,9 @@ git commit -m "feat: offer a rescore after compensation joins fit scoring"
 - [ ] All 21 production salary strings parse without landing on `unparseable`.
 - [ ] `$280,000 - $325,000 (base); $305,000 - $365,000 OTE` parses to base 280,000–325,000 — not the OTE figures.
 - [ ] `$150,000` parses rather than showing as "no range listed".
-- [ ] Setting a floor hides below-floor roles from `/roles` and hides nothing else.
+- [ ] Both toggles default to OFF, so setting a floor hides nothing until one is enabled — then "Meets minimum" hides only `below`.
+- [ ] An OTE-only role is never hidden by the floor toggle.
+- [ ] `$200K - $280K` (the format RolesTable's own editor teaches) parses rather than reading as "no range listed".
 - [ ] The two toggles are independent; both default to off and the table initially looks unchanged.
 - [ ] With no floor set, the "Meets minimum" toggle is not shown.
 - [ ] A newly ingested role's fit score reflects the floor.
