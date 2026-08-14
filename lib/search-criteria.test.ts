@@ -1,17 +1,29 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+// The only module in this file's graph that touches the network, mocked the
+// same way lib/settings-store.test.ts mocks it. The loaders at the bottom of
+// this file are otherwise unreachable from a test, and the property they have
+// to hold — ONE read of app_settings per load — is invisible to every other
+// kind of check.
+vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
 import {
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
   emptySearchReason,
+  loadCriteriaAndScoringInputs,
+  loadScoringInputs,
+  loadSearchInputs,
   pickQueries,
   planQueries,
   roleExtractionSchema,
+  scoringInputsFrom,
   stackQueries,
   titleListForPrompt,
   titleQueries,
   type Criteria,
 } from "./search-criteria";
+import { rawQuery } from "@/lib/supabase";
 
 const SMALL: Criteria = {
   titles: ["Head of RevOps", "GTM Engineer"],
@@ -355,5 +367,134 @@ describe("dateContextLine", () => {
   test("forbids appending a year, which is the observed failure", () => {
     const line = dateContextLine(new Date("2026-08-13T12:00:00Z"));
     expect(line.toLowerCase()).toContain("do not append a year");
+  });
+});
+
+describe("scoringInputsFrom", () => {
+  const ROWS = [
+    { key: "compFloor", value: 180000 },
+    { key: "searchCeiling", value: 12 },
+    { key: "fitBrain", value: "stored brain" },
+  ];
+
+  test("pairs the fit brain with the floor from the SAME snapshot", () => {
+    // The failure this guards is invisible: reading the brain from one read of
+    // app_settings and the floor from another lets a save landing between them
+    // score a batch against one version's candidate and another's minimum.
+    // Nothing logs it and no integration test would catch it.
+    expect(scoringInputsFrom(SMALL, ROWS)).toEqual({
+      fitBrain: "A candidate.",
+      compFloor: 180000,
+    });
+  });
+
+  test("reads compFloor, not the search ceiling sitting next to it", () => {
+    // Both are NUMBER_SETTING_KEYS, both come off the same rows, and swapping
+    // the two accessors type-checks perfectly. The values differ here so the
+    // transposition fails.
+    expect(scoringInputsFrom(SMALL, ROWS).compFloor).toBe(180000);
+    expect(scoringInputsFrom(SMALL, ROWS).compFloor).not.toBe(12);
+  });
+
+  test("no stored floor is null — the shape scoreFit reads as 'no floor'", () => {
+    expect(scoringInputsFrom(SMALL, []).compFloor).toBeNull();
+    expect(scoringInputsFrom(SMALL, [{ key: "searchCeiling", value: 12 }]).compFloor)
+      .toBeNull();
+  });
+
+  test("a non-numeric stored floor degrades to null rather than reaching the prompt", () => {
+    // A hand-edit or a bad write. `"180000"` interpolated into the floor line
+    // would read as a number to the model and as a string to every comparison.
+    expect(scoringInputsFrom(SMALL, [{ key: "compFloor", value: "180000" }]).compFloor)
+      .toBeNull();
+    expect(scoringInputsFrom(SMALL, [{ key: "compFloor", value: null }]).compFloor)
+      .toBeNull();
+  });
+
+  test("takes the fit brain from the criteria it is handed, not from the rows", () => {
+    // The criteria arrive already merged (defaults + overrides). Re-deriving
+    // the brain from the raw rows here would drop the shipped default whenever
+    // no override is stored.
+    expect(scoringInputsFrom(SMALL, ROWS).fitBrain).toBe(SMALL.fitBrain);
+    expect(scoringInputsFrom(SMALL, ROWS).fitBrain).not.toBe("stored brain");
+  });
+
+  test("carries nothing beyond the two scoring inputs", () => {
+    // FitInputs is deliberately narrow: it is handed down every batch path,
+    // and anything extra here would widen what the crawler and the role search
+    // carry around. The keys are the contract.
+    const keys = Object.keys(scoringInputsFrom(SMALL, ROWS));
+    expect(keys.length).toBe(2);
+    expect(keys.sort()).toEqual(["compFloor", "fitBrain"]);
+  });
+});
+
+describe("the settings loaders", () => {
+  const query = rawQuery as unknown as ReturnType<typeof vi.fn>;
+  const ok = (rows: unknown[]) => ({ data: rows, error: null }) as never;
+  const STORED = [
+    { key: "fitBrain", value: "stored brain" },
+    { key: "compFloor", value: 180000 },
+    { key: "searchCeiling", value: 12 },
+  ];
+
+  beforeEach(() => {
+    query.mockReset();
+    query.mockResolvedValue(ok(STORED));
+  });
+
+  test("loadScoringInputs pairs the stored brain with the stored floor", async () => {
+    expect(await loadScoringInputs()).toEqual({
+      fitBrain: "stored brain",
+      compFloor: 180000,
+    });
+  });
+
+  test("loadScoringInputs reads app_settings ONCE", async () => {
+    // Not loadCriteria() plus readCompFloor(). Two round trips let a save
+    // landing between them score a role against one version's fit brain and
+    // another version's minimum — a split nothing logs and no fixture reveals.
+    await loadScoringInputs();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  test("loadCriteriaAndScoringInputs returns both off ONE read, agreeing", async () => {
+    const { criteria, fitInputs } = await loadCriteriaAndScoringInputs();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(fitInputs).toEqual({ fitBrain: "stored brain", compFloor: 180000 });
+    // The crawl run context and the Discover ingest hand these two around
+    // together; a fit brain that disagreed with the criteria object would
+    // score roles against text the same run never searched with.
+    expect(criteria.fitBrain).toBe(fitInputs.fitBrain);
+  });
+
+  test("loadSearchInputs carries the fit inputs off its own single read", async () => {
+    const { criteria, ceiling, fitInputs } = await loadSearchInputs();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(ceiling).toBe(12);
+    expect(criteria.fitBrain).toBe("stored brain");
+    expect(fitInputs).toEqual({ fitBrain: "stored brain", compFloor: 180000 });
+  });
+
+  test("with nothing stored, every loader reports no floor and the defaults", async () => {
+    query.mockResolvedValue(ok([]));
+    expect(await loadScoringInputs()).toEqual({
+      fitBrain: DEFAULT_CRITERIA.fitBrain,
+      compFloor: null,
+    });
+    expect((await loadCriteriaAndScoringInputs()).fitInputs.compFloor).toBeNull();
+    expect((await loadSearchInputs()).fitInputs.compFloor).toBeNull();
+  });
+
+  test("a failed read degrades to the defaults rather than throwing mid-crawl", async () => {
+    // readAllSettings swallows the error by design — the crawler calls this on
+    // every run. What must NOT happen is a floor surviving from nowhere.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    query.mockResolvedValue({ data: [], error: { message: "connection lost" } } as never);
+    expect(await loadScoringInputs()).toEqual({
+      fitBrain: DEFAULT_CRITERIA.fitBrain,
+      compFloor: null,
+    });
+    err.mockRestore();
   });
 });

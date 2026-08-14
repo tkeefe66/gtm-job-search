@@ -28,7 +28,8 @@ export interface IngestOptions {
   dryRun?: boolean;
   // Carried as FitInputs rather than the whole Criteria object on purpose:
   // ingestRoles uses nothing else from criteria, and the narrower type is what
-  // stops the companion compensation plan from re-widening this interface.
+  // kept the compensation floor from re-widening this interface — it arrived
+  // as a field ON FitInputs, so no option and no call site here changed.
   // Required (not optional with a load-on-demand fallback) because every
   // caller here is a batch path — a per-row settings read inside the
   // Promise.all below would be one database round trip per scored role.
@@ -154,6 +155,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           fit_summary: role.fit_signal,
           department: "",
           location: role.location,
+          // The posting's own words, unparsed. Scoring reads compensation as
+          // context, not as a filter — the extraction prompt never sees it,
+          // and nothing here drops a role for being below the floor.
+          salary_range: role.salary_range || "",
           fitInputs,
         });
         if (scored.score > 0) {

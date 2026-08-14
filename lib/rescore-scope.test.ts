@@ -25,6 +25,7 @@ const FULL_ROW: ScoredJobRow = {
   location: "Denver, CO",
   key_skills: "Salesforce, Marketo",
   fit_summary: "Broad GTM systems ownership",
+  salary_range: "$210,000 - $240,000",
   arr: "$380M+ ARR",
   exit_signal: "PE exit planned",
   backer: "Centerbridge Partners",
@@ -39,6 +40,7 @@ const NULL_ROW: ScoredJobRow = {
   location: null,
   key_skills: null,
   fit_summary: null,
+  salary_range: null,
   arr: null,
   exit_signal: null,
   backer: null,
@@ -120,6 +122,16 @@ describe("SCORED_JOBS_SQL", () => {
     expect(SCORED_JOBS_SQL).toContain("fit_summary");
   });
 
+  test("reads salary_range — a rescore without it scores blind on pay", () => {
+    // The whole point of the compensation task: scoreFit renders the posting's
+    // pay and compares it to the user's floor. Drop this column and every
+    // rescore recomputes the score as if the employer published nothing,
+    // silently undoing the feature for every row it touches — while the
+    // rescore reports success.
+    expect(SCORING_INPUT_COLUMNS).toContain("salary_range");
+    expect(SCORED_JOBS_SQL).toContain("salary_range");
+  });
+
   test("reads from jobs only", () => {
     expect(SCORED_JOBS_SQL).toContain("from jobs");
     expect(SCORED_JOBS_SQL).not.toContain("join");
@@ -159,6 +171,11 @@ describe("scoringArgsFor", () => {
     expect(args.location).toBe("");
     expect(args.key_skills).toBe("");
     expect(args.fit_summary).toBe("");
+    // salary_range is REQUIRED on scoreFit, so it cannot degrade to undefined
+    // the way arr/exit_signal/backer do. "" is what the prompt renders as
+    // "not listed"; a null would render as the literal word "null", which the
+    // model would read as a compensation fact about the posting.
+    expect(args.salary_range).toBe("");
   });
 
   test("null financial signals become undefined, so scoreFit prints 'unknown'", () => {

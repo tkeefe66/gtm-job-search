@@ -20,6 +20,7 @@ export interface ScoredJobRow {
   location: string | null;
   key_skills: string | null;
   fit_summary: string | null;
+  salary_range: string | null;
   arr: string | null;
   exit_signal: string | null;
   backer: string | null;
@@ -40,6 +41,7 @@ export const SCORING_INPUT_COLUMNS = [
   "location",
   "key_skills",
   "fit_summary",
+  "salary_range",
   "arr",
   "exit_signal",
   "backer",
@@ -72,7 +74,7 @@ const SCORED = `fit_score is not null`;
  *    the queue.
  */
 export const SCORED_JOBS_SQL = `select id, company, role_title, company_description, department, location,
-            key_skills, fit_summary, arr, exit_signal, backer
+            key_skills, fit_summary, salary_range, arr, exit_signal, backer
        from jobs
       where ${SCORED}
       order by updated_at asc nulls first
@@ -176,6 +178,11 @@ export function scoringArgsFor(row: ScoredJobRow): ScoringArgs {
     location: row.location ?? "",
     key_skills: row.key_skills ?? "",
     fit_summary: row.fit_summary ?? "",
+    // Required on scoreFit, so a row with no stored range still has to send
+    // something: "" is what renders as "not listed" in the prompt. A null
+    // would render as the literal text "null" — a compensation figure the
+    // model would reason about.
+    salary_range: row.salary_range ?? "",
     arr: row.arr ?? undefined,
     exit_signal: row.exit_signal ?? undefined,
     backer: row.backer ?? undefined,

@@ -598,12 +598,16 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
         company: form.company, role_title: form.role_title,
         company_description: form.company_description, key_skills: form.key_skills,
         fit_summary: form.fit_summary, department: form.department, location: form.location,
+        // Required, not optional: the same string the row below stores. Left
+        // out, the role would score as if the posting published no pay.
+        salary_range: form.salary_range,
         arr: form.arr || undefined, exit_signal: form.exit_signal || undefined,
         backer: form.backer || undefined,
         // null, not omitted: this is a client component and cannot call
         // loadScoringInputs (it transitively imports `pg`). null tells the
-        // server action to load the user's CURRENT stored fit brain, so a
-        // manually-added role is scored against the edited criteria.
+        // server action to load the user's CURRENT stored fit brain AND
+        // compensation floor, so a manually-added role is scored against the
+        // edited criteria.
         fitInputs: null,
       }),
       addJob({

@@ -127,8 +127,11 @@ export function pathsToRevalidate(key: SettingKey): string[] {
  *     alone; no crawl prompt contains it. The plan text listed it here, which
  *     was wrong.
  *   - `stackTerms` never reach a crawl prompt either.
- *   - `fitBrain` re-scores roles the crawler already found.
- *   - `searchCeiling` and `compFloor` do not touch the crawler at all.
+ *   - `fitBrain` and `compFloor` re-score roles the crawler already found.
+ *     Both ride into a crawl inside RunContext.fitInputs and reach scoreFit,
+ *     but neither reaches an extraction prompt — they change what a found role
+ *     SCORES, never which roles the crawler looks for.
+ *   - `searchCeiling` does not touch the crawler at all.
  *
  * Stamping on any of those suppresses stale-posting closure for ~2 crawl
  * cycles per company after a change the crawler cannot observe.

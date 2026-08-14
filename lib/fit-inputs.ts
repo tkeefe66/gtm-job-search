@@ -10,6 +10,22 @@
  */
 export interface FitInputs {
   fitBrain: string;
-  // The companion compensation plan adds `compFloor: number | null` here.
-  // Nothing else changes when it does — that is the point of this indirection.
+  /**
+   * The minimum base compensation the user will consider, or null when no
+   * floor is set. Lives HERE rather than as another parameter on `scoreFit`
+   * for the reason this interface exists: every batch caller already threads
+   * a FitInputs through, so the floor reached scoring without reopening
+   * `scoreFit`'s signature or `ingestRoles`'s options — exactly the "nothing
+   * else changes" this comment used to promise.
+   *
+   * A scoring input ONLY. It must never reach `buildExtractionPrompt` or any
+   * other crawl-time prompt: filtering roles out at ingest time is what the
+   * spec forbids, and the promise is that a below-floor role scores low
+   * rather than disappearing.
+   *
+   * `null` and `0` both mean "no floor" — see `compFloorLine` in
+   * lib/fit-prompt.ts and `saveCompFloor` in app/actions/settings.ts, which
+   * rejects 0 for the same reason.
+   */
+  compFloor: number | null;
 }

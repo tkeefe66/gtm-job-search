@@ -79,13 +79,18 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         fit_summary: form.fit_summary,
         department: form.department,
         location: form.location,
+        // Required, not optional: the pasted posting is the only place this
+        // role's pay exists, and omitting it would score the role as if the
+        // recruiter had quoted none.
+        salary_range: form.salary_range,
         arr: form.arr || undefined,
         exit_signal: form.exit_signal || undefined,
         backer: form.backer || undefined,
         // null, not omitted: this is a client component and cannot call
         // loadScoringInputs (it transitively imports `pg`). null tells the
-        // server action to load the user's CURRENT stored fit brain, so a
-        // recruiter-parsed role is scored against the edited criteria.
+        // server action to load the user's CURRENT stored fit brain AND
+        // compensation floor, so a recruiter-parsed role is scored against the
+        // edited criteria.
         fitInputs: null,
       }),
       addJob({

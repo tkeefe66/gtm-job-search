@@ -6,7 +6,7 @@ import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import {
   ROLE_SEARCH_SYSTEM,
-  loadCriteria,
+  loadCriteriaAndScoringInputs,
   roleExtractionSchema,
   titleListForPrompt,
   type Criteria,
@@ -51,15 +51,16 @@ export interface RunContext {
 
 /**
  * Resolves a RunContext from the database. One settings read (inside
- * loadCriteria) plus one timestamp read — fitInputs is derived from the
- * criteria already in hand rather than re-reading via loadScoringInputs.
+ * loadCriteriaAndScoringInputs) plus one timestamp read — the criteria and the
+ * fit inputs come off the SAME snapshot rather than two, so a save landing
+ * between them cannot crawl one title list and score against another floor.
  */
 export async function loadRunContext(): Promise<RunContext> {
-  const [criteria, criteriaChangedAt] = await Promise.all([
-    loadCriteria(),
+  const [{ criteria, fitInputs }, criteriaChangedAt] = await Promise.all([
+    loadCriteriaAndScoringInputs(),
     readCriteriaChangedAt(),
   ]);
-  return { criteria, fitInputs: { fitBrain: criteria.fitBrain }, criteriaChangedAt };
+  return { criteria, fitInputs, criteriaChangedAt };
 }
 
 export function buildExtractionPrompt(

@@ -6,7 +6,7 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
   ROLE_SEARCH_SYSTEM,
-  loadCriteria,
+  loadCriteriaAndScoringInputs,
   roleExtractionSchema,
   titleListForPrompt,
 } from "@/lib/search-criteria";
@@ -51,8 +51,9 @@ export async function findAndSaveRoles(
 
   try {
     // Loaded once here and reused for the prompt and the ingest below, so a
-    // save landing mid-call cannot split one run across two title lists.
-    const criteria = await loadCriteria();
+    // save landing mid-call cannot split one run across two title lists — or
+    // across two compensation floors, which ride in fitInputs off this same read.
+    const { criteria, fitInputs } = await loadCriteriaAndScoringInputs();
     const hint = startup.careers_url
       ? ` Their careers page may be: ${startup.careers_url}.`
       : "";
@@ -106,7 +107,7 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
         stage: startup.stage,
       },
       source: "Discover",
-      fitInputs: { fitBrain: criteria.fitBrain },
+      fitInputs,
     });
 
     return { roles, message };

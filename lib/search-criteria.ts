@@ -11,7 +11,13 @@
 // database.
 
 import type { FitInputs } from "@/lib/fit-inputs";
-import { ceilingFrom, mergeSettings, readAllSettings } from "@/lib/settings-store";
+import {
+  ceilingFrom,
+  compFloorFrom,
+  mergeSettings,
+  readAllSettings,
+  type SettingRow,
+} from "@/lib/settings-store";
 import type { RoleSearchFamily } from "@/lib/types";
 
 export const DEFAULT_TARGET_TITLES = [
@@ -243,9 +249,14 @@ export async function loadCriteria(): Promise<Criteria> {
 export async function loadSearchInputs(): Promise<{
   criteria: Criteria;
   ceiling: number | null;
+  fitInputs: FitInputs;
 }> {
   const rows = await readAllSettings();
-  return { criteria: mergeSettings(DEFAULT_CRITERIA, rows), ceiling: ceilingFrom(rows) };
+  const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
+  // fitInputs comes off the SAME rows: the search ingests what it finds, and
+  // scoring a role against one snapshot's fit brain and another's floor is the
+  // split this function exists to prevent.
+  return { criteria, ceiling: ceilingFrom(rows), fitInputs: scoringInputsFrom(criteria, rows) };
 }
 
 /**
@@ -280,10 +291,48 @@ export function emptySearchReason(
  * lives here, and settings-store must not import this file — search-criteria
  * already imports settings-store.
  *
- * Callers that already hold a `Criteria` should build `{ fitBrain: c.fitBrain }`
- * directly instead of calling this: it costs a second settings read.
+ * Callers that already hold a `Criteria` AND the rows it came from should call
+ * `scoringInputsFrom` instead: this one costs a second settings read.
  */
 export async function loadScoringInputs(): Promise<FitInputs> {
   const rows = await readAllSettings();
-  return { fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain };
+  return scoringInputsFrom(mergeSettings(DEFAULT_CRITERIA, rows), rows);
+}
+
+/**
+ * The scoring inputs implied by ONE snapshot of app_settings.
+ *
+ * Takes the already-merged criteria plus the rows they were merged from, so a
+ * caller that needed the criteria anyway derives the fit inputs from the same
+ * read rather than taking a second one. `compFloor` is NOT a `Criteria` field
+ * — it is a scalar setting like the search ceiling — which is why the rows
+ * have to come along.
+ *
+ * Pure, so the pairing is testable: the whole failure mode here is reading the
+ * fit brain from one snapshot and the floor from another, which no integration
+ * test would catch and no log line would mention.
+ */
+export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitInputs {
+  return { fitBrain: criteria.fitBrain, compFloor: compFloorFrom(rows) };
+}
+
+/**
+ * Criteria AND fit inputs off one settings read, for the two paths that need
+ * both and hold no rows of their own: the crawl run context (lib/crawler.ts)
+ * and Discover's per-company role fetch (app/actions/roles.ts). The keyword
+ * role search gets the same pair out of `loadSearchInputs`, which also needs
+ * the ceiling.
+ *
+ * Not `loadCriteria()` followed by `loadScoringInputs()`, for the reason
+ * loadSearchInputs gives — that is two round trips, and a save landing between
+ * them runs one crawl against one version's title list and another version's
+ * compensation floor.
+ */
+export async function loadCriteriaAndScoringInputs(): Promise<{
+  criteria: Criteria;
+  fitInputs: FitInputs;
+}> {
+  const rows = await readAllSettings();
+  const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
+  return { criteria, fitInputs: scoringInputsFrom(criteria, rows) };
 }

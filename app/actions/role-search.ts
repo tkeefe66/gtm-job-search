@@ -116,11 +116,12 @@ export async function findRolesByCriteria(
   }
 
   try {
-    // ONE read of app_settings, both values derived from it. Loaded before the
+    // ONE read of app_settings, every value derived from it. Loaded before the
     // prompt and reused by the ingest below, so a settings save landing mid-run
     // can neither split the run across two title lists nor pair one version's
-    // titles with another version's ceiling.
-    const { criteria, ceiling } = await loadSearchInputs();
+    // titles with another version's ceiling — or another version's fit brain
+    // and compensation floor, which the ingest scores every found role against.
+    const { criteria, ceiling, fitInputs } = await loadSearchInputs();
 
     // An empty title (or location) list enumerates to zero queries. Without
     // this the run would build a prompt with an empty bullet list, spend a
@@ -205,7 +206,7 @@ export async function findRolesByCriteria(
           company,
           roles,
           source: "Role Search",
-          fitInputs: { fitBrain: criteria.fitBrain },
+          fitInputs,
         });
       } catch (err) {
         console.error(
