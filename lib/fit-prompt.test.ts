@@ -118,14 +118,33 @@ describe("compScoringClause", () => {
     expect(clause.toLowerCase()).not.toContain("score 1");
   });
 
-  test("does not reward pay above the floor", () => {
+  test("a band whose top only reaches the minimum is capped like a below-floor role", () => {
+    // Agreement with salaryBucketFor's `base > floor`. Without this bullet a
+    // $150,000-$200,000 band at a $200,000 floor is neither "clearly below" nor
+    // outside "at or above", so the model scores it 4-5 while the table buckets
+    // it "below" and hides it under "Meets minimum". Pinned as whole clauses:
+    // the bare word "top" appears elsewhere in the prompt.
+    const clause = compScoringClause(180000);
+    expect(clause).toContain(
+      "- Posted base range whose TOP only reaches that minimum = treat it as below too, and cap at 3 the same way."
+    );
+    expect(clause).toContain(
+      "Reaching the number would take negotiating to the absolute ceiling of the band, which is not meeting a minimum."
+    );
+  });
+
+  test("does not reward pay above the floor, and 'above' excludes merely reaching it", () => {
     // Asymmetric on purpose. The floor is a minimum, not a ranking signal —
     // otherwise the highest bidder outranks the best-fitting role. Pinned as
     // the whole instruction: "no adjustment" alone survives an edit that
     // reverses the sentence around it.
     expect(compScoringClause(180000)).toContain(
-      "- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor."
+      "- Posted base above the minimum, meaning the top of the range clears it outright = no adjustment. Do not reward pay above the floor."
     );
+    // The old wording. "At or above" contradicts the band-top bullet directly:
+    // a band topping out AT the minimum satisfies it, so the two bullets would
+    // tell the model to cap and not to cap the same role.
+    expect(compScoringClause(180000)).not.toContain("at or above");
   });
 
   test("tells the model not to treat OTE as a base figure", () => {
@@ -157,6 +176,16 @@ describe("aiGtmCompCarveOut", () => {
     const carve = aiGtmCompCarveOut(180000);
     expect(carve).toContain("cap at 3");
     expect(carve).toContain("regardless of this rule");
+  });
+
+  test("carries the band-top rule itself, rather than leaving it to the clause above", () => {
+    // Read where it sits, inside the rule whose floor of 4 it has to beat. If
+    // "below the minimum" is read narrowly here, a band topping out AT the
+    // minimum floors at 4 while the table hides it — the same table-versus-
+    // score split, reopened by the one rule that outranks the clause.
+    expect(aiGtmCompCarveOut(180000)).toContain(
+      "or is a range whose top only reaches it, cap at 3 regardless of this rule"
+    );
   });
 
   test("no floor set means no carve-out", () => {
@@ -379,15 +408,16 @@ describe("the rendered prompt, against its fixture", () => {
     const noFloor = read("fit-prompt.no-floor.txt").split("\n");
     const extra = withFloor.filter((l) => !noFloor.includes(l));
     expect(extra.length).toBeGreaterThan(0);
-    // The candidate-block floor line, the four-line COMPENSATION block, and
+    // The candidate-block floor line, the five-line COMPENSATION block, and
     // the carve-out. Nothing else may appear only in the floor rendering.
     expect(extra).toEqual([
       "- Targets roles paying at least $180,000 base. Below that is a weaker fit unless the equity or building opportunity is exceptional.",
       "COMPENSATION (the candidate stated a minimum base above — apply it):",
       "- Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is, and say so in the rationale. Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see.",
-      "- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor.",
+      "- Posted base range whose TOP only reaches that minimum = treat it as below too, and cap at 3 the same way. Reaching the number would take negotiating to the absolute ceiling of the band, which is not meeting a minimum.",
+      "- Posted base above the minimum, meaning the top of the range clears it outright = no adjustment. Do not reward pay above the floor.",
       "- No base published, or an OTE / on-target figure only = no adjustment either way. OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it.",
-      "→ If the posted base is below the candidate's stated minimum, cap at 3 regardless of this rule. The compensation floor overrides this one.",
+      "→ If the posted base is below the candidate's stated minimum, or is a range whose top only reaches it, cap at 3 regardless of this rule. The compensation floor overrides this one.",
     ]);
     // And the no-floor rendering adds nothing of its own.
     expect(noFloor.filter((l) => !withFloor.includes(l))).toEqual([]);

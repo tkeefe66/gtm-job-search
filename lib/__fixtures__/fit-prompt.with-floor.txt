@@ -26,7 +26,8 @@ SCORING GUIDE:
 
 COMPENSATION (the candidate stated a minimum base above — apply it):
 - Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is, and say so in the rationale. Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see.
-- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor.
+- Posted base range whose TOP only reaches that minimum = treat it as below too, and cap at 3 the same way. Reaching the number would take negotiating to the absolute ceiling of the band, which is not meeting a minimum.
+- Posted base above the minimum, meaning the top of the range clears it outright = no adjustment. Do not reward pay above the floor.
 - No base published, or an OTE / on-target figure only = no adjustment either way. OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it.
 
 TITLE SCOPE SIGNALS (use these to adjust score):
@@ -49,7 +50,7 @@ AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):
 3. The domain is within 1 degree of Tom's background (B2B SaaS, ABM/ABX, RevTech/MarTech, GTM tooling, data platforms, or any software vertical where his GTM-systems leadership transfers)
 → When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the practitioner-builder + systems-architect role Tom is targeting.
 → If the domain requires deep vertical expertise Tom lacks (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — he'd spend year 1 learning the domain rather than building.
-→ If the posted base is below the candidate's stated minimum, cap at 3 regardless of this rule. The compensation floor overrides this one.
+→ If the posted base is below the candidate's stated minimum, or is a range whose top only reaches it, cap at 3 regardless of this rule. The compensation floor overrides this one.
 
 Return a JSON object with:
 - score (integer 1-5)

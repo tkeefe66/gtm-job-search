@@ -95,6 +95,13 @@ export function compFloorLine(compFloor: number | null): string {
  * "Cap at 3", not "score 1-2". The spec's promise is that a below-floor role
  * scores LOW rather than disappearing — it stays visible, sorted down, with a
  * rationale that says why.
+ *
+ * The band-top bullet exists so this clause agrees with `salaryBucketFor` in
+ * lib/salary-filter.ts, which buckets on `base > floor`. A band topping out AT
+ * the minimum is not "clearly below" it and would read as "at or above", so
+ * without the bullet the model scores it 4-5 while the table files it under
+ * "below" and the "Meets minimum" toggle hides it — the table and the score
+ * saying different things about the same role.
  */
 export function compScoringClause(compFloor: number | null): string {
   if (!compFloor || compFloor <= 0) return "";
@@ -102,7 +109,8 @@ export function compScoringClause(compFloor: number | null): string {
 
 COMPENSATION (the candidate stated a minimum base above — apply it):
 - Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is, and say so in the rationale. Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see.
-- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor.
+- Posted base range whose TOP only reaches that minimum = treat it as below too, and cap at 3 the same way. Reaching the number would take negotiating to the absolute ceiling of the band, which is not meeting a minimum.
+- Posted base above the minimum, meaning the top of the range clears it outright = no adjustment. Do not reward pay above the floor.
 - No base published, or an OTE / on-target figure only = no adjustment either way. OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it.`;
 }
 
@@ -116,10 +124,16 @@ COMPENSATION (the candidate stated a minimum base above — apply it):
  * place in the prompt where two floors collide, and the money one has to win —
  * otherwise the guide says "cap at 3" and the rule says "at least 4" in the
  * same prompt.
+ *
+ * Carries the band-top rule too, spelled out rather than referenced. This line
+ * is read where it sits — inside the rule whose "floor score of 4" it has to
+ * beat — and "below the minimum" read narrowly there floors a band-topping-out
+ * role at 4, which is the same table-versus-score split the clause above
+ * closes, reopened by the one rule that outranks it.
  */
 export function aiGtmCompCarveOut(compFloor: number | null): string {
   if (!compFloor || compFloor <= 0) return "";
-  return `\n→ If the posted base is below the candidate's stated minimum, cap at 3 regardless of this rule. The compensation floor overrides this one.`;
+  return `\n→ If the posted base is below the candidate's stated minimum, or is a range whose top only reaches it, cap at 3 regardless of this rule. The compensation floor overrides this one.`;
 }
 
 /**

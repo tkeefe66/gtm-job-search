@@ -19,12 +19,17 @@ describe("salaryBucketFor", () => {
     expect(salaryBucketFor(job("$120,000 - $150,000"), 200000)).toBe("below");
   });
 
-  test("meets exactly at the floor", () => {
-    // Pins `>=`, not `>`. A posting whose top of band IS the stated minimum
-    // meets the minimum; `>` drops the exact-match role silently.
-    expect(salaryBucketFor(job("$150,000 - $200,000"), 200000)).toBe("meets");
-    // One dollar under is the other side of the same boundary.
+  test("a band topping out exactly at the floor is below it", () => {
+    // Pins `>`, not `>=`. A band whose top only REACHES the stated minimum
+    // would take negotiating to its absolute ceiling to barely hit the number,
+    // so it counts as below. Both sides of the boundary are pinned: a suite
+    // that only proved "below" would pass against an implementation returning
+    // "below" for everything.
+    expect(salaryBucketFor(job("$150,000 - $200,000"), 200000)).toBe("below");
+    // One dollar under, still below.
     expect(salaryBucketFor(job("$150,000 - $199,999"), 200000)).toBe("below");
+    // One dollar over is the first band that clears the floor.
+    expect(salaryBucketFor(job("$150,000 - $200,001"), 200000)).toBe("meets");
   });
 
   test("no-range when the posting listed nothing", () => {

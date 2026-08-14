@@ -37,8 +37,12 @@ export function salaryBucketFor(
   // Known figure, but not a base one — see the "ote" note above.
   if (base === null) return "ote";
   if (floor === null) return "meets";
-  // `>=`: a band whose top IS the stated minimum meets the minimum.
-  return base >= floor ? "meets" : "below";
+  // `>`, not `>=`: a band whose top only REACHES the stated minimum is below
+  // it. Hitting the number would mean negotiating to the absolute ceiling of
+  // the band, which is not meeting a minimum — it is the best possible case of
+  // failing to. `$150,000 - $200,000` is below a $200,000 floor; the top has to
+  // clear it, as `$177,000 - $221,000` does.
+  return base > floor ? "meets" : "below";
 }
 
 /**
