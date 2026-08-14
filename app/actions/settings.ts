@@ -179,6 +179,43 @@ export async function saveCeiling(n: number | null): Promise<{ error?: string }>
   return {};
 }
 
+/**
+ * The minimum acceptable base compensation, or null to turn the floor off.
+ *
+ * Same validation as saveCeiling, and for the same reason: `0` is not a valid
+ * "off" spelling here (that is what `null` is for) — a stored `0` would render
+ * a "Meets minimum" toggle that does nothing, because every truthiness check
+ * downstream (`floorLine`, the /roles filter) treats `0` the same as "not
+ * set", silently turning the floor into a no-op instead of the strict
+ * $0-or-more filter its value implies.
+ *
+ * Routed through applySideEffects like every other save/reset in this file,
+ * even though CACHES_TO_CLEAR and AFFECTS_CRAWL both currently resolve
+ * compFloor to "nothing to do" — so if that ever changes, this action picks
+ * it up automatically instead of silently bypassing the one funnel that
+ * decides.
+ *
+ * Deliberately NOT saveCriteriaList/saveCriteriaText: both are shape-typed to
+ * ListSettingKey/TextSettingKey, and compFloor is neither — passing it to
+ * either is a compile error by design (see NUMBER_SETTING_KEYS in
+ * lib/settings-store.ts).
+ */
+export async function saveCompFloor(n: number | null): Promise<{ error?: string }> {
+  if (n !== null && (!Number.isInteger(n) || n < 1)) {
+    return {
+      error: "The minimum base must be a whole number of at least 1, or off.",
+    };
+  }
+  const { error } =
+    n === null
+      ? await deleteSetting(SETTING_KEYS.compFloor)
+      : await writeSetting(SETTING_KEYS.compFloor, n);
+  if (error) return { error: `Could not save the minimum base — ${error}` };
+
+  await applySideEffects(SETTING_KEYS.compFloor);
+  return {};
+}
+
 /** Deletes the stored override, so the shipped default takes over again. */
 export async function resetSetting(key: SettingKey): Promise<{ error?: string }> {
   const { error } = await deleteSetting(key);

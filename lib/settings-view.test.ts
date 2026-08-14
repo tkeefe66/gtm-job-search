@@ -14,6 +14,7 @@ describe("buildSettingsView", () => {
     const view = buildSettingsView({ ...CLEAN, scoredJobCount: 12 });
     expect(view.criteria).toEqual(DEFAULT_CRITERIA);
     expect(view.ceiling).toBeNull();
+    expect(view.compFloor).toBeNull();
     expect(view.scoredJobCount).toBe(12);
     expect(view.fitBrainOverridden).toBe(false);
     expect(view.error).toBeUndefined();
@@ -29,6 +30,18 @@ describe("buildSettingsView", () => {
     });
     expect(view.criteria.titles).toEqual(["Head of RevOps"]);
     expect(view.ceiling).toBe(15);
+  });
+
+  test("the comp floor is read off stored rows independently of the ceiling", () => {
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [
+        { key: "searchCeiling", value: 15 },
+        { key: "compFloor", value: 150000 },
+      ],
+    });
+    expect(view.ceiling).toBe(15);
+    expect(view.compFloor).toBe(150000);
   });
 
   test("a stored fit brain marks the rescore prompt's gate open", () => {

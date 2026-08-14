@@ -7,6 +7,7 @@ import {
   rescoreAll,
   resetSetting,
   saveCeiling,
+  saveCompFloor,
   saveCriteriaList,
   saveCriteriaText,
 } from "@/app/actions/settings";
@@ -32,7 +33,7 @@ import { Spinner } from "./ui";
 
 type ListSection = "titles" | "locations" | "stackTerms";
 type TextSection = "locationRule" | "fitBrain";
-type Section = ListSection | TextSection | "ceiling";
+type Section = ListSection | TextSection | "ceiling" | "compFloor";
 
 const LABELS: Record<Section, string> = {
   titles: "Target titles",
@@ -41,6 +42,7 @@ const LABELS: Record<Section, string> = {
   locationRule: "Location rule",
   fitBrain: "Fit brain",
   ceiling: "Search ceiling",
+  compFloor: "Minimum base compensation",
 };
 
 /**
@@ -59,6 +61,8 @@ interface Draft {
   fitBrain: string;
   ceilingEnabled: boolean;
   ceiling: string;
+  compFloorEnabled: boolean;
+  compFloor: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -69,6 +73,8 @@ const EMPTY_DRAFT: Draft = {
   fitBrain: "",
   ceilingEnabled: false,
   ceiling: "",
+  compFloorEnabled: false,
+  compFloor: "",
 };
 
 function draftFrom(view: SettingsView): Draft {
@@ -80,6 +86,8 @@ function draftFrom(view: SettingsView): Draft {
     fitBrain: view.criteria.fitBrain,
     ceilingEnabled: view.ceiling !== null,
     ceiling: view.ceiling === null ? "" : String(view.ceiling),
+    compFloorEnabled: view.compFloor !== null,
+    compFloor: view.compFloor === null ? "" : String(view.compFloor),
   };
 }
 
@@ -105,6 +113,12 @@ function syncSection(draft: Draft, view: SettingsView, section: Section): Draft 
       return { ...draft, fitBrain: fresh.fitBrain };
     case "ceiling":
       return { ...draft, ceilingEnabled: fresh.ceilingEnabled, ceiling: fresh.ceiling };
+    case "compFloor":
+      return {
+        ...draft,
+        compFloorEnabled: fresh.compFloorEnabled,
+        compFloor: fresh.compFloor,
+      };
   }
 }
 
@@ -120,8 +134,12 @@ const SEP = "\n";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** A positive whole number, or null for "no ceiling". */
-function parseCeiling(text: string): number | null {
+/**
+ * A positive whole number, or null for "off". Shared by the search ceiling
+ * and the comp floor — both reject 0 and non-integers the same way
+ * saveCeiling and saveCompFloor do server-side.
+ */
+function parsePositiveInt(text: string): number | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
   const n = Number(trimmed);
@@ -146,6 +164,11 @@ export default function Settings() {
   // Only ever WIDENS the prompt's gate (see showRescorePrompt) — it is never
   // required for the prompt to appear, so it cannot bury it on a fresh load.
   const [fitBrainTouchedHere, setFitBrainTouchedHere] = useState(false);
+  // Same idea for the comp floor: unlike fitBrainOverridden, SettingsView
+  // carries no server-side "was the floor ever set" flag, so this session
+  // flag is the ONLY gate for the floor's copy of the prompt (see
+  // showCompFloorRescorePrompt) rather than a widener on top of one.
+  const [compFloorTouchedHere, setCompFloorTouchedHere] = useState(false);
   const [rescoreNotice, setRescoreNotice] = useState<string | null>(null);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
 
@@ -300,7 +323,7 @@ export default function Settings() {
       void run("ceiling", () => saveCeiling(null));
       return;
     }
-    const n = parseCeiling(draft.ceiling);
+    const n = parsePositiveInt(draft.ceiling);
     if (n === null) {
       fail(
         "ceiling",
@@ -309,6 +332,31 @@ export default function Settings() {
       return;
     }
     void run("ceiling", () => saveCeiling(n));
+  }
+
+  /**
+   * A comp-floor save (on OR off) is a scoring-input edit exactly like a
+   * fit-brain edit — see saveCompFloor's doc comment — so both branches touch
+   * the rescore gate, not just the "set a number" branch.
+   */
+  function handleSaveCompFloor() {
+    const afterSave = () => {
+      setCompFloorTouchedHere(true);
+      setRescoreDismissed(false);
+    };
+    if (!draft.compFloorEnabled) {
+      void run("compFloor", () => saveCompFloor(null), afterSave);
+      return;
+    }
+    const n = parsePositiveInt(draft.compFloor);
+    if (n === null) {
+      fail(
+        "compFloor",
+        "Enter a whole dollar amount (at least 1), or turn the minimum off."
+      );
+      return;
+    }
+    void run("compFloor", () => saveCompFloor(n), afterSave);
   }
 
   /**
@@ -367,7 +415,7 @@ export default function Settings() {
     titles: toList(draft.titles).length,
     locations: toList(draft.locations).length,
     stackTerms: toList(draft.stackTerms).length,
-    ceiling: draft.ceilingEnabled ? parseCeiling(draft.ceiling) : null,
+    ceiling: draft.ceilingEnabled ? parsePositiveInt(draft.ceiling) : null,
   };
   const estimateLine = formatEstimate(estimateInput);
 
@@ -383,6 +431,15 @@ export default function Settings() {
     view.scoredJobCount > 0 &&
     (view.fitBrainOverridden || fitBrainTouchedHere) &&
     !rescoreDismissed;
+
+  // No `view.compFloorOverridden` exists to widen this the way fitBrain's gate
+  // is widened above — the floor has no such server-tracked flag (SettingsView
+  // only carries the current value, not whether it was ever set) — so this is
+  // the whole gate, not an addition to one. `rescoreDismissed` is still
+  // shared: dismissing either prompt dismisses both, since one rescoreAll
+  // pass covers whatever made scores stale.
+  const showCompFloorRescorePrompt =
+    !!view && view.scoredJobCount > 0 && compFloorTouchedHere && !rescoreDismissed;
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-ink/40">Loading…</div>;
@@ -542,6 +599,71 @@ export default function Settings() {
           <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
         )}
         {rescoreNotice && <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>}
+      </SectionCard>
+
+      <SectionCard
+        label={LABELS.compFloor}
+        help="Filters the Roles table and feeds fit scoring. It never keeps a role from being saved — every posting the crawler and every search find still lands in your pipeline, floor or no floor."
+        error={errors.compFloor}
+        notice={notices.compFloor}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={!draft.compFloorEnabled}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, compFloorEnabled: !e.target.checked }))
+              }
+            />
+            No minimum
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            $
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={draft.compFloor}
+              disabled={!draft.compFloorEnabled}
+              onChange={(e) => setDraft((d) => ({ ...d, compFloor: e.target.value }))}
+              placeholder="150000"
+              className="w-28 rounded-md border border-slate px-2 py-1 text-sm disabled:opacity-40"
+            />
+            base, minimum
+          </label>
+        </div>
+        <SectionActions
+          busy={!!busy.compFloor}
+          onSave={handleSaveCompFloor}
+          onReset={() =>
+            void run("compFloor", () => saveCompFloor(null), () => {
+              setCompFloorTouchedHere(true);
+              setRescoreDismissed(false);
+            })
+          }
+          resetLabel="Turn off"
+        />
+
+        {showCompFloorRescorePrompt && (
+          <RescorePrompt
+            count={view.scoredJobCount}
+            busy={rescoring}
+            onRescore={() => void handleRescore()}
+            onDismiss={() => setRescoreDismissed(true)}
+          />
+        )}
+        {rescoring && !showRescorePrompt && (
+          <div className="mt-2">
+            <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
+          </div>
+        )}
+        {rescoreError && !showRescorePrompt && (
+          <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
+        )}
+        {rescoreNotice && !showRescorePrompt && (
+          <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>
+        )}
       </SectionCard>
 
       <SectionCard

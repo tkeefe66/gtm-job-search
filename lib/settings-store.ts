@@ -156,12 +156,17 @@ export function numberFrom(rows: SettingRow[], key: SettingKey): number | null {
 export const ceilingFrom = (rows: SettingRow[]) =>
   numberFrom(rows, SETTING_KEYS.searchCeiling);
 
+/** The minimum base compensation out of rows already read. See numberFrom. */
+export const compFloorFrom = (rows: SettingRow[]) =>
+  numberFrom(rows, SETTING_KEYS.compFloor);
+
 /** Reads one scalar setting, taking its own snapshot of app_settings. */
 export async function readNumberSetting(key: SettingKey): Promise<number | null> {
   return numberFrom(await readAllSettings(), key);
 }
 
 export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
+export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
 
 /**
  * The same read as `readAllSettings`, but WITH the failure channel.

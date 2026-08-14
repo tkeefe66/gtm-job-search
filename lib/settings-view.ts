@@ -11,6 +11,7 @@ import { DEFAULT_CRITERIA, type Criteria } from "@/lib/search-criteria";
 import {
   SETTING_KEYS,
   ceilingFrom,
+  compFloorFrom,
   mergeSettings,
   type SettingRow,
 } from "@/lib/settings-store";
@@ -18,6 +19,9 @@ import {
 export interface SettingsView {
   criteria: Criteria;
   ceiling: number | null;
+  /** The minimum base compensation, or null for "off". Filters /roles and feeds
+   *  fit scoring — see Tasks 3 and 4 of the compensation-floor plan. */
+  compFloor: number | null;
   scoredJobCount: number;
   fitBrainOverridden: boolean;
   /** Everything wrong with this load, in one line, or absent when clean. */
@@ -69,6 +73,7 @@ export function buildSettingsView(input: SettingsViewInput): SettingsView {
   return {
     criteria: mergeSettings(DEFAULT_CRITERIA, input.rows),
     ceiling: ceilingFrom(input.rows),
+    compFloor: compFloorFrom(input.rows),
     scoredJobCount: input.scoredJobCount,
     // Gates the rescore prompt across page loads — a client component has no
     // memory, so "re-show it this session" would bury it on a fresh load.

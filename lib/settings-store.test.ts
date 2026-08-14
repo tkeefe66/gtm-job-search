@@ -6,6 +6,7 @@ import {
   NUMBER_SETTING_KEYS,
   TEXT_SETTING_KEYS,
   ceilingFrom,
+  compFloorFrom,
   mergeSettings,
   numberFrom,
   SETTING_KEYS,
@@ -118,6 +119,23 @@ describe("numberFrom / ceilingFrom", () => {
     expect(numberFrom([...rows, { key: "compFloor", value: 150000 }], "compFloor")).toBe(
       150000
     );
+  });
+});
+
+describe("compFloorFrom", () => {
+  test("picks the stored comp floor out of rows already read", () => {
+    expect(compFloorFrom([{ key: "compFloor", value: 150000 }])).toBe(150000);
+  });
+
+  test("a missing row reads as not set", () => {
+    expect(compFloorFrom([{ key: "titles", value: ["A"] }])).toBeNull();
+  });
+
+  test("does not read the search ceiling's row", () => {
+    // Two separate numeric settings, sharing numberFrom's implementation —
+    // this pins that compFloorFrom is scoped to its own key, not just to
+    // "the first number it finds."
+    expect(compFloorFrom([{ key: "searchCeiling", value: 15 }])).toBeNull();
   });
 });
 
