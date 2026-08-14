@@ -10,6 +10,7 @@ import {
   salaryBucketFor,
   type SalaryBucket,
 } from "@/lib/salary-filter";
+import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -61,10 +62,55 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   async function load() {
     setLoading(true);
     const res = await getJobs();
-    if (res.error) setError(res.error);
-    else setError(null);
+    // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
+    // getJobs returns `error.message` verbatim and a connection-level failure
+    // carries an EMPTY one, so the truthiness spelling took the `else` branch,
+    // cleared the banner, and rendered `jobs: []` as a genuinely empty
+    // pipeline. "You have no roles" and "the database is unreachable" are the
+    // two answers that must never be confused, and this table showed the
+    // first for the second.
+    const failure = describeWriteFailure(res.error, "load your roles");
+    setError(failure ?? null);
     setJobs(res.jobs);
     setLoading(false);
+  }
+
+  /**
+   * Applies a write the UI has ALREADY painted as done, and tells the truth
+   * when it did not land.
+   *
+   * All three callers below are optimistic: they mutate local state first so
+   * the table feels instant, then wrote to the database and DISCARDED the
+   * result. Any failure — a connection blip, a constraint violation, a bad
+   * field/value pair through handleFieldSave's untyped cast — left the screen
+   * showing a value the database never received, with no banner and no log
+   * line, until something else happened to trigger a reload. For handleStatus
+   * that means a lost pipeline stage, which lib/crawler.ts's
+   * STALE_POSTING_CANDIDATES_SQL comment calls "unrecoverable information" and
+   * builds two SQL predicates to protect; for handleFieldSave it means
+   * hand-typed text.
+   *
+   * Recovery is a re-`load()`, not a revert of the optimistic state: restoring
+   * the prior value means capturing and replaying it correctly at three call
+   * sites, while `load()` refetches the truth in one call that already exists.
+   * The error is surfaced as well — a silent reload that snaps the row back
+   * with no explanation is its own confusing bug.
+   *
+   * setError runs AFTER load(), deliberately: load() clears the banner on a
+   * clean read, so setting the message first would have it wiped by the very
+   * reload that proves it.
+   */
+  async function commitWrite(
+    what: string,
+    write: () => Promise<{ error?: string }>
+  ) {
+    const failure = describeWriteFailure((await write()).error, what);
+    if (failure === undefined) return;
+    console.error(`RolesTable: ${failure}`);
+    await load();
+    setError(
+      `${failure}. The table has been reloaded, so what you see now is what is actually stored.`
+    );
   }
 
   useEffect(() => { void load(); }, []);
@@ -159,17 +205,22 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
   async function handleStatus(job: Job, status: JobStatus) {
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
-    await updateJob(job.id, { status });
+    await commitWrite(`move ${job.company} to "${status}"`, () =>
+      updateJob(job.id, { status })
+    );
   }
 
   async function handleDelete(id: string) {
+    const removed = jobs.find((j) => j.id === id);
     setJobs((prev) => prev.filter((j) => j.id !== id));
-    await deleteJob(id);
+    await commitWrite(`delete ${removed?.company ?? "that role"}`, () => deleteJob(id));
   }
 
   async function handleFieldSave(id: string, field: keyof Job, value: string) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
-    await updateJob(id, { [field]: value } as Partial<Job>);
+    await commitWrite(`save the ${String(field)} you typed`, () =>
+      updateJob(id, { [field]: value } as Partial<Job>)
+    );
   }
 
   function Th({ label, sortable, col }: { label: string; sortable?: SortKey; col?: string }) {

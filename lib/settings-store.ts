@@ -1,4 +1,5 @@
 import { rawQuery } from "@/lib/supabase";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 // The full set of editable settings. Adding one here plus a default in
 // lib/search-criteria.ts is the whole change — app_settings is key/value, so
@@ -226,50 +227,20 @@ export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
  * with default-derived text. There is no history table to recover it from.
  */
 /**
- * Stands in for a driver error that arrived with nothing to say.
+ * The empty-message doctrine now lives in lib/write-failure.ts, which imports
+ * NOTHING — this module reaches `pg` through lib/supabase.ts, and that put the
+ * cure permanently out of reach of every `"use client"` component that writes
+ * through a server action (components/RolesTable.tsx being the one that needed
+ * it most). Re-exported here so no existing importer changed, and so this
+ * remains the obvious place to look for it.
  *
- * With DATABASE_URL unset, pg rejects with an Error whose `message` is the
- * EMPTY STRING. An empty string is falsy, so every `if (error)` downstream —
- * including the one in readAllSettings below, and the settings page's own
- * banner — reads a hard read failure as success with no rows. The whole
- * failure channel this function exists to provide silently evaporates, and a
- * build with no database produces a clean log and a permanently wrong page.
- *
- * The fix has two halves, and they live in different places on purpose.
- * DETECTION is presence: every reader branches on `error !== undefined`, never
- * on truthiness, so an undescribed failure is still a failure. DESCRIPTION is
- * this constant, substituted where the message is about to be shown or logged.
- * readAllSettingsResult keeps the driver's message verbatim — including the
- * empty one — because a transport layer that invents text makes the presence
- * check untestable, and the presence check is the half that actually matters.
+ * The rule both halves encode: DETECTION is presence (`error !== undefined`),
+ * DESCRIPTION substitutes UNDESCRIBED_DB_ERROR only where text is shown.
+ * readAllSettingsResult below keeps the driver's message VERBATIM, empty one
+ * included, because a transport that invents text makes the presence check
+ * untestable — and the presence check is the half that actually matters.
  */
-export const UNDESCRIBED_DB_ERROR =
-  "the database driver failed without a message (typically an unset or unreachable DATABASE_URL)";
-
-/**
- * Turns a writer's `{ error?: string }` into a sentence for the user, or
- * undefined when the write succeeded.
- *
- * A function rather than an `if` at each call site because BOTH halves of the
- * UNDESCRIBED_DB_ERROR doctrine are easy to get wrong and neither is testable
- * inside a `"use server"` module:
- *
- *  - DETECTION is presence (`=== undefined`), never truthiness. pg with no
- *    DATABASE_URL rejects with an EMPTY message, so `if (error)` skips the
- *    failure path entirely. That exact defect shipped in `readAllSettings` and
- *    produced a clean build, a permanently wrong page, and zero log output.
- *  - DESCRIPTION substitutes the stand-in only where the text is shown, so a
- *    message-less failure does not render a sentence trailing off after a dash.
- *
- * `what` completes "Could not ___" and is quoted verbatim.
- */
-export function describeWriteFailure(
-  error: string | undefined,
-  what: string
-): string | undefined {
-  if (error === undefined) return undefined;
-  return `Could not ${what} — ${error || UNDESCRIBED_DB_ERROR}`;
-}
+export { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
 
 export async function readAllSettingsResult(): Promise<{
   rows: SettingRow[];

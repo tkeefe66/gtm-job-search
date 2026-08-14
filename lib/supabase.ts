@@ -13,6 +13,38 @@
 // Awaiting any builder resolves to { data, error } just like supabase-js.
 
 import { Pool, types } from "pg";
+import { aggregateCauses } from "@/lib/write-failure";
+
+/**
+ * Recovers the real cause of a failure whose `message` is empty, as a LOG LINE
+ * only.
+ *
+ * pg rejects with an `AggregateError` — whose `message` is the empty string —
+ * whenever a host resolves to more than one address and every connection
+ * attempt fails. The actual per-address errors are on `.errors[]`, and this
+ * catch site is the only place in the process that still has them: every layer
+ * above sees `{ message: "" }` and nothing else.
+ *
+ * Deliberately does NOT fill in `message`. Inventing text in the transport is
+ * what lib/write-failure.ts's doctrine forbids, and it would also erase the
+ * empty-message case that every presence check downstream is written to
+ * survive. So the returned error is unchanged and only the log gains anything —
+ * behavior is identical, diagnostics are not.
+ */
+function describeThrown(e: unknown): { message: string } {
+  const message = e instanceof Error ? e.message : String(e);
+  if (!message) {
+    const causes = aggregateCauses(e);
+    console.error(
+      `supabase: the driver failed with no message — the database is unreachable ` +
+        `entirely, not one failed statement. ` +
+        (causes.length > 0
+          ? `Underlying causes: ${causes.join("; ")}`
+          : `No underlying causes were attached.`)
+    );
+  }
+  return { message };
+}
 
 // Return timestamps as ISO strings (parity with Supabase/PostgREST). The app
 // treats these as strings, e.g. `new Date(iso)` in components.
@@ -205,10 +237,7 @@ class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
       }
       return { data: res.rows as T, error: null };
     } catch (e) {
-      return {
-        data: null as T,
-        error: { message: e instanceof Error ? e.message : String(e) },
-      };
+      return { data: null as T, error: describeThrown(e) };
     }
   }
 }
@@ -232,9 +261,6 @@ export async function rawQuery<T = Row>(
     const res = await getPool().query(text, values);
     return { data: res.rows as T[], error: null };
   } catch (e) {
-    return {
-      data: [],
-      error: { message: e instanceof Error ? e.message : String(e) },
-    };
+    return { data: [], error: describeThrown(e) };
   }
 }
