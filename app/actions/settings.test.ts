@@ -16,7 +16,15 @@ vi.mock("@/lib/settings-store", async (importOriginal) => ({
   deleteSetting: vi.fn(),
 }));
 
-import { markCompScoringRescored, rescoreAll, saveCompFloor } from "./settings";
+import {
+  markCompScoringRescored,
+  rescoreAll,
+  resetSetting,
+  saveCeiling,
+  saveCompFloor,
+  saveCriteriaList,
+  saveCriteriaText,
+} from "./settings";
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import {
@@ -313,5 +321,99 @@ describe("rescoreAll's remaining count", () => {
     expect(res.error).toContain("boom");
     // Feeding that result straight back through the guard must refuse.
     expect((await markCompScoringRescored(res)).stamped).toBe(false);
+  });
+});
+
+describe("the save and reset paths report a write that failed", () => {
+  // The four untreated siblings of saveCompFloor. Each swallowed an
+  // empty-message failure and returned {}, which Settings.tsx's run() renders
+  // as "Saved." before calling refresh(), whose syncSection then replaces the
+  // user's typed draft with the re-read value. There is no history table.
+  //
+  // The amplification is what makes these worth their own tests rather than a
+  // shared one: a swallowed failure does not just misreport, it falls through
+  // to applySideEffects, which clears the paid-for search caches and stamps
+  // criteria_changed_at for an edit that never landed.
+
+  test("saveCriteriaList: a write with NO message is a failure, not a save", async () => {
+    writeKey.mockResolvedValue({ error: "" });
+    const res = await saveCriteriaList(SETTING_KEYS.titles, "Target titles", ["RevOps Lead"]);
+    expect(res.error).toBeDefined();
+    expect(res.error).not.toMatch(/—\s*$/);
+  });
+
+  test("saveCriteriaList: a failed write does NOT run the side effects", async () => {
+    // The load-bearing half. applySideEffects deletes discovered_roles /
+    // role_searches (re-billing the next search) and stamps
+    // criteria_changed_at (suppressing stale-posting closure for ~2 crawl
+    // cycles per company). Doing that for a save that never landed is worse
+    // than the wrong banner.
+    writeKey.mockResolvedValue({ error: "" });
+    query.mockClear();
+    await saveCriteriaList(SETTING_KEYS.titles, "Target titles", ["RevOps Lead"]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  test("saveCriteriaList: a clean write DOES run the side effects", async () => {
+    // Both sides of the branch — without this, "never run side effects"
+    // passes. titles is a crawl-relevant key, so this clears caches and stamps.
+    writeKey.mockResolvedValue({});
+    query.mockClear();
+    const res = await saveCriteriaList(SETTING_KEYS.titles, "Target titles", ["RevOps Lead"]);
+    expect(res).toEqual({});
+    expect(query.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  test("saveCriteriaText: an empty-message failure does not report success", async () => {
+    // The fit brain travels this path — the costliest of the four, because
+    // syncSection wipes the textarea on a reported success.
+    writeKey.mockResolvedValue({ error: "" });
+    const res = await saveCriteriaText(SETTING_KEYS.fitBrain, "Fit brain", "score harshly");
+    expect(res.error).toBeDefined();
+    expect(res.error).not.toMatch(/—\s*$/);
+  });
+
+  test("saveCriteriaText: a described failure keeps the driver's own words", async () => {
+    writeKey.mockResolvedValue({ error: "read-only transaction" });
+    const res = await saveCriteriaText(SETTING_KEYS.fitBrain, "Fit brain", "score harshly");
+    expect(res.error).toContain("read-only transaction");
+  });
+
+  test("saveCeiling: an empty-message failure on the write path is reported", async () => {
+    writeKey.mockResolvedValue({ error: "" });
+    const res = await saveCeiling(12);
+    expect(writeKey).toHaveBeenCalledWith(SETTING_KEYS.searchCeiling, 12);
+    expect(res.error).toBeDefined();
+  });
+
+  test("saveCeiling: an empty-message failure on the DELETE path is reported", async () => {
+    // Turning the ceiling off is a separate call with the same hazard.
+    deleteKey.mockResolvedValue({ error: "" });
+    const res = await saveCeiling(null);
+    expect(deleteKey).toHaveBeenCalledWith(SETTING_KEYS.searchCeiling);
+    expect(res.error).toBeDefined();
+  });
+
+  test("resetSetting: an empty-message delete failure is reported", async () => {
+    deleteKey.mockResolvedValue({ error: "" });
+    const res = await resetSetting(SETTING_KEYS.fitBrain);
+    expect(res.error).toBeDefined();
+    expect(res.error).not.toMatch(/—\s*$/);
+  });
+
+  test("resetSetting: a failed delete does NOT run the side effects", async () => {
+    // A reset changes the effective criteria exactly as much as a save does,
+    // so it stamps and clears caches too — and must not when the row survived.
+    deleteKey.mockResolvedValue({ error: "" });
+    query.mockClear();
+    await resetSetting(SETTING_KEYS.titles);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  test("resetSetting: a clean delete DOES run the side effects", async () => {
+    deleteKey.mockResolvedValue({});
+    query.mockClear();
+    expect(await resetSetting(SETTING_KEYS.titles)).toEqual({});
+    expect(query.mock.calls.length).toBeGreaterThan(0);
   });
 });

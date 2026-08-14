@@ -104,11 +104,17 @@ export async function countCrawlJobsMatchingTitles(
     patterns,
   ]);
   if (error) {
-    console.error(`settings: could not count roles matching titles — ${error.message}`);
+    // `|| UNDESCRIBED_DB_ERROR` for the same reason its sibling countScoredJobs
+    // uses it, twenty lines up: without it both strings trail off after the
+    // dash saying nothing. The failure is still REPORTED either way (the
+    // prefix keeps the string non-empty), so this is the one purely cosmetic
+    // fix in this sweep — taken only because the file was already open.
+    const why = error.message || UNDESCRIBED_DB_ERROR;
+    console.error(`settings: could not count roles matching titles — ${why}`);
     // Surfaced, not swallowed as 0: "0 tracked roles match" is a specific
     // reassurance, and giving it when the count actually failed would tell the
     // user a title removal is free when it may not be.
-    return { count: 0, error: `Could not count matching roles — ${error.message}` };
+    return { count: 0, error: `Could not count matching roles — ${why}` };
   }
   return { count: Number(data?.[0]?.n ?? 0) };
 }
@@ -136,9 +142,12 @@ async function applySideEffects(key: SettingKey): Promise<void> {
   }
   if (affectsCrawl(key)) {
     const { error } = await writeCriteriaChangedAt();
-    if (error) {
-      console.error(`settings: could not stamp criteria change — ${error}`);
-    }
+    // Presence for the branch, substitution for the text: this one is
+    // log-only (the save itself already landed), but an `if (error)` here made
+    // the log line conditional on the driver having bothered to describe
+    // itself — which is exactly when a log line is most needed.
+    const described = describeWriteFailure(error, "stamp the criteria change");
+    if (described !== undefined) console.error(`settings: ${described}`);
   }
   // Evicts the server AND client caches for any route that renders this
   // setting. force-dynamic alone leaves Next 14's Router Cache serving a
@@ -158,7 +167,20 @@ export async function saveCriteriaList(
   if (!result.ok) return { error: result.error };
 
   const { error } = await writeSetting(key, result.value);
-  if (error) return { error: `Could not save ${label} — ${error}` };
+  // describeWriteFailure, not `if (error)` — presence, not truthiness. See
+  // saveCompFloor below for the full account; the amplification is worse here
+  // than the wrong banner suggests. A swallowed failure falls through to
+  // applySideEffects, which DELETES the discovered_roles / role_searches
+  // caches (forcing a re-billed search) and stamps criteria_changed_at, which
+  // suppresses stale-posting closure for ~2 crawl cycles per company — all on
+  // the strength of an edit that was never stored. Meanwhile Settings.tsx
+  // shows "Saved." and syncSection replaces the user's typed draft with
+  // whatever the re-read returned. There is no history table.
+  const described = describeWriteFailure(error, `save ${label}`);
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
 
   await applySideEffects(key);
   return {};
@@ -173,7 +195,16 @@ export async function saveCriteriaText(
   if (!trimmed) return { error: `${label} cannot be empty.` };
 
   const { error } = await writeSetting(key, trimmed);
-  if (error) return { error: `Could not save ${label} — ${error}` };
+  // Presence, not truthiness — see saveCriteriaList. This is the path the fit
+  // brain travels, which makes it the costliest of the four: a swallowed
+  // failure has Settings.tsx report "Saved." and then syncSection overwrite
+  // the textarea with the re-read value, so a long hand-written prompt is
+  // gone from the screen and was never in the database.
+  const described = describeWriteFailure(error, `save ${label}`);
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
 
   await applySideEffects(key);
   return {};
@@ -189,7 +220,12 @@ export async function saveCeiling(n: number | null): Promise<{ error?: string }>
     n === null
       ? await deleteSetting(SETTING_KEYS.searchCeiling)
       : await writeSetting(SETTING_KEYS.searchCeiling, n);
-  if (error) return { error: `Could not save the search ceiling — ${error}` };
+  // Presence, not truthiness — see saveCriteriaList.
+  const described = describeWriteFailure(error, "save the search ceiling");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
 
   // A no-op today (the ceiling clears no cache and does not affect the
   // crawler), routed through the funnel anyway so the map stays the one place
@@ -248,7 +284,15 @@ export async function saveCompFloor(n: number | null): Promise<{ error?: string 
 /** Deletes the stored override, so the shipped default takes over again. */
 export async function resetSetting(key: SettingKey): Promise<{ error?: string }> {
   const { error } = await deleteSetting(key);
-  if (error) return { error: `Could not reset — ${error}` };
+  // Presence, not truthiness — see saveCriteriaList. A reset is a change to
+  // the effective criteria exactly as much as a save is, so a swallowed
+  // failure here runs the same cache-clearing, stamp-writing side effects for
+  // a row that was never deleted.
+  const described = describeWriteFailure(error, "reset it");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
 
   // Same side effects as a save, INCLUDING the AFFECTS_CRAWL gate. The plan
   // stamped unconditionally here; that would stamp on a fitBrain or ceiling
