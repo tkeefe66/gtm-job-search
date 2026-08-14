@@ -3,7 +3,14 @@
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
-import { SCORED_JOBS_SQL } from "@/lib/rescore-scope";
+import {
+  SCORED_JOBS_COUNT_SQL,
+  SCORED_JOBS_REMAINING_SQL,
+  SCORED_JOBS_SQL,
+  clampRescoreLimit,
+  scoringArgsFor,
+  type ScoredJobRow,
+} from "@/lib/rescore-scope";
 import {
   DEFAULT_CRITERIA,
   loadScoringInputs,
@@ -14,6 +21,8 @@ import {
   SETTING_KEYS,
   ceilingFrom,
   deleteSetting,
+  type ListSettingKey,
+  type TextSettingKey,
   mergeSettings,
   readAllSettings,
   readCriteriaChangedAt,
@@ -49,9 +58,9 @@ export async function getSettings(): Promise<SettingsView> {
 }
 
 async function countScoredJobs(): Promise<{ count: number; error?: string }> {
-  const { data, error } = await rawQuery<{ n: string }>(
-    `select count(*) n from jobs where fit_score is not null`
-  );
+  // Shares its `fit_score is not null` predicate with the rescore queries, so
+  // the number shown to the user and the set rescoreAll walks cannot drift.
+  const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_COUNT_SQL);
   if (error) {
     console.error(`settings: could not count scored jobs — ${error.message}`);
     // Surfaced rather than swallowed: the count is the only thing telling the
@@ -93,7 +102,7 @@ async function applySideEffects(key: SettingKey): Promise<void> {
 }
 
 export async function saveCriteriaList(
-  key: SettingKey,
+  key: ListSettingKey,
   label: string,
   items: string[]
 ): Promise<{ error?: string }> {
@@ -108,7 +117,7 @@ export async function saveCriteriaList(
 }
 
 export async function saveCriteriaText(
-  key: SettingKey,
+  key: TextSettingKey,
   label: string,
   text: string
 ): Promise<{ error?: string }> {
@@ -146,12 +155,12 @@ export async function resetSetting(key: SettingKey): Promise<{ error?: string }>
   const { error } = await deleteSetting(key);
   if (error) return { error: `Could not reset — ${error}` };
 
-  // Same side effects as a save, INCLUDING the AFFECTS_CRAWL gate. The brief
+  // Same side effects as a save, INCLUDING the AFFECTS_CRAWL gate. The plan
   // stamped unconditionally here; that would stamp on a fitBrain or ceiling
   // reset and suppress stale-posting closure for ~2 crawl cycles per company,
   // which is the exact behavior CRITERIA_CHANGED_AT_KEY's narrow scope exists
   // to prevent. Reverting to the default IS a criteria change — but only for
-  // the same three keys a save counts.
+  // the same keys a save counts.
   await applySideEffects(key);
   return {};
 }
@@ -161,41 +170,54 @@ export async function getCriteriaChangedAt(): Promise<string | null> {
   return readCriteriaChangedAt();
 }
 
-interface JobRow {
-  id: string;
-  company: string;
-  role_title: string;
-  company_description: string | null;
-  department: string | null;
-  location: string | null;
-  key_skills: string | null;
-  fit_summary: string | null;
-  arr: string | null;
-  exit_signal: string | null;
-  backer: string | null;
+export interface RescoreResult {
+  /** Rows re-scored and successfully written in THIS batch. */
+  rescored: number;
+  /** Rows in this batch that failed to score or failed to write. */
+  failed: number;
+  /**
+   * Scored rows this pass has not finished yet. Not a drain condition on its
+   * own — a permanently failing row keeps it above zero forever. Loop while
+   * `remaining > 0 && rescored > 0`.
+   */
+  remaining: number;
+  error?: string;
 }
 
 /**
- * Re-scores every job that already has a score, against the current fit brain.
+ * Re-scores one bounded batch of already-scored jobs against the current fit
+ * brain, oldest-touched first.
  *
  * Offered rather than automatic: an edit that fixes a typo should not silently
  * spend money, and the user decides each time.
  *
- * Sequential by design — one Claude call per row, and a parallel fan-out over
- * a few hundred rows would hit rate limits rather than finish faster.
+ * Batched rather than exhaustive because a server action gets one request
+ * lifetime. At ~$0.0076 and a couple of seconds per scoreFit call, an
+ * unbounded pass over a few hundred rows outruns any timeout and loses its own
+ * return value — the caller never learns how many rows landed. The caller
+ * drives the loop instead, and sees a count after every batch.
+ *
+ * Sequential within the batch by design: a parallel fan-out would hit rate
+ * limits rather than finish faster.
  */
-export async function rescoreAll(): Promise<{
-  rescored: number;
-  failed: number;
-  error?: string;
-}> {
+export async function rescoreAll(opts?: { limit?: number }): Promise<RescoreResult> {
+  // Taken before the first write, so `remaining` counts rows this pass has not
+  // touched. updateJob stamps updated_at, which is also what moves finished
+  // rows to the back of SCORED_JOBS_SQL's ordering.
+  const passStartedAt = new Date().toISOString();
+  const limit = clampRescoreLimit(opts?.limit);
   const fitInputs = await loadScoringInputs();
 
   // rawQuery, NOT the builder — see SCORED_JOBS_SQL. `.neq("fit_score", null)`
   // matches zero rows and reports success.
-  const { data, error } = await rawQuery<JobRow>(SCORED_JOBS_SQL);
+  const { data, error } = await rawQuery<ScoredJobRow>(SCORED_JOBS_SQL, [limit]);
   if (error) {
-    return { rescored: 0, failed: 0, error: `Could not read jobs — ${error.message}` };
+    return {
+      rescored: 0,
+      failed: 0,
+      remaining: 0,
+      error: `Could not read jobs — ${error.message}`,
+    };
   }
   const rows = data ?? [];
 
@@ -204,19 +226,10 @@ export async function rescoreAll(): Promise<{
   let writeFailures = 0;
 
   for (const row of rows) {
-    const scored = await scoreFit({
-      company: row.company,
-      role_title: row.role_title,
-      company_description: row.company_description ?? "",
-      key_skills: row.key_skills ?? "",
-      fit_summary: row.fit_summary ?? "",
-      department: row.department ?? "",
-      location: row.location ?? "",
-      arr: row.arr ?? undefined,
-      exit_signal: row.exit_signal ?? undefined,
-      backer: row.backer ?? undefined,
-      fitInputs,
-    });
+    // scoringArgsFor, not an inline literal: arr / exit_signal / backer are
+    // OPTIONAL on scoreFit's opts, so dropping them inline would compile and
+    // pass while rescoring blind. See lib/rescore-scope.ts.
+    const scored = await scoreFit({ ...scoringArgsFor(row), fitInputs });
 
     // scoreFit returns score 0 (not a throw) when the call or the JSON parse
     // fails. Writing that would violate the jobs.fit_score 1-5 check and, on a
@@ -243,9 +256,27 @@ export async function rescoreAll(): Promise<{
     rescored++;
   }
 
+  const remaining = await countRemaining(passStartedAt);
   console.log(
-    `rescoreAll: rescored ${rescored} of ${rows.length} scored jobs, ` +
-      `${scoreFailures} scoring failures, ${writeFailures} write failures`
+    `rescoreAll: batch of ${rows.length} (limit ${limit}) — rescored ${rescored}, ` +
+      `${scoreFailures} scoring failures, ${writeFailures} write failures, ` +
+      `${remaining} still to do`
   );
-  return { rescored, failed: scoreFailures + writeFailures };
+  return { rescored, failed: scoreFailures + writeFailures, remaining };
+}
+
+async function countRemaining(passStartedAt: string): Promise<number> {
+  const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_REMAINING_SQL, [
+    passStartedAt,
+  ]);
+  if (error) {
+    // The batch itself already succeeded; only the "how much is left" figure
+    // is missing. 0 stops the caller's loop, which is the recoverable failure:
+    // the user clicks Rescore again and the next batch picks up where this one
+    // stopped. Guessing a positive number would keep an automated loop
+    // spending money on a count nobody can verify.
+    console.error(`rescoreAll: could not count remaining rows — ${error.message}`);
+    return 0;
+  }
+  return Number(data?.[0]?.n ?? 0);
 }

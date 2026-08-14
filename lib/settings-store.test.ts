@@ -2,6 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
   CRITERIA_CHANGED_AT_KEY,
   CRITERIA_CHANGED_AT_SQL,
+  LIST_SETTING_KEYS,
+  NUMBER_SETTING_KEYS,
+  TEXT_SETTING_KEYS,
   ceilingFrom,
   mergeSettings,
   numberFrom,
@@ -122,5 +125,38 @@ describe("SETTING_KEYS alignment", () => {
     const fields = Object.keys(DEFAULT_CRITERIA);
     expect(fields.length).toBeGreaterThan(0);
     for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
+  });
+});
+
+describe("setting-key shape partition", () => {
+  const grouped = [...LIST_SETTING_KEYS, ...TEXT_SETTING_KEYS, ...NUMBER_SETTING_KEYS];
+
+  test("every setting is classified exactly once", () => {
+    // saveCriteriaList and saveCriteriaText are typed on these groups. A key
+    // in neither could not be saved at all; a key in both would let
+    // saveCriteriaText write a bare string under "titles", which mergeSettings'
+    // shape guard then ignores forever while the save reports success.
+    expect(grouped.length).toBeGreaterThan(0);
+    expect([...grouped].sort()).toEqual([...Object.values(SETTING_KEYS)].sort());
+    expect(new Set(grouped).size).toBe(grouped.length);
+  });
+
+  test("the groups match the shape each default actually has", () => {
+    // The partition is only meaningful if it describes the real stored shapes.
+    // DEFAULT_CRITERIA does not carry the two numeric settings, so they are
+    // checked by absence from it rather than by typeof.
+    for (const key of LIST_SETTING_KEYS) {
+      expect(Array.isArray(DEFAULT_CRITERIA[key])).toBe(true);
+    }
+    for (const key of TEXT_SETTING_KEYS) {
+      expect(typeof DEFAULT_CRITERIA[key]).toBe("string");
+    }
+    for (const key of NUMBER_SETTING_KEYS) {
+      expect(key in DEFAULT_CRITERIA).toBe(false);
+    }
+  });
+
+  test("the stamp key is in no group — it is not user-editable", () => {
+    expect(grouped).not.toContain(CRITERIA_CHANGED_AT_KEY);
   });
 });

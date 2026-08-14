@@ -1,5 +1,45 @@
 import { describe, expect, test } from "vitest";
-import { SCORED_JOBS_SQL, SCORING_INPUT_COLUMNS } from "./rescore-scope";
+import {
+  DEFAULT_RESCORE_LIMIT,
+  MAX_RESCORE_LIMIT,
+  SCORED_JOBS_COUNT_SQL,
+  SCORED_JOBS_REMAINING_SQL,
+  SCORED_JOBS_SQL,
+  SCORING_INPUT_COLUMNS,
+  clampRescoreLimit,
+  scoringArgsFor,
+  type ScoredJobRow,
+} from "./rescore-scope";
+
+// Every field distinct and non-empty, so a mapping that transposes two columns
+// or substitutes a constant fails rather than coincidentally matching.
+const FULL_ROW: ScoredJobRow = {
+  id: "row-id",
+  company: "Acme",
+  role_title: "Head of RevOps",
+  company_description: "B2B SaaS for widgets",
+  department: "Revenue",
+  location: "Denver, CO",
+  key_skills: "Salesforce, Marketo",
+  fit_summary: "Broad GTM systems ownership",
+  arr: "$380M+ ARR",
+  exit_signal: "PE exit planned",
+  backer: "Centerbridge Partners",
+};
+
+const NULL_ROW: ScoredJobRow = {
+  id: "row-id",
+  company: "Acme",
+  role_title: "Head of RevOps",
+  company_description: null,
+  department: null,
+  location: null,
+  key_skills: null,
+  fit_summary: null,
+  arr: null,
+  exit_signal: null,
+  backer: null,
+};
 
 describe("SCORED_JOBS_SQL", () => {
   test("selects on `is not null`, never on the builder's `<>` rendering", () => {
@@ -9,6 +49,39 @@ describe("SCORED_JOBS_SQL", () => {
     expect(SCORED_JOBS_SQL).toContain("where fit_score is not null");
     expect(SCORED_JOBS_SQL).not.toContain("<>");
     expect(SCORED_JOBS_SQL).not.toContain("!=");
+  });
+
+  test("all three queries share one definition of 'already scored'", () => {
+    // Three hand-written copies of the predicate would eventually disagree,
+    // and the count shown to the user would describe a different set from the
+    // one rescoreAll actually walks.
+    for (const sql of [
+      SCORED_JOBS_SQL,
+      SCORED_JOBS_COUNT_SQL,
+      SCORED_JOBS_REMAINING_SQL,
+    ]) {
+      expect(sql).toContain("fit_score is not null");
+      expect(sql).not.toContain("<>");
+    }
+  });
+
+  test("is bounded and ordered so a second call makes progress", () => {
+    // Bounded: one scoreFit call per row at ~$0.0076 and a couple of seconds;
+    // an unbounded pass over a few hundred rows outruns the request timeout
+    // and loses its own return value.
+    expect(SCORED_JOBS_SQL).toContain("limit $1");
+    // Ordered: rescoring does not shrink the `fit_score is not null` set, so
+    // without oldest-first ordering every batch would re-score the same rows
+    // forever. updateJob stamps updated_at, sending finished rows to the back.
+    expect(SCORED_JOBS_SQL).toContain("order by updated_at asc nulls first");
+  });
+
+  test("the remaining count is scoped to rows this pass has not touched", () => {
+    // Not a plain total: after a batch lands, the finished rows still satisfy
+    // `fit_score is not null`, so an unscoped count would never decrease and
+    // the caller would loop forever.
+    expect(SCORED_JOBS_REMAINING_SQL).toContain("updated_at < $1");
+    expect(SCORED_JOBS_REMAINING_SQL).toContain("updated_at is null");
   });
 
   test("selects the id it needs to write back", () => {
@@ -47,5 +120,82 @@ describe("SCORED_JOBS_SQL", () => {
   test("reads from jobs only", () => {
     expect(SCORED_JOBS_SQL).toContain("from jobs");
     expect(SCORED_JOBS_SQL).not.toContain("join");
+  });
+});
+
+describe("scoringArgsFor", () => {
+  test("forwards every column the query selects, with its value intact", () => {
+    // THE point of this extraction. arr / exit_signal / backer are OPTIONAL on
+    // scoreFit's opts, so deleting those three lines from an inline object
+    // literal in the action compiles clean and passes every other test — while
+    // silently rescoring blind and dropping a 4 to a 2. Checking presence AND
+    // value also catches a transposition (arr: row.backer), which a
+    // key-presence check alone would wave through.
+    const args = scoringArgsFor(FULL_ROW) as unknown as Record<string, unknown>;
+    expect(SCORING_INPUT_COLUMNS.length).toBeGreaterThan(0);
+    for (const col of SCORING_INPUT_COLUMNS) {
+      expect(Object.keys(args)).toContain(col);
+      expect(args[col]).toBe((FULL_ROW as unknown as Record<string, unknown>)[col]);
+    }
+  });
+
+  test("forwards nothing beyond the stated contract", () => {
+    // `id` is the write key, not a scoring input; leaking it into the prompt
+    // would spend tokens on a uuid the model cannot use.
+    const keys = Object.keys(scoringArgsFor(FULL_ROW));
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.sort()).toEqual([...SCORING_INPUT_COLUMNS].sort());
+  });
+
+  test("nulls become empty strings, never the literal text 'null'", () => {
+    // These interpolate straight into the prompt. `Company description: null`
+    // is a sentence the model will reason about.
+    const args = scoringArgsFor(NULL_ROW);
+    expect(args.company_description).toBe("");
+    expect(args.department).toBe("");
+    expect(args.location).toBe("");
+    expect(args.key_skills).toBe("");
+    expect(args.fit_summary).toBe("");
+  });
+
+  test("null financial signals become undefined, so scoreFit prints 'unknown'", () => {
+    // scoreFit renders these as `${opts.arr || "unknown"}`. A null would print
+    // as "unknown" too, but undefined is what the optional type states and
+    // what keeps the key from appearing as an explicit null in the payload.
+    const args = scoringArgsFor(NULL_ROW);
+    expect(args.arr).toBeUndefined();
+    expect(args.exit_signal).toBeUndefined();
+    expect(args.backer).toBeUndefined();
+  });
+});
+
+describe("clampRescoreLimit", () => {
+  test("defaults when no limit is given", () => {
+    expect(clampRescoreLimit()).toBe(DEFAULT_RESCORE_LIMIT);
+    expect(clampRescoreLimit(null)).toBe(DEFAULT_RESCORE_LIMIT);
+    expect(clampRescoreLimit(undefined)).toBe(DEFAULT_RESCORE_LIMIT);
+  });
+
+  test("caps at MAX_RESCORE_LIMIT — the bound is the whole point", () => {
+    // The limit arrives from a client component. If a caller could pass
+    // Infinity the batching would be decorative.
+    expect(clampRescoreLimit(1000)).toBe(MAX_RESCORE_LIMIT);
+    expect(clampRescoreLimit(Infinity)).toBe(DEFAULT_RESCORE_LIMIT);
+    expect(MAX_RESCORE_LIMIT).toBeGreaterThanOrEqual(DEFAULT_RESCORE_LIMIT);
+  });
+
+  test("floors at 1 rather than 0 — a batch of zero can never drain", () => {
+    expect(clampRescoreLimit(0)).toBe(1);
+    expect(clampRescoreLimit(-5)).toBe(1);
+  });
+
+  test("passes a usable value through untouched, and truncates fractions", () => {
+    expect(clampRescoreLimit(10)).toBe(10);
+    expect(clampRescoreLimit(10.9)).toBe(10);
+  });
+
+  test("a non-number takes the default instead of poisoning `limit $1`", () => {
+    expect(clampRescoreLimit(NaN)).toBe(DEFAULT_RESCORE_LIMIT);
+    expect(clampRescoreLimit("25" as unknown as number)).toBe(DEFAULT_RESCORE_LIMIT);
   });
 });

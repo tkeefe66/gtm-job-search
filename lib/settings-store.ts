@@ -18,9 +18,46 @@ export const SETTING_KEYS = {
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
 
+// Settings partitioned by the SHAPE of their stored value. Without this,
+// `saveCriteriaText(SETTING_KEYS.titles, …)` type-checks, writes a bare string
+// under "titles", and mergeSettings' shape guard then ignores that row forever
+// while the save reports success — the silent-no-op failure this file's other
+// comments keep warning about, reached through a different door.
+//
+// Runtime arrays rather than hand-written unions so the partition can also be
+// asserted exhaustive by a test, not only by tsc.
+export const LIST_SETTING_KEYS = [
+  SETTING_KEYS.titles,
+  SETTING_KEYS.locations,
+  SETTING_KEYS.stackTerms,
+] as const;
+export const TEXT_SETTING_KEYS = [
+  SETTING_KEYS.locationRule,
+  SETTING_KEYS.fitBrain,
+] as const;
+export const NUMBER_SETTING_KEYS = [
+  SETTING_KEYS.searchCeiling,
+  SETTING_KEYS.compFloor,
+] as const;
+
+export type ListSettingKey = (typeof LIST_SETTING_KEYS)[number];
+export type TextSettingKey = (typeof TEXT_SETTING_KEYS)[number];
+export type NumberSettingKey = (typeof NUMBER_SETTING_KEYS)[number];
+
 /**
- * Where `markCriteriaChanged` (Task 6) stamps the last edit to a setting that
- * changes WHAT THE CRAWLER LOOKS FOR — titles, locations, locationRule.
+ * Compile-time exhaustiveness. A new SETTING_KEYS entry that joins none of the
+ * three groups above makes `Exclude<…>` a non-`never` literal union, which
+ * violates `T extends never` and fails the build here — so a new setting
+ * cannot reach a save action with no shape declared.
+ */
+type AssertNever<T extends never> = T;
+export type SettingKeysAreFullyClassified = AssertNever<
+  Exclude<SettingKey, ListSettingKey | TextSettingKey | NumberSettingKey>
+>;
+
+/**
+ * Where `writeCriteriaChangedAt` (below) stamps the last edit to a setting that
+ * changes WHAT THE CRAWLER LOOKS FOR.
  *
  * Deliberately NOT in SETTING_KEYS. It is a stamp the app writes, not a
  * user-editable setting: it is not a `Criteria` field, mergeSettings must
@@ -28,10 +65,17 @@ export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
  * constant only so the writer and the reader below cannot drift apart on the
  * spelling — the same silent-no-op hazard the SETTING_KEYS comment describes.
  *
- * Scope is narrower than "any setting changed" on purpose: `searchCeiling` and
- * `compFloor` do not change what the crawler looks for, so stamping on them
- * would suppress stale-posting closure for ~2 crawl cycles per company after
- * a change that cannot have invalidated a single previous result.
+ * Scope is narrower than "any setting changed" on purpose, and narrower still
+ * than it once read here. `searchCeiling` and `compFloor` never reach the
+ * crawler at all; `fitBrain` re-scores roles rather than changing which ones
+ * are found; and `locations` is consumed ONLY by titleQueries/stackQueries in
+ * lib/search-criteria.ts — the crawl path (lib/crawler.ts:76 and :299) reads
+ * `titleListForPrompt` and `locationRule` and nothing else. Stamping on any of
+ * them would suppress stale-posting closure for ~2 crawl cycles per company
+ * after a change the crawler cannot observe.
+ *
+ * The live list is AFFECTS_CRAWL in lib/settings-effects.ts, where it is
+ * pinned by tests.
  */
 export const CRITERIA_CHANGED_AT_KEY = "criteria_changed_at";
 
@@ -131,8 +175,10 @@ export async function readAllSettings(): Promise<SettingRow[]> {
  * table: the stamp's whole value is that it covers ONLY the settings that
  * change what the crawler looks for. See CRITERIA_CHANGED_AT_KEY.
  *
- * Returns null until Task 6 lands the writer — which is the correct answer
- * for a database where nothing has stamped it yet, not a placeholder.
+ * The writer is `writeCriteriaChangedAt` below; the decision of WHEN to call
+ * it is AFFECTS_CRAWL in lib/settings-effects.ts. Null means no crawl-relevant
+ * setting has ever been edited, which is the correct answer for a fresh
+ * database rather than a placeholder.
  *
  * `#>> '{}'` extracts the jsonb scalar as plain text, so a stored JSON string
  * comes back without its quotes.
@@ -162,11 +208,12 @@ export async function readCriteriaChangedAt(): Promise<string | null> {
   return data?.[0]?.value ?? null;
 }
 
-// One upsert for every writer in this file. `key` is a plain string here
-// because the stamp below is not a SettingKey; the exported wrappers are what
-// keep the type discipline at the surface, so no caller can invent a key.
+// One upsert for every writer in this file. The key type is widened by exactly
+// one literal — the stamp, which is deliberately not a SettingKey — rather
+// than to `string`, so a typo still cannot reach app_settings even through
+// this private helper.
 async function upsertSetting(
-  key: string,
+  key: SettingKey | typeof CRITERIA_CHANGED_AT_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   const { error } = await rawQuery(

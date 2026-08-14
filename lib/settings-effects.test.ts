@@ -33,12 +33,11 @@ describe("CACHES_TO_CLEAR", () => {
     expect(allTables).not.toContain("discovered_startups");
   });
 
-  test("editing a query axis drops both role caches", () => {
+  test("the two settings the Find Roles prompt reads drop both role caches", () => {
+    // app/actions/roles.ts:60 — the ONLY writer of discovered_roles —
+    // interpolates titleListForPrompt(criteria) and criteria.locationRule.
+    // Those are exactly the two settings that can invalidate that cache.
     expect(cachesToClear(SETTING_KEYS.titles)).toEqual([
-      "role_searches",
-      "discovered_roles",
-    ]);
-    expect(cachesToClear(SETTING_KEYS.locations)).toEqual([
       "role_searches",
       "discovered_roles",
     ]);
@@ -48,10 +47,23 @@ describe("CACHES_TO_CLEAR", () => {
     ]);
   });
 
+  test("locations are SEARCH-ONLY and must not drop discovered_roles", () => {
+    // criteria.locations is consumed by exactly two functions — titleQueries
+    // and stackQueries in lib/search-criteria.ts — and both feed role_searches
+    // alone. No crawl or Find Roles prompt contains the location list; they
+    // read titleListForPrompt and locationRule (lib/crawler.ts:76, :299,
+    // app/actions/roles.ts:60). Clearing discovered_roles here would burn an
+    // 8000-token, 10+-web-search regeneration per watched company for a change
+    // that provably cannot have affected it.
+    //
+    // The plan text said otherwise. This was settled by grepping every reader
+    // of `.locations`, not by reading the plan — do not "correct" it back.
+    expect(cachesToClear(SETTING_KEYS.locations)).toEqual(["role_searches"]);
+  });
+
   test("stack terms drop only the stack-family cache", () => {
-    // discovered_roles is filled by the per-company Find Roles path, which
-    // never uses stack terms — dropping it would burn a Claude call per
-    // watched company for a change that cannot have affected them.
+    // Same reasoning as locations: discovered_roles is filled by the
+    // per-company Find Roles path, which never uses stack terms.
     expect(cachesToClear(SETTING_KEYS.stackTerms)).toEqual(["role_searches"]);
   });
 
@@ -77,16 +89,28 @@ describe("CACHES_TO_CLEAR", () => {
 });
 
 describe("AFFECTS_CRAWL", () => {
-  test("the three settings that change what the crawler looks for", () => {
+  test("exactly the two values a crawl prompt interpolates", () => {
+    // lib/crawler.ts:76 (buildExtractionPrompt) and lib/crawler.ts:299 (the
+    // web-search fallback tier) read titleListForPrompt(criteria) and
+    // criteria.locationRule off the criteria object. Nothing else.
     expect(affectsCrawl(SETTING_KEYS.titles)).toBe(true);
-    expect(affectsCrawl(SETTING_KEYS.locations)).toBe(true);
     expect(affectsCrawl(SETTING_KEYS.locationRule)).toBe(true);
   });
 
-  test("the fit brain, the ceiling, and the comp floor do not", () => {
-    // Stamping on these would reset the crawler's closure debounce and
-    // suppress stale-posting closure for ~2 crawl cycles per company after a
-    // change that cannot have invalidated a single previous crawl result.
+  test("locations and stack terms are search-only, so they never stamp", () => {
+    // Both are read exclusively by titleQueries / stackQueries, which build
+    // web-search query strings. No crawl prompt contains either list, so a
+    // stamp on them would suppress stale-posting closure for ~2 crawl cycles
+    // per company over a change the crawler cannot observe.
+    //
+    // The plan text listed `locations` here. Verified wrong by grep.
+    expect(affectsCrawl(SETTING_KEYS.locations)).toBe(false);
+    expect(affectsCrawl(SETTING_KEYS.stackTerms)).toBe(false);
+  });
+
+  test("the fit brain, the ceiling, and the comp floor do not either", () => {
+    // The brain re-scores roles the crawler already found; the other two never
+    // reach the crawler at all.
     expect(affectsCrawl(SETTING_KEYS.fitBrain)).toBe(false);
     expect(affectsCrawl(SETTING_KEYS.searchCeiling)).toBe(false);
     expect(affectsCrawl(SETTING_KEYS.compFloor)).toBe(false);

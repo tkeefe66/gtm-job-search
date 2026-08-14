@@ -28,13 +28,24 @@ import { SETTING_KEYS, type SettingKey } from "@/lib/settings-store";
  * a missing entry is an oversight, and the two must not look alike.
  */
 export const CACHES_TO_CLEAR: Record<SettingKey, string[]> = {
-  // Titles and locations are the two axes of the query grid, so every cached
-  // search result was produced by a grid that no longer exists.
+  // Titles reach both caches: they are an axis of the role_searches query grid
+  // AND `titleListForPrompt(criteria)` in the per-company Find Roles prompt
+  // (app/actions/roles.ts:60), which is the only writer of discovered_roles.
   [SETTING_KEYS.titles]: ["role_searches", "discovered_roles"],
-  [SETTING_KEYS.locations]: ["role_searches", "discovered_roles"],
+  // Locations are SEARCH-ONLY. `criteria.locations` is consumed by exactly two
+  // functions — titleQueries and stackQueries in lib/search-criteria.ts — both
+  // of which feed role_searches. The Find Roles prompt that fills
+  // discovered_roles reads titleListForPrompt and locationRule and never
+  // touches this list, so clearing that cache here would burn an 8000-token,
+  // 10+-web-search regeneration per watched company for a change it cannot
+  // observe. Same reasoning as stackTerms below. Verified by grep, not by the
+  // plan text, which had this wrong.
+  [SETTING_KEYS.locations]: ["role_searches"],
   // Stack terms only feed the stack-family role search. discovered_roles is
   // populated by the per-company Find Roles path, which never uses them.
   [SETTING_KEYS.stackTerms]: ["role_searches"],
+  // The location rule is pasted verbatim into both prompts — the role search
+  // and the per-company Find Roles call — so it invalidates both caches.
   [SETTING_KEYS.locationRule]: ["role_searches", "discovered_roles"],
   // The fit brain re-scores roles; it does not change which roles a search
   // returns, so no cached search result is stale because of it. rescoreAll is
@@ -62,15 +73,24 @@ export function cachesToClear(key: SettingKey): string[] {
  * The settings that change WHAT THE CRAWLER LOOKS FOR, and therefore reset its
  * stale-posting closure debounce (see CRITERIA_CHANGED_AT_KEY).
  *
- * Narrower than "any setting changed" on purpose. The fit brain re-scores
- * roles it already found, the ceiling and the comp floor do not touch the
- * crawler at all — stamping on any of them would suppress closure for ~2 crawl
- * cycles per company after a change that cannot have invalidated a single
- * previous crawl result.
+ * Exactly the two values the crawl path reads. `lib/crawler.ts:76`
+ * (buildExtractionPrompt) and `lib/crawler.ts:299` (the web-search fallback
+ * tier) interpolate `titleListForPrompt(criteria)` and `criteria.locationRule`
+ * — and nothing else off the criteria object.
+ *
+ * Everything else is excluded on evidence, not on caution:
+ *   - `locations` is search-only. It is read by titleQueries and stackQueries
+ *     alone; no crawl prompt contains it. The plan text listed it here, which
+ *     was wrong.
+ *   - `stackTerms` never reach a crawl prompt either.
+ *   - `fitBrain` re-scores roles the crawler already found.
+ *   - `searchCeiling` and `compFloor` do not touch the crawler at all.
+ *
+ * Stamping on any of those suppresses stale-posting closure for ~2 crawl
+ * cycles per company after a change the crawler cannot observe.
  */
 export const AFFECTS_CRAWL: SettingKey[] = [
   SETTING_KEYS.titles,
-  SETTING_KEYS.locations,
   SETTING_KEYS.locationRule,
 ];
 
