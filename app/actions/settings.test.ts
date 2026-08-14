@@ -17,7 +17,13 @@ vi.mock("@/lib/settings-store", async (importOriginal) => ({
 }));
 
 import { markCompScoringRescored, rescoreAll, saveCompFloor } from "./settings";
-import { SCORED_JOBS_REMAINING_SQL, SCORED_JOBS_SQL } from "@/lib/rescore-scope";
+import { updateJob } from "@/app/actions/jobs";
+import { scoreFit } from "@/app/actions/parse-role";
+import {
+  SCORED_JOBS_REMAINING_SQL,
+  SCORED_JOBS_SQL,
+  type ScoredJobRow,
+} from "@/lib/rescore-scope";
 import {
   SETTING_KEYS,
   deleteSetting,
@@ -30,13 +36,35 @@ const write = vi.mocked(writeCompScoringRescoredAt);
 const writeKey = vi.mocked(writeSetting);
 const deleteKey = vi.mocked(deleteSetting);
 const query = vi.mocked(rawQuery);
+const update = vi.mocked(updateJob);
+const score = vi.mocked(scoreFit);
 
 /** A pass that drained cleanly — the ONLY shape allowed to stamp. */
 const DRAINED = { rescored: 26, remaining: 0 };
 
+/** One already-scored row, the shape SCORED_JOBS_SQL selects. */
+const ROW: ScoredJobRow = {
+  id: "job-1",
+  company: "Acme",
+  role_title: "RevOps Lead",
+  company_description: null,
+  department: null,
+  location: null,
+  key_skills: null,
+  fit_summary: null,
+  salary_range: "$180,000 - $220,000",
+  arr: null,
+  exit_signal: null,
+  backer: null,
+};
+
 beforeEach(() => {
   write.mockReset();
   write.mockResolvedValue({});
+  update.mockReset();
+  update.mockResolvedValue({});
+  score.mockReset();
+  score.mockResolvedValue({ score: 4, rationale: "solid" });
   writeKey.mockReset();
   writeKey.mockResolvedValue({});
   deleteKey.mockReset();
@@ -142,6 +170,87 @@ describe("saveCompFloor reports a write that failed", () => {
   test("a described failure keeps the driver's own words", async () => {
     writeKey.mockResolvedValue({ error: "read-only transaction" });
     expect((await saveCompFloor(180000)).error).toContain("read-only transaction");
+  });
+});
+
+describe("rescoreAll counts a row only when its write landed", () => {
+  /** One row through the batch, with the remaining count answering `remaining`. */
+  function oneRowBatch(remaining = "0") {
+    query.mockImplementation((sql: string) => {
+      if (sql === SCORED_JOBS_SQL) return { data: [ROW], error: null } as never;
+      if (sql === SCORED_JOBS_REMAINING_SQL) {
+        return { data: [{ n: remaining }], error: null } as never;
+      }
+      return { data: [], error: null } as never;
+    });
+  }
+
+  test("a write that landed counts as rescored", async () => {
+    // Both directions, and this is the half that matters most: a rule that
+    // counted NOTHING as rescored would pass the failure tests below on its own,
+    // and would also stop the pass from ever draining.
+    oneRowBatch();
+    const res = await rescoreAll();
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 4 });
+    expect(res.rescored).toBe(1);
+    expect(res.failed).toBe(0);
+  });
+
+  test("a write that failed with NO message counts as FAILED, not rescored", async () => {
+    // updateJob returns `error.message` verbatim and pg with an unset or
+    // unreachable DATABASE_URL rejects with an empty one. `if (updErr)` skipped
+    // the failure path and returned "rescored" for a row that was never written.
+    update.mockResolvedValue({ error: "" });
+    oneRowBatch();
+    const res = await rescoreAll();
+    expect(res.rescored).toBe(0);
+    expect(res.failed).toBe(1);
+  });
+
+  test("a described write failure counts as failed too", async () => {
+    // The other side of describeWriteFailure's presence check: passing it
+    // `undefined` instead of the real error makes every write look clean.
+    update.mockResolvedValue({ error: "deadlock detected" });
+    oneRowBatch();
+    const res = await rescoreAll();
+    expect(res.rescored).toBe(0);
+    expect(res.failed).toBe(1);
+  });
+
+  test("a failed write is logged as a WRITE failure, not a scoring one", async () => {
+    // `failed` sums both kinds, so the counts alone cannot tell them apart —
+    // returning "score-failed" for a failed write keeps every number in the
+    // return value identical. The batch log line is the only place the
+    // difference shows, and it is what tells an operator whether the database
+    // or the model is the thing that broke.
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      update.mockResolvedValue({ error: "" });
+      oneRowBatch();
+      await rescoreAll();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0][0])).toContain("0 scoring failures, 1 write failures");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("an empty-message write failure cannot reach the permanent stamp", async () => {
+    // Why this line is a stamp-correctness bug and not a tally nit. Counted as
+    // rescored, the batch reports rescored 1 / remaining 0 — which satisfies
+    // passDrained — and writes comp_scoring_rescored_at, retiring the day-one
+    // offer FOREVER over rows that were never written. Same stranding fix round
+    // 1 closed from the remaining-count side, through the other input.
+    update.mockResolvedValue({ error: "" });
+    oneRowBatch();
+    const pass = await rescoreAll();
+    expect((await markCompScoringRescored(pass)).stamped).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    // And the same pass with the write LANDING does stamp, so the assertion
+    // above is about the failure and not about the fixture.
+    update.mockResolvedValue({});
+    oneRowBatch();
+    expect((await markCompScoringRescored(await rescoreAll())).stamped).toBe(true);
   });
 });
 

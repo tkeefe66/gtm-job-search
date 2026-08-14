@@ -425,8 +425,20 @@ export async function rescoreAll(opts?: {
         // overwrote with scored.rationale — rescore twice and the model is
         // summarizing its own previous rationale instead of the posting.
         const { error: updErr } = await updateJob(row.id, { fit_score: scored.score });
-        if (updErr) {
-          console.error(`rescoreAll: update failed for ${row.company} — ${updErr}`);
+        // describeWriteFailure, not `if (updErr)`. Presence, not truthiness, and
+        // the stakes here are higher than anywhere else this doctrine applies:
+        // updateJob returns `error.message` verbatim, pg with an unset or
+        // unreachable DATABASE_URL rejects with an EMPTY one, and an empty
+        // string is falsy. The failed row then counts as "rescored", which
+        // inflates pass.rescored, which satisfies passDrained's
+        // `rescored > 0 && remaining === 0`, which writes the PERMANENT
+        // comp_scoring_rescored_at stamp — and the day-one offer never returns.
+        // The rows are stale forever with nothing on screen but a success
+        // message. That is the same stranding fix round 1 closed from the
+        // remaining-count side; this is the other input to the same bound.
+        const described = describeWriteFailure(updErr, `write ${row.company}'s new score`);
+        if (described !== undefined) {
+          console.error(`rescoreAll: ${described}`);
           return "write-failed";
         }
         return "rescored";
