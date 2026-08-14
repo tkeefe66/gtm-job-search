@@ -16,9 +16,41 @@ const MONEY = /\$\s?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?:(k)(?![A-Za-z]))?/gi;
 // base. Without the floor, "+ $500 monthly stipend" becomes the range minimum.
 const MIN_PLAUSIBLE_SALARY = 1000;
 
+// What sits between the two halves of a written range. The en dash is here
+// because the app's own salary editor teaches "$200K–$280K"; "to" is here
+// because postings write it out. Anything else between two figures means they
+// are two different facts (a salary and an equity grant), not one range.
+const RANGE_SEPARATOR = /^\s*(?:-{1,2}|–|—|to)\s*$/i;
+
+interface Figure {
+  value: number;
+  start: number;
+  end: number;
+}
+
 interface Segment {
   text: string;
-  numbers: number[];
+  figures: Figure[];
+}
+
+/**
+ * The range a segment states, which is NOT the span of every figure it
+ * mentions. `$150,000 base + $200,000 equity` is a $150k role: spanning both
+ * figures would hand `baseMaxFor` the equity grant and clear a $180k floor on
+ * stock. So: the first pair of figures joined by a range separator wins, and a
+ * lone figure is only the fallback.
+ */
+function rangeOf(seg: Segment): { min: number; max: number } {
+  const figs = seg.figures;
+  for (let i = 0; i + 1 < figs.length; i++) {
+    if (RANGE_SEPARATOR.test(seg.text.slice(figs[i].end, figs[i + 1].start))) {
+      return {
+        min: Math.min(figs[i].value, figs[i + 1].value),
+        max: Math.max(figs[i].value, figs[i + 1].value),
+      };
+    }
+  }
+  return { min: figs[0].value, max: figs[0].value };
 }
 
 function segments(raw: string): Segment[] {
@@ -30,12 +62,16 @@ function segments(raw: string): Segment[] {
   return raw
     .split(/;|,(?=\s*\$)/)
     .map((text) => {
-      const numbers = Array.from(text.matchAll(MONEY))
-        .map((m) => Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1))
-        .filter((n) => Number.isFinite(n) && n >= MIN_PLAUSIBLE_SALARY);
-      return { text, numbers };
+      const figures = Array.from(text.matchAll(MONEY))
+        .map((m) => ({
+          value: Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1),
+          start: m.index ?? 0,
+          end: (m.index ?? 0) + m[0].length,
+        }))
+        .filter((f) => Number.isFinite(f.value) && f.value >= MIN_PLAUSIBLE_SALARY);
+      return { text, figures };
     })
-    .filter((s) => s.numbers.length > 0);
+    .filter((s) => s.figures.length > 0);
 }
 
 const OTE = /\bOTE\b|on[- ]target/i;
@@ -69,12 +105,9 @@ export function parseSalaryRange(raw: string | null | undefined): ParsedSalary {
   const chosen = labeledBase ?? nonOte;
   // Every remaining segment is OTE-labeled, so report OTE rather than pretend
   // the figure is a base range.
-  if (!chosen) {
-    const nums = parts[0].numbers;
-    return { kind: "ote", min: Math.min(...nums), max: Math.max(...nums) };
-  }
+  if (!chosen) return { kind: "ote", ...rangeOf(parts[0]) };
 
-  return { kind: "base", min: Math.min(...chosen.numbers), max: Math.max(...chosen.numbers) };
+  return { kind: "base", ...rangeOf(chosen) };
 }
 
 /** The figure a minimum-base floor is compared against. OTE never qualifies. */

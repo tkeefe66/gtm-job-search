@@ -71,6 +71,8 @@ describe("parseSalaryRange", () => {
     expect(parseSalaryRange("$200K–$280K")).toEqual({ kind: "base", min: 200000, max: 280000 });
     // A fractional k figure is a real posting shape ("$162.5k").
     expect(parseSalaryRange("$162.5k")).toEqual({ kind: "base", min: 162500, max: 162500 });
+    // A space after the dollar sign is a common extraction artifact.
+    expect(parseSalaryRange("$ 150,000")).toEqual({ kind: "base", min: 150000, max: 150000 });
   });
 
   test("a comma-separated base/OTE pair does not merge into one mangled range", () => {
@@ -109,6 +111,104 @@ describe("parseSalaryRange", () => {
       kind: "base",
       min: 165000,
       max: 175000,
+    });
+    // Without the floor, this whole role reads as a $500 range: the stipend is
+    // the first unlabeled segment and wins the segment choice outright.
+    expect(parseSalaryRange("$500 monthly stipend; $150,000 - $170,000")).toEqual({
+      kind: "base",
+      min: 150000,
+      max: 170000,
+    });
+  });
+
+  test("reads on-target earnings spelled out as OTE", () => {
+    // `on[- ]target` in the OTE pattern is load-bearing: without it this string
+    // classifies as `base` and clears a base floor it should not — the exact
+    // false pass the base-over-OTE rule exists to prevent.
+    expect(parseSalaryRange("on-target earnings of $300,000 - $340,000")).toEqual({
+      kind: "ote",
+      min: 300000,
+      max: 340000,
+    });
+    expect(parseSalaryRange("On target earnings $300,000 - $340,000").kind).toBe("ote");
+  });
+
+  test("does not read 'based' or 'Note' as the base and OTE labels", () => {
+    // Both label patterns carry \b for a reason. Without it on BASE, the
+    // Denver-based segment claims the base label and wins over the real one;
+    // without it on OTE, the word "Note" turns a base range into an OTE range.
+    expect(parseSalaryRange("$120,000 - $140,000 (Denver-based); $180,000 - $200,000 base (SF)"))
+      .toEqual({ kind: "base", min: 180000, max: 200000 });
+    expect(parseSalaryRange("Note: $140,000 - $160,000")).toEqual({
+      kind: "base",
+      min: 140000,
+      max: 160000,
+    });
+  });
+
+  test("does not read a following word as a k suffix", () => {
+    // Stripped-HTML text (lib/crawler.ts) routinely joins adjacent elements
+    // with no space. Without the (?![A-Za-z]) lookahead this is $150,000,000.
+    expect(parseSalaryRange("$150,000Kansas City")).toEqual({
+      kind: "base",
+      min: 150000,
+      max: 150000,
+    });
+  });
+
+  describe("extracts the range pair, not every figure in the segment", () => {
+    // baseMaxFor returns `max`, which is what the comp floor compares against.
+    // Spanning every figure in the segment lets equity, bonuses and signing
+    // figures set that number — the same false-pass class as picking OTE over
+    // base, one scope narrower.
+    test("equity alongside base does not become the range max", () => {
+      expect(parseSalaryRange("$150,000 base + $200,000 equity")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 150000,
+      });
+      expect(baseMaxFor(parseSalaryRange("$150,000 base + $200,000 equity"))).toBe(150000);
+    });
+
+    test("a signing bonus does not become the range min", () => {
+      expect(parseSalaryRange("$85,000 - $95,000 plus a $10,000 signing bonus")).toEqual({
+        kind: "base",
+        min: 85000,
+        max: 95000,
+      });
+    });
+
+    test("finds the dash pair even when a stray figure comes first", () => {
+      expect(parseSalaryRange("$10,000 signing bonus and $150,000 - $170,000 base")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 170000,
+      });
+    });
+
+    test("accepts hyphen, en dash, em dash and 'to' as the pair separator", () => {
+      const expected = { kind: "base", min: 150000, max: 170000 };
+      expect(parseSalaryRange("$150,000-$170,000")).toEqual(expected);
+      expect(parseSalaryRange("$150,000 – $170,000")).toEqual(expected);
+      expect(parseSalaryRange("$150,000 — $170,000")).toEqual(expected);
+      expect(parseSalaryRange("$150,000 to $170,000")).toEqual(expected);
+    });
+
+    test("two figures with no separator are not a range", () => {
+      // "$150,000 $200,000" is not a range anyone wrote on purpose; taking the
+      // first figure is the conservative read for a floor comparison.
+      expect(parseSalaryRange("$150,000 salary $200,000 equity grant")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 150000,
+      });
+      // The separator match is anchored to the whole gap. Unanchored, the "to"
+      // inside "total" makes this a $150k-$250k range.
+      expect(parseSalaryRange("$150,000 salary, total comp $250,000")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 150000,
+      });
     });
   });
 
