@@ -3,12 +3,15 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { normalizeTitle } from "@/lib/role-key";
+import type { FitInputs } from "@/lib/fit-inputs";
 import {
-  LOCATION_RULE,
   ROLE_SEARCH_SYSTEM,
+  loadCriteria,
   roleExtractionSchema,
   titleListForPrompt,
+  type Criteria,
 } from "@/lib/search-criteria";
+import { readCriteriaChangedAt } from "@/lib/settings-store";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type {
   CrawlMethod,
@@ -31,9 +34,38 @@ export interface CrawlOutcome {
   error?: string;
 }
 
+/**
+ * Everything a crawl run needs from settings, resolved once and passed down.
+ *
+ * Bundled as one object rather than three sibling parameters because the
+ * companion compensation plan adds a field here and no signature reopens.
+ * The cron route builds it ONCE before its batch loop and hands the same
+ * object to every iteration: a settings save landing mid-batch must not split
+ * one run across two title lists.
+ */
+export interface RunContext {
+  criteria: Criteria;
+  fitInputs: FitInputs;
+  criteriaChangedAt: string | null;
+}
+
+/**
+ * Resolves a RunContext from the database. One settings read (inside
+ * loadCriteria) plus one timestamp read — fitInputs is derived from the
+ * criteria already in hand rather than re-reading via loadScoringInputs.
+ */
+export async function loadRunContext(): Promise<RunContext> {
+  const [criteria, criteriaChangedAt] = await Promise.all([
+    loadCriteria(),
+    readCriteriaChangedAt(),
+  ]);
+  return { criteria, fitInputs: { fitBrain: criteria.fitBrain }, criteriaChangedAt };
+}
+
 export function buildExtractionPrompt(
   company: string,
-  page: ExtractedPage
+  page: ExtractedPage,
+  criteria: Criteria
 ): string {
   const links = page.links
     .map((l) => `${l.text || "(no text)"} -> ${l.href}`)
@@ -41,9 +73,9 @@ export function buildExtractionPrompt(
 
   return `Below is the text and link list scraped from the careers page of "${company}".
 
-Identify every open role matching any of these titles or close variants: ${titleListForPrompt()}.
+Identify every open role matching any of these titles or close variants: ${titleListForPrompt(criteria)}.
 
-${LOCATION_RULE}
+${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
@@ -229,7 +261,8 @@ type FetchTierResult =
 
 async function extractViaFetch(
   company: string,
-  careersUrl: string
+  careersUrl: string,
+  criteria: Criteria
 ): Promise<FetchTierResult> {
   if (!(await fetchAllowed(careersUrl))) {
     console.log(
@@ -249,7 +282,7 @@ async function extractViaFetch(
 
   const raw = await callStructured({
     system: ROLE_SEARCH_SYSTEM,
-    prompt: buildExtractionPrompt(company, classification.page),
+    prompt: buildExtractionPrompt(company, classification.page, criteria),
     maxTokens: 4000,
   });
   return { kind: "roles", roles: rolesFromRaw(raw) };
@@ -257,12 +290,13 @@ async function extractViaFetch(
 
 async function extractViaSearch(
   company: string,
-  careersUrl: string | null
+  careersUrl: string | null,
+  criteria: Criteria
 ): Promise<Role[]> {
   const hint = careersUrl ? ` Their careers page may be: ${careersUrl}.` : "";
   const raw = await callWithWebSearch({
     system: ROLE_SEARCH_SYSTEM,
-    prompt: `Search for open go-to-market and revenue operations roles at "${company}".${hint} Look for these titles: ${titleListForPrompt()}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${LOCATION_RULE}
+    prompt: `Search for open go-to-market and revenue operations roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
@@ -360,11 +394,20 @@ async function closeStalePostings(
   }
 }
 
+/**
+ * `opts.ctx` is the batch escape hatch: the cron route resolves settings once
+ * and passes the same RunContext into every company, so one batch is crawled
+ * against one consistent set of criteria (and pays for one settings read, not
+ * one per company). The two single-company callers in app/actions/watchlist.ts
+ * omit it and get a freshly-loaded context, which is what makes "save the
+ * settings, then hit Check now" reflect the edit immediately.
+ */
 export async function crawlCompany(
   company: string,
-  opts: { dryRun?: boolean } = {}
+  opts: { dryRun?: boolean; ctx?: RunContext } = {}
 ): Promise<CrawlOutcome> {
   const dryRun = opts.dryRun ?? false;
+  const ctx = opts.ctx ?? (await loadRunContext());
 
   const { data: row, error: watchlistReadError } = await supabase
     .from("watchlist")
@@ -461,7 +504,7 @@ export async function crawlCompany(
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
       let fetchResult: FetchTierResult | null = null;
       if (tracked.crawl_method !== "search") {
-        fetchResult = await extractViaFetch(company, careersUrl);
+        fetchResult = await extractViaFetch(company, careersUrl, ctx.criteria);
       }
 
       if (fetchResult?.kind === "roles") {
@@ -479,7 +522,7 @@ export async function crawlCompany(
         // what actually ran, whether or not this run taught us anything new.
         learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
         runMethod = "search";
-        roles = await extractViaSearch(company, careersUrl);
+        roles = await extractViaSearch(company, careersUrl, ctx.criteria);
       }
 
       // Read the previous trustworthy run BEFORE this run's row is finalized.
@@ -498,6 +541,7 @@ export async function crawlCompany(
         },
         source: "Crawl",
         dryRun,
+        fitInputs: ctx.fitInputs,
       });
 
       newRoles = result.added.length;

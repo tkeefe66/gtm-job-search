@@ -10,6 +10,7 @@
 // functions take that object as a parameter so they stay testable without a
 // database.
 
+import type { FitInputs } from "@/lib/fit-inputs";
 import { mergeSettings, readAllSettings } from "@/lib/settings-store";
 
 export const DEFAULT_TARGET_TITLES = [
@@ -149,6 +150,49 @@ export function pickQueries(queries: string[], cap: number): string[] {
   return out;
 }
 
+export type QueryPlan = {
+  /** The subset actually offered to the model in the prompt. */
+  queries: string[];
+  /** `max_uses` on the web_search tool block — the hard billing ceiling. */
+  maxSearches: number;
+  /** Human-readable "why these" for the log line. */
+  reason: string;
+};
+
+/**
+ * Turns the full query enumeration plus the user's optional ceiling into the
+ * two numbers the search call needs. Extracted from findRolesByCriteria (which
+ * is unreachable from a test — it reads the database and calls Claude) so the
+ * precedence rule below is pinned by lib/search-criteria.test.ts.
+ *
+ * A stored ceiling of 0 or a negative — a bad hand-write, or a settings form
+ * that lets an empty field through as 0 — is treated as "no ceiling set", not
+ * as "run zero searches". The two decisions must agree: a naive
+ * `ceiling ? pickQueries(...) : all` is *falsy* at 0 and sends the full list,
+ * while a naive `ceiling ?? all.length * MULT` is *not nullish* at 0 and caps
+ * max_uses at 0 — handing the model 39 queries and forbidding it from running
+ * any of them, which reads as "the search found nothing" rather than as an
+ * error. Normalizing once, here, is what keeps them from disagreeing.
+ */
+export function planQueries(
+  allQueries: string[],
+  ceiling: number | null
+): QueryPlan {
+  const cap = ceiling !== null && ceiling > 0 ? ceiling : null;
+  const queries = cap === null ? allQueries : pickQueries(allQueries, cap);
+  // Floored at 1: max_uses: 0 is a request the API would reject outright, and
+  // an empty criteria list (every title deleted) would otherwise produce it.
+  const maxSearches = Math.max(1, cap ?? allQueries.length * MAX_QUERY_MULTIPLIER);
+  return {
+    queries,
+    maxSearches,
+    reason:
+      cap === null
+        ? `no ceiling set, max_uses ${maxSearches}`
+        : `ceiling ${cap}, max_uses ${maxSearches}`,
+  };
+}
+
 // The model has no idea what today's date is, so a prompt that only says
 // "recent" or "the last 60 days" leaves it to guess a year — and it guesses
 // from training bias. Observed in production on 2026-08-13: every one of the
@@ -173,4 +217,19 @@ export function dateContextLine(now: Date = new Date()): string {
 export async function loadCriteria(): Promise<Criteria> {
   const rows = await readAllSettings();
   return mergeSettings(DEFAULT_CRITERIA, rows);
+}
+
+/**
+ * The fit-scoring inputs, resolved the same way `loadCriteria` resolves the
+ * search criteria. Lives here rather than in lib/settings-store.ts because the
+ * shipped default it falls back to (`DEFAULT_FIT_BRAIN`, via DEFAULT_CRITERIA)
+ * lives here, and settings-store must not import this file — search-criteria
+ * already imports settings-store.
+ *
+ * Callers that already hold a `Criteria` should build `{ fitBrain: c.fitBrain }`
+ * directly instead of calling this: it costs a second settings read.
+ */
+export async function loadScoringInputs(): Promise<FitInputs> {
+  const rows = await readAllSettings();
+  return { fitBrain: mergeSettings(DEFAULT_CRITERIA, rows).fitBrain };
 }

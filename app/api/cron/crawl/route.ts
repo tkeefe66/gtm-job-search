@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
-import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
+import { crawlCompany, loadRunContext, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
 import { getDueCompanies } from "@/app/actions/watchlist";
 
@@ -66,6 +66,14 @@ export async function GET(req: Request) {
 
   const results: CrawlOutcome[] = [];
 
+  // Resolved ONCE for the whole batch, before the loop. Two reasons, and the
+  // first is the load-bearing one: a settings save landing halfway through a
+  // batch would otherwise crawl the first companies against the old title
+  // list and the rest against the new one, producing a run whose results
+  // cannot be interpreted. Second, it is one settings read per batch instead
+  // of one per company.
+  const ctx = await loadRunContext();
+
   // Sequential on purpose: avoids bursting the Anthropic API by firing many
   // concurrent web_search-tier calls at once. This does NOT keep the request
   // inside normal HTTP timeouts — a search-tier crawl is ~60-120s, so a full
@@ -76,7 +84,7 @@ export async function GET(req: Request) {
   // on the following run. One company failing never aborts the batch either.
   for (const company of due) {
     try {
-      results.push(await crawlCompany(company, { dryRun }));
+      results.push(await crawlCompany(company, { dryRun, ctx }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`cron/crawl: ${company} threw — ${message}`);

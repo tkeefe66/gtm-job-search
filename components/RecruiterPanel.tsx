@@ -82,6 +82,11 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         arr: form.arr || undefined,
         exit_signal: form.exit_signal || undefined,
         backer: form.backer || undefined,
+        // null, not omitted: this is a client component and cannot call
+        // loadScoringInputs (it transitively imports `pg`). null tells the
+        // server action to load the user's CURRENT stored fit brain, so a
+        // recruiter-parsed role is scored against the edited criteria.
+        fitInputs: null,
       }),
       addJob({
         company: form.company,

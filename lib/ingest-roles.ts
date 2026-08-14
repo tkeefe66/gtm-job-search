@@ -1,6 +1,7 @@
 import { rawQuery } from "@/lib/supabase";
 import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
+import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -25,6 +26,13 @@ export interface IngestOptions {
   companyContext?: IngestCompanyContext;
   source: string; // 'Discover' | 'Crawl' | 'Role Search'
   dryRun?: boolean;
+  // Carried as FitInputs rather than the whole Criteria object on purpose:
+  // ingestRoles uses nothing else from criteria, and the narrower type is what
+  // stops the companion compensation plan from re-widening this interface.
+  // Required (not optional with a load-on-demand fallback) because every
+  // caller here is a batch path — a per-row settings read inside the
+  // Promise.all below would be one database round trip per scored role.
+  fitInputs: FitInputs;
 }
 
 export interface IngestResult {
@@ -41,7 +49,7 @@ export interface IngestResult {
  * Rejected or Not Interested must never come back as New on a later crawl.
  */
 export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
-  const { company, roles, source, dryRun = false } = opts;
+  const { company, roles, source, fitInputs, dryRun = false } = opts;
   const ctx = opts.companyContext ?? {};
   const seenTitles = roles.map((r) => normalizeTitle(r.role_title));
 
@@ -146,6 +154,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           fit_summary: role.fit_signal,
           department: "",
           location: role.location,
+          fitInputs,
         });
         if (scored.score > 0) {
           await updateJob(jobRes.job.id, {

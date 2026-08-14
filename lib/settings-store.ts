@@ -90,6 +90,33 @@ export async function readAllSettings(): Promise<SettingRow[]> {
   return data ?? [];
 }
 
+/**
+ * When any setting was last written, as an ISO string, or null when nothing
+ * has ever been saved (a fresh install running purely on shipped defaults).
+ *
+ * Read separately from readAllSettings rather than widening SettingRow: the
+ * merge path has no use for per-row timestamps, and widening the row type
+ * would ripple into mergeSettings' shape guard.
+ *
+ * Fails soft to null for the same reason readAllSettings does — this is
+ * decoration on a crawl run, and a failed read must not abort one.
+ */
+export async function readCriteriaChangedAt(): Promise<string | null> {
+  const { data, error } = await rawQuery<{ changed_at: string | Date | null }>(
+    `select max(updated_at) as changed_at from app_settings`
+  );
+  if (error) {
+    console.error(
+      `settings-store: could not read the settings timestamp — ${error.message}.`
+    );
+    return null;
+  }
+  const raw = data?.[0]?.changed_at ?? null;
+  // pg returns timestamptz as a Date; normalize so callers always see ISO.
+  if (raw instanceof Date) return raw.toISOString();
+  return raw;
+}
+
 export async function writeSetting(
   key: SettingKey,
   value: unknown

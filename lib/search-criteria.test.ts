@@ -4,6 +4,7 @@ import {
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
   pickQueries,
+  planQueries,
   roleExtractionSchema,
   stackQueries,
   titleListForPrompt,
@@ -179,6 +180,54 @@ describe("pickQueries", () => {
   test("a cap of zero or less yields nothing", () => {
     expect(pickQueries(list, 0)).toEqual([]);
     expect(pickQueries(list, -1)).toEqual([]);
+  });
+});
+
+describe("planQueries", () => {
+  const list = Array.from({ length: 39 }, (_, i) => `q${i}`);
+
+  test("no ceiling sends every query and sets max_uses to the multiple", () => {
+    const plan = planQueries(list, null);
+    expect(plan.queries).toBe(list);
+    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
+    expect(plan.reason).toContain("no ceiling set");
+  });
+
+  test("a ceiling narrows the offer AND becomes the hard cap", () => {
+    // Both halves matter: the ceiling has to bind the prompt (how many we
+    // offer) and max_uses (how many are billable). A change that applied it
+    // to only one of the two would pass a test asserting only the other.
+    const plan = planQueries(list, 12);
+    expect(plan.queries.length).toBe(12);
+    expect(plan.maxSearches).toBe(12);
+    expect(plan.reason).toContain("ceiling 12");
+  });
+
+  test("a ceiling above the query count cannot inflate the offer", () => {
+    const plan = planQueries(list, 500);
+    expect(plan.queries.length).toBe(39);
+  });
+
+  test("a stored ceiling of 0 reads as 'no ceiling', never as 'zero searches'", () => {
+    // The precedence trap this function exists to close. `ceiling ? a : b` is
+    // falsy at 0 (sends all 39) while `ceiling ?? c` is NOT nullish at 0
+    // (max_uses 0) — inconsistent, and the combination silently returns no
+    // results. Whichever way 0 is resolved, the two must agree.
+    const plan = planQueries(list, 0);
+    expect(plan.queries.length).toBe(39);
+    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
+  });
+
+  test("a negative stored ceiling reads as 'no ceiling' too", () => {
+    const plan = planQueries(list, -5);
+    expect(plan.queries.length).toBe(39);
+    expect(plan.maxSearches).toBeGreaterThan(0);
+  });
+
+  test("max_uses is never zero, even with no queries to send", () => {
+    // Every title deleted → an empty enumeration → max_uses 0, which the API
+    // rejects outright rather than degrading to "no searches".
+    expect(planQueries([], null).maxSearches).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -1,6 +1,8 @@
 "use server";
 
 import { callWithWebSearch, anthropic, MODEL, parseJson } from "@/lib/anthropic";
+import type { FitInputs } from "@/lib/fit-inputs";
+import { loadScoringInputs } from "@/lib/search-criteria";
 import { report } from "@/lib/usage.js";
 
 export interface ParsedRole {
@@ -118,21 +120,24 @@ Return ONLY the JSON object.`,
   }
 }
 
-// Tom's background used for ruthless fit scoring.
-const CANDIDATE_BACKGROUND = `
-Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
-- 13+ years architecting B2B revenue engines; 6+ years inside the ABM/ABX product category (Demandbase, Engagio)
-- Current: Director of GTM Experts at Demandbase — leads a team that architects GTM systems and AI workflows for enterprise customers (BlackRock, Boeing, Microsoft, SAP Concur, Snowflake); influenced $43M+ in won revenue and $96M+ in pipeline
-- Deep expertise: the quantitative spine of GTM — pipeline waterfall modeling, ICP analysis, capacity planning, attribution, predictive account scoring, forecasting; QBR / board narrative work with CMOs, CROs, and RevOps leaders
-- Tooling: Marketo, Salesforce, Tableau, Bizible, LeanData, Workato, Outreach; led Pardot→Marketo migrations and multiple acquisition data migrations
-- AI builder: ships AI-first products and agentic workflows hands-on ("vibe-codes" working prototypes) — built a live AI product demo for a flagship event, a multi-agent B2B news intelligence agent, and other agentic apps
-- Strong: GTM systems architecture, marketing/revenue operations leadership, AI/agentic GTM workflows, enterprise B2B SaaS, data-driven GTM strategy, executive storytelling, cross-functional leadership (Sales, Marketing, Product, CS, Finance)
-- Weaker fit: pure people-management roles with no systems/building, non-B2B or non-SaaS industries, roles with no AI/automation upside, deeply technical software-engineering roles
-- Looking for: Head / VP / Director of GTM Systems, RevOps, Revenue Operations, Marketing Operations, GTM Strategy, or GTM/AI Operations — plus GTM Engineer and AI-Ops practitioner-builder roles where hands-on systems + agentic AI work is the point
-- Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
-- Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
-`.trim();
-
+/**
+ * Scores a role against the candidate's background, 1-5, ruthlessly.
+ *
+ * `fitInputs` is a REQUIRED key whose value may be null. Omission would be
+ * indistinguishable from "I meant the default", and the companion
+ * compensation plan adds a money value to this same object where that
+ * ambiguity becomes a real bug. Requiring the key forces every call site to
+ * state its intent — omitting it is a compile error.
+ *
+ * `null` does NOT mean "use the shipped default": it means "load the user's
+ * actual stored settings now", so a manually-added role is scored against the
+ * edited fit brain. It exists for the two `"use client"` call sites
+ * (components/RolesTable.tsx, components/RecruiterPanel.tsx) which cannot call
+ * loadScoringInputs themselves — it transitively imports `pg`.
+ *
+ * Batch paths must always pass an explicit value. Letting the null fallback
+ * fire inside a loop costs one settings read per scored row.
+ */
 export async function scoreFit(opts: {
   company: string;
   role_title: string;
@@ -144,8 +149,10 @@ export async function scoreFit(opts: {
   arr?: string;
   exit_signal?: string;
   backer?: string;
+  fitInputs: FitInputs | null;
 }): Promise<{ score: number; rationale: string; error?: string }> {
   try {
+    const { fitBrain } = opts.fitInputs ?? (await loadScoringInputs());
     const message = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 500,
@@ -157,7 +164,7 @@ export async function scoreFit(opts: {
           content: `Score how well this role fits this candidate on a scale of 1-5. Be ruthless.
 
 CANDIDATE:
-${CANDIDATE_BACKGROUND}
+${fitBrain}
 
 ROLE:
 Company: ${opts.company}

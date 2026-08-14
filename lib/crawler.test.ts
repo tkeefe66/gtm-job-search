@@ -8,6 +8,7 @@ import {
   titlesToClose,
 } from "./crawler";
 import { stripHtml } from "./page-extract";
+import { DEFAULT_CRITERIA, type Criteria } from "./search-criteria";
 
 // Reused from lib/page-extract.test.ts's own fixtures so the shell/content
 // boundary this test relies on stays the one that file already pins.
@@ -36,21 +37,42 @@ describe("buildExtractionPrompt", () => {
   );
 
   test("names the company", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("Clay");
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Clay");
   });
 
   test("includes the location rule", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("Denver");
+    // "Denver" reaches the prompt only through criteria.locationRule — it
+    // appears nowhere else in the template. Keep this assertion as-is.
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Denver");
   });
 
   test("includes the page text and its links", () => {
-    const prompt = buildExtractionPrompt("Clay", page);
+    const prompt = buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA);
     expect(prompt).toContain("Open roles");
     expect(prompt).toContain("/careers/revops");
   });
 
   test("asks for an empty array rather than prose when nothing matches", () => {
-    expect(buildExtractionPrompt("Clay", page)).toContain("[]");
+    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("[]");
+  });
+
+  // The point of the whole task: the prompt renders the criteria it is HANDED,
+  // not the shipped defaults. Without this, every assertion above would still
+  // pass an implementation that ignored its third argument and kept importing
+  // the constants.
+  test("renders the supplied criteria rather than the defaults", () => {
+    const edited: Criteria = {
+      titles: ["Chief Waffle Officer"],
+      locations: ["Reykjavik"],
+      stackTerms: ["Syrup"],
+      locationRule: "Reykjavik only.",
+      fitBrain: "irrelevant here",
+    };
+    const prompt = buildExtractionPrompt("Clay", page, edited);
+    expect(prompt).toContain("Chief Waffle Officer");
+    expect(prompt).toContain("Reykjavik only.");
+    expect(prompt).not.toContain("Denver");
+    expect(prompt).not.toContain("Head of Revenue Operations");
   });
 });
 

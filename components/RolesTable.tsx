@@ -517,6 +517,11 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
         fit_summary: form.fit_summary, department: form.department, location: form.location,
         arr: form.arr || undefined, exit_signal: form.exit_signal || undefined,
         backer: form.backer || undefined,
+        // null, not omitted: this is a client component and cannot call
+        // loadScoringInputs (it transitively imports `pg`). null tells the
+        // server action to load the user's CURRENT stored fit brain, so a
+        // manually-added role is scored against the edited criteria.
+        fitInputs: null,
       }),
       addJob({
         company: form.company, role_title: form.role_title, status: form.status,
