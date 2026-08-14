@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { FitInputs } from "./fit-inputs";
 import {
@@ -5,28 +7,23 @@ import {
   buildFitPrompt,
   compFloorLine,
   compScoringClause,
-  type FitPromptRole,
+  formatDollars,
 } from "./fit-prompt";
+import {
+  FIXTURE_BRAIN,
+  FIXTURE_NO_FLOOR,
+  FIXTURE_ROLE,
+  FIXTURE_WITH_FLOOR,
+} from "./__fixtures__/fit-prompt-inputs";
 
-// Every field distinct and non-empty, so a builder that renders one value
-// where another belongs fails rather than coincidentally matching.
-const ROLE: FitPromptRole = {
-  company: "Acme",
-  role_title: "Head of RevOps",
-  company_description: "B2B SaaS for widgets",
-  key_skills: "Salesforce, Marketo",
-  fit_summary: "Broad GTM systems ownership",
-  department: "Revenue",
-  location: "Denver, CO",
-  salary_range: "$210,000 - $240,000",
-  arr: "$380M+ ARR",
-  exit_signal: "PE exit planned",
-  backer: "Centerbridge Partners",
-};
-
-const BRAIN = "A candidate who does GTM systems.";
-const NO_FLOOR: FitInputs = { fitBrain: BRAIN, compFloor: null };
-const WITH_FLOOR: FitInputs = { fitBrain: BRAIN, compFloor: 180000 };
+// The same inputs the checked-in fixtures were rendered from — see
+// lib/__fixtures__/fit-prompt-inputs.ts. Every field is distinct and
+// non-empty, so a builder that renders one value where another belongs fails
+// rather than coincidentally matching.
+const ROLE = FIXTURE_ROLE;
+const BRAIN = FIXTURE_BRAIN;
+const NO_FLOOR: FitInputs = FIXTURE_NO_FLOOR;
+const WITH_FLOOR: FitInputs = FIXTURE_WITH_FLOOR;
 
 /** The section of the prompt between two headings, for position assertions. */
 function between(prompt: string, from: string, to: string): string {
@@ -36,6 +33,30 @@ function between(prompt: string, from: string, to: string): string {
   expect(end).toBeGreaterThan(start);
   return prompt.slice(start, end);
 }
+
+describe("formatDollars", () => {
+  test("groups thousands, at every magnitude the floor plausibly takes", () => {
+    // Host-independent by construction — see the note on formatDollars. The
+    // old toLocaleString("en-US") rendered these identically on an en-US
+    // machine whether or not the locale argument was there, so no test could
+    // tell the pinned call from the unpinned one.
+    expect(formatDollars(1000)).toBe("$1,000");
+    expect(formatDollars(180000)).toBe("$180,000");
+    expect(formatDollars(1250000)).toBe("$1,250,000");
+  });
+
+  test("leaves figures below a thousand ungrouped", () => {
+    expect(formatDollars(999)).toBe("$999");
+  });
+
+  test("rounds, so a hand-edited fractional row cannot render '$180,000.5'", () => {
+    // The grouping regex assumes an unbroken run of digits; a decimal point
+    // makes it group the wrong side. saveCompFloor rejects non-integers, but
+    // app_settings is hand-editable.
+    expect(formatDollars(180000.4)).toBe("$180,000");
+    expect(formatDollars(999.6)).toBe("$1,000");
+  });
+});
 
 describe("compFloorLine", () => {
   test("states the floor with thousands separators", () => {
@@ -82,26 +103,40 @@ describe("compFloorLine", () => {
 
 describe("compScoringClause", () => {
   test("caps a below-floor role rather than sinking it", () => {
+    // Whole clauses, not keywords: "cap the score at 3" also appears in a
+    // sentence that says the opposite of what it should, and an assertion
+    // that matches either one is not pinning anything.
     const clause = compScoringClause(180000);
-    expect(clause).toContain("cap the score at 3");
-    // "Cap", not "score 1": the role stays visible and honestly rated on
-    // everything else. This is the difference between scoring low and
-    // disappearing.
+    expect(clause).toContain(
+      "Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is"
+    );
+    // The other half of "scores low rather than disappearing": capped at 3,
+    // but not pushed below what the rest of the fit earned.
+    expect(clause).toContain(
+      "Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see."
+    );
     expect(clause.toLowerCase()).not.toContain("score 1");
   });
 
   test("does not reward pay above the floor", () => {
     // Asymmetric on purpose. The floor is a minimum, not a ranking signal —
-    // otherwise the highest bidder outranks the best-fitting role.
-    expect(compScoringClause(180000)).toContain("at or above the minimum = no adjustment");
+    // otherwise the highest bidder outranks the best-fitting role. Pinned as
+    // the whole instruction: "no adjustment" alone survives an edit that
+    // reverses the sentence around it.
+    expect(compScoringClause(180000)).toContain(
+      "- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor."
+    );
   });
 
   test("tells the model not to treat OTE as a base figure", () => {
     // The same rule lib/salary-filter.ts encodes for the /roles filter: OTE
     // bundles commission, so comparing it to a base floor understates the
     // role. Stated in the prompt because the model, unlike the filter, sees
-    // the raw string.
-    expect(compScoringClause(180000)).toContain("OTE");
+    // the raw string. The bare token "OTE" would also match a sentence
+    // telling it to do the opposite.
+    expect(compScoringClause(180000)).toContain(
+      "OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it."
+    );
   });
 
   test("no floor set means no compensation instruction at all", () => {
@@ -264,5 +299,109 @@ describe("buildFitPrompt", () => {
     ];
     expect(sections.length).toBe(6);
     expect(sections.every((s) => prompt.includes(s))).toBe(true);
+  });
+});
+
+/**
+ * The whole rendered prompt, byte for byte, against a checked-in fixture.
+ *
+ * The assertions above pin the compensation MECHANICS — conditionality,
+ * cap-at-3, where the carve-out sits, 0-means-off. They also pin six section
+ * HEADINGS, and that is where they stopped: nothing above notices if a scoring
+ * tier, a title-scope bullet or a financial signal is deleted, reworded, or
+ * INVERTED. Those bullets are the rubric every score in the table was
+ * calibrated against; an edit that silently makes scoring worse (the observed
+ * case: flipping "Do not reward pay above the floor" into "Reward pay well
+ * above the floor") shipped green against a heading-level guard.
+ *
+ * So the fixture is the guard, and the six-heading test above is now just its
+ * readable summary. A future prompt edit fails here with the changed lines
+ * printed, and the fixture is updated deliberately in the same commit — which
+ * is the point. Regenerate ONLY after reading the diff:
+ *
+ *   npx tsx -e 'import {writeFileSync} from "fs";
+ *     import {buildFitPrompt} from "./lib/fit-prompt";
+ *     import {FIXTURE_ROLE, FIXTURE_NO_FLOOR, FIXTURE_WITH_FLOOR}
+ *       from "./lib/__fixtures__/fit-prompt-inputs";
+ *     writeFileSync("lib/__fixtures__/fit-prompt.no-floor.txt",
+ *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_NO_FLOOR));
+ *     writeFileSync("lib/__fixtures__/fit-prompt.with-floor.txt",
+ *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_WITH_FLOOR));'
+ *
+ * Deliberately not a snapshot library: `toMatchSnapshot` writes a missing
+ * snapshot on first run and `-u` rewrites a failing one, so the guard can be
+ * silenced by the same reflex that runs the tests.
+ */
+describe("the rendered prompt, against its fixture", () => {
+  const read = (name: string) =>
+    readFileSync(path.join(__dirname, "__fixtures__", name), "utf8");
+
+  /**
+   * Changed lines, one entry each, so a failure names WHAT moved rather than
+   * dumping two 50-line strings side by side. Length is asserted separately
+   * first: an inserted line shifts every line after it, and "58 lines, fixture
+   * has 57" is the useful sentence in that case.
+   */
+  function changedLines(actual: string, expected: string): string[] {
+    const a = actual.split("\n");
+    const e = expected.split("\n");
+    const out: string[] = [];
+    for (let i = 0; i < Math.max(a.length, e.length); i++) {
+      if (a[i] !== e[i]) {
+        out.push(
+          `line ${i + 1}\n  fixture: ${e[i] ?? "(no such line)"}\n  actual:  ${a[i] ?? "(no such line)"}`
+        );
+      }
+    }
+    return out;
+  }
+
+  test("with no floor set, matches fit-prompt.no-floor.txt exactly", () => {
+    const fixture = read("fit-prompt.no-floor.txt");
+    const actual = buildFitPrompt(ROLE, NO_FLOOR);
+    expect(actual.split("\n").length).toBe(fixture.split("\n").length);
+    expect(changedLines(actual, fixture)).toEqual([]);
+  });
+
+  test("with a floor set, matches fit-prompt.with-floor.txt exactly", () => {
+    const fixture = read("fit-prompt.with-floor.txt");
+    const actual = buildFitPrompt(ROLE, WITH_FLOOR);
+    expect(actual.split("\n").length).toBe(fixture.split("\n").length);
+    expect(changedLines(actual, fixture)).toEqual([]);
+  });
+
+  test("the two fixtures differ ONLY by the three compensation splices", () => {
+    // Guards the fixtures themselves. Two files that had drifted apart for an
+    // unrelated reason would still each match their own rendering, and both
+    // tests above would pass while the floor quietly changed something else
+    // in the prompt.
+    const withFloor = read("fit-prompt.with-floor.txt").split("\n");
+    const noFloor = read("fit-prompt.no-floor.txt").split("\n");
+    const extra = withFloor.filter((l) => !noFloor.includes(l));
+    expect(extra.length).toBeGreaterThan(0);
+    // The candidate-block floor line, the four-line COMPENSATION block, and
+    // the carve-out. Nothing else may appear only in the floor rendering.
+    expect(extra).toEqual([
+      "- Targets roles paying at least $180,000 base. Below that is a weaker fit unless the equity or building opportunity is exceptional.",
+      "COMPENSATION (the candidate stated a minimum base above — apply it):",
+      "- Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is, and say so in the rationale. Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see.",
+      "- Posted base at or above the minimum = no adjustment. Do not reward pay above the floor.",
+      "- No base published, or an OTE / on-target figure only = no adjustment either way. OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it.",
+      "→ If the posted base is below the candidate's stated minimum, cap at 3 regardless of this rule. The compensation floor overrides this one.",
+    ]);
+    // And the no-floor rendering adds nothing of its own.
+    expect(noFloor.filter((l) => !withFloor.includes(l))).toEqual([]);
+  });
+
+  test("neither rendering carries a doubled blank line", () => {
+    // A splice that renders "" leaves the newlines around it behind. Harmless
+    // to a model, but it is the visible symptom of a seam that assumed its
+    // fragment was always non-empty — worth failing on rather than absorbing
+    // into the fixture.
+    for (const name of ["fit-prompt.no-floor.txt", "fit-prompt.with-floor.txt"]) {
+      const lines = read(name).split("\n");
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.every((l, i) => !(l === "" && lines[i - 1] === ""))).toBe(true);
+    }
   });
 });

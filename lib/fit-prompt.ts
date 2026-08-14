@@ -43,6 +43,26 @@ export interface FitPromptRole {
 }
 
 /**
+ * A whole-dollar figure with thousands separators, for the prompt.
+ *
+ * Deliberately NOT `toLocaleString()`. That call's output depends on the
+ * host's default locale and on whether the Node build ships full ICU: the same
+ * floor renders "$180,000" here and "$180 000" or "$180000" on a server
+ * configured differently, and nothing in the app would report the difference —
+ * the prompt would just quietly state a stranger number to the model. Pinning
+ * `"en-US"` fixes that but leaves a live mutation target (drop the argument
+ * and every test still passes on an en-US machine), so the formatting is done
+ * here instead, where it is deterministic by construction and pinned by test.
+ *
+ * Rounded because the grouping regex assumes an integer run of digits.
+ * `saveCompFloor` already rejects non-integers; a hand-edited row could still
+ * carry one, and "$180,000.5" is not a number anyone should read.
+ */
+export function formatDollars(n: number): string {
+  return `$${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
+}
+
+/**
  * The candidate-block line stating the compensation floor, or "" when no floor
  * is set.
  *
@@ -55,14 +75,12 @@ export interface FitPromptRole {
  * (the /roles filter, saveCompFloor's validation, which rejects 0 outright).
  * A literal $0 floor is not a thing anyone means; `null` is how "off" is spelled.
  *
- * The locale is pinned to en-US rather than left to the host's default: this
- * string is sent to a model, and a server whose locale groups digits
- * differently (or not at all) would quietly send "$180 000" or "$180000".
+ * The figure is formatted by `formatDollars` above, never by the host locale.
  */
 export function compFloorLine(compFloor: number | null): string {
   if (!compFloor || compFloor <= 0) return "";
   return (
-    `\n- Targets roles paying at least $${compFloor.toLocaleString("en-US")} base. ` +
+    `\n- Targets roles paying at least ${formatDollars(compFloor)} base. ` +
     `Below that is a weaker fit unless the equity or building opportunity is exceptional.`
   );
 }
@@ -135,8 +153,7 @@ SCORING GUIDE:
 2 = Weak fit — some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope
 3 = Moderate fit — relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside
 4 = Strong fit — clear domain alignment AND (broad ownership across the GTM/RevOps stack, lead/principal/head-level scope, hands-on GTM systems + AI/agentic building, or explicit cross-functional leadership even without a VP title)
-5 = Exceptional fit — almost tailor-made: Head/VP/Director-level GTM Systems / RevOps / Marketing Ops / GTM-AI title at a B2B SaaS company where the domain is a direct match, OR a GTM Engineer / AI-Ops builder role with broad mandate at a strong company
-${compScoringClause(inputs.compFloor)}
+5 = Exceptional fit — almost tailor-made: Head/VP/Director-level GTM Systems / RevOps / Marketing Ops / GTM-AI title at a B2B SaaS company where the domain is a direct match, OR a GTM Engineer / AI-Ops builder role with broad mandate at a strong company${compScoringClause(inputs.compFloor)}
 
 TITLE SCOPE SIGNALS (use these to adjust score):
 - "Head of", "VP", "Director" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches
