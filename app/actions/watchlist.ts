@@ -101,6 +101,29 @@ async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
 // without this check, a name that doesn't resolve to a stored row (a race
 // with another tab's delete, or simply a typo) silently no-ops: the caller
 // sees no error and the UI reports success for a write that touched nothing.
+/**
+ * Why the two UPSERT paths refuse when the watchlist could not be read.
+ *
+ * addToWatchlist and trackCompanyByName deliberately skip resolveWriteTarget:
+ * for them "not found" is the normal first-time case, not an error. But
+ * "could not look" is NOT the same as "not found", and both of them depend on
+ * the lookup for the same thing — the canonical STORED casing. The unique
+ * index is on raw text, so writing under an unverified name is how "clay"
+ * becomes a second row beside "Clay": billed separately, and invisible to
+ * ingestRoles' dedupe, so every role re-inserts as a duplicate "New" job.
+ *
+ * Shared so the two cannot drift. trackCompanyByName refused and
+ * addToWatchlist did not, which left the identical hazard open on the Discover
+ * tab's Watch button.
+ */
+function readFailureError(name: string, action: string): string {
+  return (
+    `Could not check the watchlist before ${action} "${name}" — the database could not ` +
+    `be read. Nothing was written, because acting on an unverified company name can ` +
+    `create a duplicate company. Try again.`
+  );
+}
+
 async function resolveWriteTarget(
   company: string
 ): Promise<{ company: string; careers_url: string | null; error?: string }> {
@@ -144,6 +167,13 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   // `row` is used.
   const { row: existing, readFailed } = await resolveExistingCompany(startup.company);
 
+  // Refused for the same reason trackCompanyByName refuses — see
+  // readFailureError. This path had the gap open: it is the Discover tab's
+  // Watch button, which is exactly where an unverified casing would land.
+  if (readFailed) {
+    return { error: readFailureError(startup.company.trim(), "watching") };
+  }
+
   // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
   // empty string for careers_url ("best guess ... or empty string"), and
   // it's only ever a guess by construction — it must never beat a URL
@@ -156,9 +186,13 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   // URL invalidates everything the crawler learned about the old one).
   // `{ known: false }` when the read failed, NOT `existing.careers_url` — which
   // is null in that case and would read as "nothing stored", letting the guess
-  // through. resolveCareersUrlWrite's own rule 0 refuses on unknown; the
-  // discriminated union is what makes passing the wrong thing a compile error
-  // rather than a plausible edit.
+  // through and clobbering a hand-typed URL.
+  //
+  // DEFENCE IN DEPTH as of the readFailed guard above: that guard returns
+  // before this line, so the `{ known: false }` branch is currently
+  // unreachable from here. Kept anyway, and kept as a discriminated union,
+  // because the union is what makes the unsafe call a COMPILE error for the
+  // next caller — the guard only protects this one.
   const careersUrl = resolveCareersUrlWrite(
     readFailed ? { known: false } : { known: true, url: existing.careers_url },
     startup.careers_url
@@ -303,12 +337,7 @@ export async function trackCompanyByName(
   // This uses the existing error channel rather than throwing, so the caller
   // renders it like any other refusal.
   if (readFailed) {
-    return {
-      error:
-        `Could not check the watchlist before tracking "${trimmed}" — the database could ` +
-        `not be read. Nothing was written, because tracking under an unverified name can ` +
-        `create a duplicate company. Try again.`,
-    };
+    return { error: readFailureError(trimmed, "tracking") };
   }
 
   const { error } = await supabase.from("watchlist").upsert(

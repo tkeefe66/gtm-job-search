@@ -31,7 +31,11 @@ import { aggregateCauses } from "@/lib/write-failure";
  * survive. So the returned error is unchanged and only the log gains anything —
  * behavior is identical, diagnostics are not.
  */
-function describeThrown(e: unknown): { message: string } {
+// Exported ONLY so the doctrine above can be pinned by a test. A mutant that
+// fills `message` from aggregateCauses(e) — which looks like an improvement —
+// would silently neuter every presence check in the codebase by making the
+// empty message impossible, and nothing else in the suite would notice.
+export function describeThrown(e: unknown): { message: string } {
   const message = e instanceof Error ? e.message : String(e);
   if (!message) {
     const causes = aggregateCauses(e);
