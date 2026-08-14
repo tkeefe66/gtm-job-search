@@ -4,6 +4,10 @@
 `/roles` confirmed `ƒ (Dynamic)`. Verified in the running container, not just on a green
 deploy status.
 
+**Redeployed 2026-08-14 at `989915a`** (601 tests / 33 files, build green) with the four
+missed swallowed-error sites — see "What actually happened" below. Verified by probing the
+served bundle for `save this role`, a string literal this deploy introduced; `/roles` 200.
+
 Plan: `docs/superpowers/plans/2026-08-13-compensation-floor.md`
 Spec: `docs/superpowers/specs/2026-08-13-search-settings-design.md`
 
