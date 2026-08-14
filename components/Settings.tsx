@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   countCrawlJobsMatchingTitles,
   getSettings,
+  markCompScoringRescored,
   rescoreAll,
   resetSetting,
   saveCeiling,
@@ -21,7 +22,11 @@ import {
   validateText,
 } from "@/lib/criteria-validation";
 import { removedTitles, removedTitlesWarning } from "@/lib/removed-titles";
-import { rescoreSummary, runRescorePass } from "@/lib/rescore-progress";
+import {
+  compRescoreOffer,
+  rescoreSummary,
+  runRescorePass,
+} from "@/lib/rescore-progress";
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 
@@ -164,10 +169,11 @@ export default function Settings() {
   // Only ever WIDENS the prompt's gate (see showRescorePrompt) — it is never
   // required for the prompt to appear, so it cannot bury it on a fresh load.
   const [fitBrainTouchedHere, setFitBrainTouchedHere] = useState(false);
-  // Same idea for the comp floor: unlike fitBrainOverridden, SettingsView
-  // carries no server-side "was the floor ever set" flag, so this session
-  // flag is the ONLY gate for the floor's copy of the prompt (see
-  // showCompFloorRescorePrompt) rather than a widener on top of one.
+  // Same idea for the comp floor. The server half of ITS gate is
+  // view.compScoringRescoredAt (see compRescoreOffer), so this flag only ever
+  // WIDENS that gate — covering a floor edit made after a pass was already
+  // stamped — and picks the prompt's wording. It is never required for the
+  // prompt to appear, so it cannot bury the day-one offer on a fresh load.
   const [compFloorTouchedHere, setCompFloorTouchedHere] = useState(false);
   const [rescoreNotice, setRescoreNotice] = useState<string | null>(null);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
@@ -397,8 +403,30 @@ export default function Settings() {
       // Collapse the offer only when the pass actually finished. Rows left
       // over, or rows that failed, keep the prompt on screen so a second run
       // is one click away — and a fresh page load re-offers it either way.
+      //
+      // The SAME condition stamps the server-side suppression, for exactly
+      // that reason: a partial or failed pass must not be able to switch the
+      // day-one offer off permanently. `remaining > 0` is not the test — a
+      // permanently failing row holds it above zero — which is why this reads
+      // the drained pass rather than looping on it.
+      //
+      // Stamped whatever put the prompt on screen. One pass re-scores every
+      // scored row through the same scoreFit, compensation included, so a
+      // fit-brain rescore satisfies the compensation offer just as fully as a
+      // comp-floor one does; suppressing only "its own" trigger would bill a
+      // second identical pass for nothing.
       if (!pass.error && pass.rescored > 0 && pass.remaining === 0) {
         setRescoreDismissed(true);
+        const stamp = await markCompScoringRescored();
+        if (stamp.error) {
+          // The rescore itself succeeded and must not be reported as failed;
+          // only the record of it is missing, and the visible cost of that is
+          // the offer coming back on the next load.
+          setRescoreNotice(
+            `${rescoreSummary(pass)} (${stamp.error} — this offer may reappear ` +
+              `on your next visit.)`
+          );
+        }
       }
     } catch (err) {
       // runRescorePass captures a rejected batch as `error` rather than
@@ -432,14 +460,22 @@ export default function Settings() {
     (view.fitBrainOverridden || fitBrainTouchedHere) &&
     !rescoreDismissed;
 
-  // No `view.compFloorOverridden` exists to widen this the way fitBrain's gate
-  // is widened above — the floor has no such server-tracked flag (SettingsView
-  // only carries the current value, not whether it was ever set) — so this is
-  // the whole gate, not an addition to one. `rescoreDismissed` is still
-  // shared: dismissing either prompt dismisses both, since one rescoreAll
-  // pass covers whatever made scores stale.
-  const showCompFloorRescorePrompt =
-    !!view && view.scoredJobCount > 0 && compFloorTouchedHere && !rescoreDismissed;
+  // Same shape as showRescorePrompt: SERVER state (has a compensation rescore
+  // pass ever completed?) with the session flag OR-ed in. The rule itself is
+  // compRescoreOffer, out in lib/rescore-progress.ts, because a rule expressed
+  // as a boolean here cannot be tested — this repo does not unit-test React.
+  // It returns the WORDING too, since "which gate opened" and "what the prompt
+  // may claim" are the same question. `rescoreDismissed` is still shared:
+  // dismissing either prompt dismisses both, since one rescoreAll pass covers
+  // whatever made scores stale.
+  const compRescoreReason = view
+    ? compRescoreOffer({
+        scoredJobCount: view.scoredJobCount,
+        compScoringRescoredAt: view.compScoringRescoredAt,
+        floorEditedThisSession: compFloorTouchedHere,
+        dismissed: rescoreDismissed,
+      })
+    : null;
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-ink/40">Loading…</div>;
@@ -582,6 +618,7 @@ export default function Settings() {
         {showRescorePrompt && (
           <RescorePrompt
             count={view.scoredJobCount}
+            reason="edit"
             busy={rescoring}
             onRescore={() => void handleRescore()}
             onDismiss={() => setRescoreDismissed(true)}
@@ -645,9 +682,10 @@ export default function Settings() {
           resetLabel="Turn off"
         />
 
-        {showCompFloorRescorePrompt && (
+        {view && compRescoreReason && (
           <RescorePrompt
             count={view.scoredJobCount}
+            reason={compRescoreReason}
             busy={rescoring}
             onRescore={() => void handleRescore()}
             onDismiss={() => setRescoreDismissed(true)}

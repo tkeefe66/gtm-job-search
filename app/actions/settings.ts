@@ -26,6 +26,7 @@ import {
   type TextSettingKey,
   readAllSettingsResult,
   readCriteriaChangedAt,
+  writeCompScoringRescoredAt,
   writeCriteriaChangedAt,
   writeSetting,
   type SettingKey,
@@ -249,6 +250,31 @@ export async function resetSetting(key: SettingKey): Promise<{ error?: string }>
 /** When the crawler-relevant criteria were last edited, or null if never. */
 export async function getCriteriaChangedAt(): Promise<string | null> {
   return readCriteriaChangedAt();
+}
+
+/**
+ * Records that a rescore pass finished, so the compensation offer stops firing
+ * on every page load.
+ *
+ * A thin pass-through, and only that. The write itself stays in
+ * lib/settings-store.ts next to the key it uses — a writer here would have to
+ * widen `SettingKey` to reach that key, which is the typo hazard the constant
+ * exists to close. This exists solely because the settings page is a client
+ * component and cannot import settings-store: doing so would drag `pg` into the
+ * client bundle.
+ *
+ * Deliberately NOT called from inside rescoreAll. rescoreAll runs one BATCH; a
+ * stamp written there would fire on the first of several and suppress the offer
+ * while most of the pipeline still carried stale scores. The caller stamps, and
+ * only when the whole pass drained cleanly.
+ */
+export async function markCompScoringRescored(): Promise<{ error?: string }> {
+  const { error } = await writeCompScoringRescoredAt();
+  if (error) {
+    console.error(`settings: could not stamp the compensation rescore — ${error}`);
+    return { error: `Could not record that the rescore ran — ${error}` };
+  }
+  return {};
 }
 
 export interface RescoreResult {

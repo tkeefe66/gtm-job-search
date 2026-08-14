@@ -79,6 +79,27 @@ export type SettingKeysAreFullyClassified = AssertNever<
  */
 export const CRITERIA_CHANGED_AT_KEY = "criteria_changed_at";
 
+/**
+ * Where `writeCompScoringRescoredAt` (below) stamps the completion of a rescore
+ * pass run because compensation joined fit scoring.
+ *
+ * A second stamp key, kept outside SETTING_KEYS for exactly the reasons
+ * CRITERIA_CHANGED_AT_KEY is: it is written by the app, it is not a `Criteria`
+ * field, mergeSettings must never see it, and no settings form may offer it.
+ *
+ * WHY a stamp is needed at all: shipping compensation into `scoreFit` made
+ * every score already in `jobs` stale on DEPLOY, with no user edit anywhere to
+ * hang the offer off. `scoredJobCount > 0` cannot be the whole trigger —
+ * rescoring UPDATES scores rather than removing them, so that count is
+ * unchanged by a successful pass and the offer would return immediately, and
+ * forever. This row is what a completed pass leaves behind to say "asked and
+ * answered". There is no version column by design (the no-migration constraint
+ * ruled one out), so it records that a pass RAN, not which rows predate the
+ * change — see compRescoreOffer in lib/rescore-progress.ts, and the prompt copy
+ * it chooses, which is careful not to claim otherwise.
+ */
+export const COMP_SCORING_RESCORED_AT_KEY = "comp_scoring_rescored_at";
+
 export interface SettingRow {
   key: string;
   value: unknown;
@@ -159,6 +180,31 @@ export const ceilingFrom = (rows: SettingRow[]) =>
 /** The minimum base compensation out of rows already read. See numberFrom. */
 export const compFloorFrom = (rows: SettingRow[]) =>
   numberFrom(rows, SETTING_KEYS.compFloor);
+
+/**
+ * When the compensation rescore pass last completed, out of rows ALREADY read,
+ * or null when it never has.
+ *
+ * A pure row reader rather than a `readCriteriaChangedAt`-style query of its
+ * own, and that is the whole point. The stamp's only consumer is the settings
+ * page, which already takes ONE snapshot of app_settings (see getSettings) —
+ * `select key, value from app_settings` returns this row along with everything
+ * else, so a second query would buy nothing but a second snapshot a concurrent
+ * save could split the page across. Being pure also makes the key-scoping
+ * testable with no database at all, which is the motivation
+ * CRITERIA_CHANGED_AT_SQL is exported for; this shape gets there without any
+ * SQL to pin. The crawler's stamp keeps its own reader because the crawler has
+ * no snapshot to read it out of.
+ *
+ * A row holding a non-string (a bad write, a hand-edit) reads as "never", not
+ * as "stamped". That direction is deliberate: the failure it causes is the
+ * offer appearing again, which one rescore clears, rather than the offer being
+ * suppressed forever by a value nothing can interpret.
+ */
+export function compScoringRescoredFrom(rows: SettingRow[]): string | null {
+  const row = rows.find((r) => r.key === COMP_SCORING_RESCORED_AT_KEY);
+  return typeof row?.value === "string" ? row.value : null;
+}
 
 /** Reads one scalar setting, taking its own snapshot of app_settings. */
 export async function readNumberSetting(key: SettingKey): Promise<number | null> {
@@ -277,11 +323,14 @@ export async function readCriteriaChangedAt(): Promise<string | null> {
 }
 
 // One upsert for every writer in this file. The key type is widened by exactly
-// one literal — the stamp, which is deliberately not a SettingKey — rather
-// than to `string`, so a typo still cannot reach app_settings even through
-// this private helper.
+// the two stamp literals — neither of which is a SettingKey — rather than to
+// `string`, so a typo still cannot reach app_settings even through this
+// private helper. Add a literal per stamp; never `string`.
 async function upsertSetting(
-  key: SettingKey | typeof CRITERIA_CHANGED_AT_KEY,
+  key:
+    | SettingKey
+    | typeof CRITERIA_CHANGED_AT_KEY
+    | typeof COMP_SCORING_RESCORED_AT_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   const { error } = await rawQuery(
@@ -317,6 +366,25 @@ export async function writeCriteriaChangedAt(
   when: Date = new Date()
 ): Promise<{ error?: string }> {
   return upsertSetting(CRITERIA_CHANGED_AT_KEY, when.toISOString());
+}
+
+/**
+ * Stamps `comp_scoring_rescored_at` with now, which is what stops the
+ * compensation rescore offer coming back on every page load.
+ *
+ * Lives here, next to the key and the reader, for the reason spelled out on
+ * writeCriteriaChangedAt: a writer in another module would have to widen
+ * `SettingKey` to reach the key, reopening the exact typo hazard the constant
+ * exists to close. Callers decide WHEN to stamp — only after a pass that
+ * actually finished, see handleRescore in components/Settings.tsx; a partial or
+ * failed pass must leave the offer standing.
+ *
+ * Stored as a JSON string, matching the other stamp.
+ */
+export async function writeCompScoringRescoredAt(
+  when: Date = new Date()
+): Promise<{ error?: string }> {
+  return upsertSetting(COMP_SCORING_RESCORED_AT_KEY, when.toISOString());
 }
 
 export async function deleteSetting(key: SettingKey): Promise<{ error?: string }> {

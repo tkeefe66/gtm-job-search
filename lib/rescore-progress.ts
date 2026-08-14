@@ -23,6 +23,89 @@ export function rescoreCostDollars(count: number): number {
 }
 
 /**
+ * Why the rescore offer is on screen — which decides what it may claim.
+ *
+ * "edit": the user just saved something that changed scoring, so the prompt can
+ * say so. "comp-scoring": nobody saved anything; compensation joined fit
+ * scoring on DEPLOY, and the offer is firing on a bare page load.
+ */
+export type RescoreReason = "edit" | "comp-scoring";
+
+export interface CompRescoreOfferInput {
+  /** Rows carrying a fit score, from the settings view. */
+  scoredJobCount: number;
+  /** When a compensation rescore pass last completed, or null if never. */
+  compScoringRescoredAt: string | null;
+  /** Did the user save the comp floor in THIS session? */
+  floorEditedThisSession: boolean;
+  /** Did the user wave the offer off in this session? */
+  dismissed: boolean;
+}
+
+/**
+ * Whether to offer a rescore in the compensation section, and in whose words.
+ * Null means "do not show it".
+ *
+ * Out here rather than as an expression in Settings.tsx because this repo does
+ * not unit-test React components, and every clause below is a rule that has a
+ * wrong version worth pinning:
+ *
+ * - The SERVER stamp is the load-bearing gate, not the session flag. A client
+ *   component has no memory across page loads, so a session-only rule shows the
+ *   offer to nobody on the day it matters most: the deploy that made every
+ *   stored score stale involves no user edit at all. The session flag is OR-ed
+ *   in exactly as fitBrainTouchedHere is — it can only ADD the case where the
+ *   user re-edits the floor after a pass has already been stamped, never remove
+ *   the server-driven one.
+ * - `scoredJobCount > 0` cannot be the trigger by itself: rescoring updates
+ *   scores rather than removing them, so that count survives a successful pass
+ *   unchanged and the offer would return immediately, forever. The stamp is
+ *   what suppresses it.
+ * - The session flag wins the WORDING when both apply. The user who just
+ *   clicked Save is owed "Saved."; the user who just opened the page is not.
+ */
+export function compRescoreOffer(input: CompRescoreOfferInput): RescoreReason | null {
+  if (input.dismissed) return null;
+  // Nothing scored means nothing to rescore, and a prompt offering to spend
+  // $0.00 on zero roles.
+  if (input.scoredJobCount <= 0) return null;
+  if (input.floorEditedThisSession) return "edit";
+  return input.compScoringRescoredAt === null ? "comp-scoring" : null;
+}
+
+/**
+ * The prompt's question, dollar figure included.
+ *
+ * Here rather than in the JSX so the two wordings can be pinned by tests, and
+ * so the figure keeps coming from rescoreCostDollars — no caller anywhere,
+ * including the component, gets to supply a number that disagrees with what the
+ * pass bills.
+ *
+ * The "comp-scoring" wording is deliberately hedged. There is no version column
+ * (the no-migration constraint ruled one out), so nothing here knows which rows
+ * predate the change — some may have been scored yesterday with compensation
+ * already in the prompt. "may not reflect it" is the most this can honestly
+ * say. It also must not open with "Saved.": nothing was saved.
+ */
+export function rescorePromptQuestion(reason: RescoreReason, count: number): string {
+  const dollars = rescoreCostDollars(count).toFixed(2);
+  const roles = `${count} role${count === 1 ? "" : "s"}`;
+  const them = count === 1 ? "it" : "them";
+
+  if (reason === "comp-scoring") {
+    return (
+      `Compensation is now part of fit scoring. ${roles} ` +
+      `${count === 1 ? "has a score" : "have scores"} that may not reflect it. ` +
+      `Rescore ${them} for about $${dollars}?`
+    );
+  }
+  return (
+    `Saved. ${roles} ${count === 1 ? "carries" : "carry"} scores from before ` +
+    `this edit. Rescore ${them} for about $${dollars}?`
+  );
+}
+
+/**
  * Whether to ask rescoreAll for another batch.
  *
  * `remaining > 0` ALONE is not a drain condition, and writing it that way is

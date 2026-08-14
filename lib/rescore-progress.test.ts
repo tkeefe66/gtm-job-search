@@ -2,11 +2,14 @@ import { describe, expect, test } from "vitest";
 import { DEFAULT_RESCORE_LIMIT, passStartFrom } from "./rescore-scope";
 import {
   DOLLARS_PER_RESCORE,
+  compRescoreOffer,
   maxRescoreBatches,
   rescoreCostDollars,
+  rescorePromptQuestion,
   rescoreSummary,
   runRescorePass,
   shouldContinueRescore,
+  type CompRescoreOfferInput,
   type RescoreBatchResult,
 } from "./rescore-progress";
 
@@ -329,5 +332,124 @@ describe("rescoreSummary", () => {
     expect(rescoreSummary({ rescored: 0, failed: 0, remaining: 0 })).toBe(
       "Nothing to rescore."
     );
+  });
+});
+
+describe("compRescoreOffer", () => {
+  // Day one, exactly as a deploy leaves it: roles already scored, no pass ever
+  // run, nothing edited, nothing dismissed.
+  const DAY_ONE: CompRescoreOfferInput = {
+    scoredJobCount: 26,
+    compScoringRescoredAt: null,
+    floorEditedThisSession: false,
+    dismissed: false,
+  };
+
+  test("fires on a bare page load, with no edit anywhere", () => {
+    // THE case this whole task exists for. Shipping compensation into scoreFit
+    // made every stored score stale on DEPLOY — there is no user edit to hang
+    // the offer off, so a session-only rule would show it to nobody.
+    expect(compRescoreOffer(DAY_ONE)).toBe("comp-scoring");
+  });
+
+  test("a completed pass suppresses it for good, across page loads", () => {
+    // scoredJobCount is UNCHANGED by a successful pass — rescoring updates
+    // scores, it does not remove them — so without the stamp the offer returns
+    // immediately, and forever.
+    expect(
+      compRescoreOffer({
+        ...DAY_ONE,
+        compScoringRescoredAt: "2026-08-14T00:00:00.000Z",
+      })
+    ).toBeNull();
+  });
+
+  test("a floor edit re-opens the offer after a pass was already stamped", () => {
+    // The session flag's only job: it WIDENS the server gate. A floor edit
+    // makes scores stale again, stamp or no stamp.
+    expect(
+      compRescoreOffer({
+        ...DAY_ONE,
+        compScoringRescoredAt: "2026-08-14T00:00:00.000Z",
+        floorEditedThisSession: true,
+      })
+    ).toBe("edit");
+  });
+
+  test("the session flag is never REQUIRED — it cannot bury the day-one case", () => {
+    // Both spellings of the flag still show the offer while the stamp is null.
+    expect(compRescoreOffer({ ...DAY_ONE, floorEditedThisSession: false })).not.toBeNull();
+    expect(compRescoreOffer({ ...DAY_ONE, floorEditedThisSession: true })).not.toBeNull();
+  });
+
+  test("a fresh save wins the wording when both gates are open", () => {
+    // The user who just clicked Save is owed "Saved."; the user who just
+    // opened the page is not.
+    expect(compRescoreOffer({ ...DAY_ONE, floorEditedThisSession: true })).toBe("edit");
+  });
+
+  test("dismissing hides it, whichever gate opened it", () => {
+    expect(compRescoreOffer({ ...DAY_ONE, dismissed: true })).toBeNull();
+    expect(
+      compRescoreOffer({ ...DAY_ONE, floorEditedThisSession: true, dismissed: true })
+    ).toBeNull();
+  });
+
+  test("nothing scored means no offer, stamp or no stamp", () => {
+    // Otherwise a fresh database gets a prompt offering to spend $0.00 on zero
+    // roles on its very first page load.
+    expect(compRescoreOffer({ ...DAY_ONE, scoredJobCount: 0 })).toBeNull();
+    expect(
+      compRescoreOffer({ ...DAY_ONE, scoredJobCount: 0, floorEditedThisSession: true })
+    ).toBeNull();
+  });
+});
+
+describe("rescorePromptQuestion", () => {
+  test("the day-one wording claims nothing it cannot know", () => {
+    const s = rescorePromptQuestion("comp-scoring", 26);
+    // Nothing was saved — this fires on a page load.
+    expect(s).not.toContain("Saved.");
+    // There is no version column, so no row can be said to predate anything.
+    expect(s).not.toContain("this edit");
+    expect(s).not.toMatch(/were scored before|predate/i);
+    expect(s).toMatch(/may not reflect/i);
+    expect(s).toMatch(/compensation/i);
+    expect(s).toContain("26 roles");
+  });
+
+  test("the edit wording still says a save happened", () => {
+    const s = rescorePromptQuestion("edit", 26);
+    expect(s).toContain("Saved.");
+    expect(s).toContain("this edit");
+  });
+
+  test("both wordings quote the figure the pass actually bills", () => {
+    // The prompt takes no dollar prop, from any caller: the number comes from
+    // rescoreCostDollars or it does not exist.
+    for (const count of [1, 26, 400]) {
+      const expected = `$${rescoreCostDollars(count).toFixed(2)}`;
+      expect(rescorePromptQuestion("comp-scoring", count)).toContain(expected);
+      expect(rescorePromptQuestion("edit", count)).toContain(expected);
+    }
+    // Guards the loop above: a wrong `count` list would otherwise pass vacuously.
+    expect(rescorePromptQuestion("comp-scoring", 26)).toContain("$0.20");
+  });
+
+  test("one role reads in the singular, in both wordings", () => {
+    const comp = rescorePromptQuestion("comp-scoring", 1);
+    expect(comp).toContain("1 role ");
+    expect(comp).not.toContain("1 roles");
+    expect(comp).toContain("Rescore it");
+
+    const edit = rescorePromptQuestion("edit", 1);
+    expect(edit).toContain("1 role carries");
+    expect(edit).toContain("Rescore it");
+  });
+
+  test("more than one role reads in the plural", () => {
+    expect(rescorePromptQuestion("comp-scoring", 2)).toContain("2 roles");
+    expect(rescorePromptQuestion("comp-scoring", 2)).toContain("Rescore them");
+    expect(rescorePromptQuestion("edit", 2)).toContain("2 roles carry");
   });
 });

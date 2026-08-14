@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CRITERIA, DEFAULT_FIT_BRAIN } from "./search-criteria";
 import { buildSettingsView, settingsReadWarning } from "./settings-view";
-import { UNDESCRIBED_DB_ERROR } from "./settings-store";
+import {
+  COMP_SCORING_RESCORED_AT_KEY,
+  CRITERIA_CHANGED_AT_KEY,
+  UNDESCRIBED_DB_ERROR,
+} from "./settings-store";
 
 const CLEAN = {
   rows: [] as { key: string; value: unknown }[],
@@ -18,7 +22,41 @@ describe("buildSettingsView", () => {
     expect(view.compFloor).toBeNull();
     expect(view.scoredJobCount).toBe(12);
     expect(view.fitBrainOverridden).toBe(false);
+    expect(view.compScoringRescoredAt).toBeNull();
     expect(view.error).toBeUndefined();
+  });
+
+  test("the compensation-rescore stamp is read off the same snapshot", () => {
+    // Off the rows the page already read, not by a query of its own: a second
+    // snapshot is one a concurrent save could split the page across.
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [
+        { key: "compFloor", value: 150000 },
+        { key: COMP_SCORING_RESCORED_AT_KEY, value: "2026-08-14T00:00:00.000Z" },
+      ],
+    });
+    expect(view.compScoringRescoredAt).toBe("2026-08-14T00:00:00.000Z");
+    // …and it stayed out of the criteria handed to every prompt.
+    expect(COMP_SCORING_RESCORED_AT_KEY in view.criteria).toBe(false);
+  });
+
+  test("the criteria stamp does not read as a compensation rescore", () => {
+    // Two ISO strings in one table. Confusing them would let any
+    // crawler-relevant edit permanently suppress the day-one rescore offer.
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [{ key: CRITERIA_CHANGED_AT_KEY, value: "2026-08-14T00:00:00.000Z" }],
+    });
+    expect(view.compScoringRescoredAt).toBeNull();
+  });
+
+  test("a failed settings read leaves the offer showing, not suppressed", () => {
+    // rows is empty on a failed read, so the stamp reads as "never". The offer
+    // showing costs a dismissal; suppressing it would lose the feature with
+    // nothing on screen to explain why.
+    const view = buildSettingsView({ ...CLEAN, settingsError: "connection terminated" });
+    expect(view.compScoringRescoredAt).toBeNull();
   });
 
   test("stored rows override the defaults, and the ceiling is read off them", () => {

@@ -13,6 +13,7 @@ import {
   UNDESCRIBED_DB_ERROR,
   ceilingFrom,
   compFloorFrom,
+  compScoringRescoredFrom,
   mergeSettings,
   type SettingRow,
 } from "@/lib/settings-store";
@@ -25,6 +26,14 @@ export interface SettingsView {
   compFloor: number | null;
   scoredJobCount: number;
   fitBrainOverridden: boolean;
+  /**
+   * When a compensation rescore pass last completed, or null if never — the
+   * SERVER half of the day-one rescore offer's gate. Without it the offer would
+   * either never fire (a session-only rule cannot survive the page load it has
+   * to fire on) or never stop (scoredJobCount is unchanged by a pass). See
+   * compRescoreOffer in lib/rescore-progress.ts.
+   */
+  compScoringRescoredAt: string | null;
   /** Everything wrong with this load, in one line, or absent when clean. */
   error?: string;
 }
@@ -97,6 +106,13 @@ export function buildSettingsView(input: SettingsViewInput): SettingsView {
     // Gates the rescore prompt across page loads — a client component has no
     // memory, so "re-show it this session" would bury it on a fresh load.
     fitBrainOverridden: input.rows.some((r) => r.key === SETTING_KEYS.fitBrain),
+    // Read off the SAME snapshot as everything else above rather than by a
+    // query of its own — see compScoringRescoredFrom. On a failed settings
+    // read `rows` is empty, so this reads as "never rescored" and the offer
+    // shows; that is the safe direction (a redundant offer costs a dismissal,
+    // a wrongly suppressed one loses the feature), and the read-failure banner
+    // is already on screen next to it.
+    compScoringRescoredAt: compScoringRescoredFrom(input.rows),
     // Joined rather than first-wins: the settings read and the count are
     // separate queries that fail separately, and hiding one behind the other
     // loses a failure the user needs.

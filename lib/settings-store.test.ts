@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
 
 import {
+  COMP_SCORING_RESCORED_AT_KEY,
   CRITERIA_CHANGED_AT_KEY,
   CRITERIA_CHANGED_AT_SQL,
   LIST_SETTING_KEYS,
@@ -14,11 +15,13 @@ import {
   UNDESCRIBED_DB_ERROR,
   ceilingFrom,
   compFloorFrom,
+  compScoringRescoredFrom,
   mergeSettings,
   numberFrom,
   readAllSettings,
   readAllSettingsResult,
   SETTING_KEYS,
+  writeCompScoringRescoredAt,
 } from "./settings-store";
 import { DEFAULT_CRITERIA } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
@@ -176,6 +179,100 @@ describe("criteria-changed stamp", () => {
   });
 });
 
+describe("the compensation-rescore stamp", () => {
+  test("its key is NOT a mergeable setting, and is not the criteria stamp", () => {
+    // Same reasoning as the criteria stamp: a stamp the app writes, never a
+    // user-editable setting. And a DISTINCT key — sharing one would make a
+    // rescore suppress stale-posting closure, and a criteria edit suppress the
+    // rescore offer.
+    expect(Object.values(SETTING_KEYS)).not.toContain(COMP_SCORING_RESCORED_AT_KEY);
+    expect(COMP_SCORING_RESCORED_AT_KEY in DEFAULT_CRITERIA).toBe(false);
+    expect(COMP_SCORING_RESCORED_AT_KEY).not.toBe(CRITERIA_CHANGED_AT_KEY);
+  });
+
+  test("a stored stamp cannot leak into the merged criteria", () => {
+    const merged = mergeSettings(DEFAULT_CRITERIA, [
+      { key: COMP_SCORING_RESCORED_AT_KEY, value: "2026-08-14T00:00:00.000Z" },
+    ]);
+    expect(merged).toEqual(DEFAULT_CRITERIA);
+  });
+
+  test("reads the stamp out of rows already read", () => {
+    expect(
+      compScoringRescoredFrom([
+        { key: "compFloor", value: 150000 },
+        { key: COMP_SCORING_RESCORED_AT_KEY, value: "2026-08-14T00:00:00.000Z" },
+      ])
+    ).toBe("2026-08-14T00:00:00.000Z");
+  });
+
+  test("a missing row reads as never rescored", () => {
+    expect(compScoringRescoredFrom([{ key: "compFloor", value: 150000 }])).toBeNull();
+    expect(compScoringRescoredFrom([])).toBeNull();
+  });
+
+  test("does not read the criteria stamp's row", () => {
+    // Both stamps are ISO strings in the same table. Reading whichever one
+    // turns up first would let any crawler-relevant edit suppress the
+    // compensation offer for good.
+    expect(
+      compScoringRescoredFrom([
+        { key: CRITERIA_CHANGED_AT_KEY, value: "2026-08-14T00:00:00.000Z" },
+      ])
+    ).toBeNull();
+  });
+
+  test("a non-string row reads as never rescored, not as stamped", () => {
+    // The safe direction: a value nothing can interpret re-offers the rescore
+    // (one dismissal), rather than suppressing it forever (the feature gone).
+    expect(
+      compScoringRescoredFrom([{ key: COMP_SCORING_RESCORED_AT_KEY, value: 1 }])
+    ).toBeNull();
+    expect(
+      compScoringRescoredFrom([{ key: COMP_SCORING_RESCORED_AT_KEY, value: null }])
+    ).toBeNull();
+  });
+});
+
+describe("writeCompScoringRescoredAt", () => {
+  const query = vi.mocked(rawQuery);
+
+  beforeEach(() => {
+    query.mockReset();
+    query.mockResolvedValue({ data: [], error: null } as never);
+  });
+
+  test("upserts the stamp key with an ISO timestamp", async () => {
+    const when = new Date("2026-08-14T12:34:56.000Z");
+    expect(await writeCompScoringRescoredAt(when)).toEqual({});
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("insert into app_settings");
+    expect(sql).toContain("on conflict (key) do update");
+    // The KEY, not a setting key and not the criteria stamp. Writing under
+    // criteria_changed_at would suppress stale-posting closure for ~2 crawl
+    // cycles per company every time a rescore ran.
+    expect(params[0]).toBe(COMP_SCORING_RESCORED_AT_KEY);
+    expect(params[1]).toBe(JSON.stringify(when.toISOString()));
+    // Round trip: what compScoringRescoredFrom reads back out of a jsonb
+    // string row is the same instant that went in.
+    expect(
+      compScoringRescoredFrom([
+        { key: COMP_SCORING_RESCORED_AT_KEY, value: JSON.parse(String(params[1])) },
+      ])
+    ).toBe(when.toISOString());
+  });
+
+  test("a failed write is reported, never swallowed as success", async () => {
+    // The caller shows "this offer may reappear" on this. Swallowing it would
+    // leave the user with an offer that returns forever and no explanation.
+    query.mockResolvedValue({ data: null, error: { message: "read-only" } } as never);
+    expect(await writeCompScoringRescoredAt()).toEqual({
+      error: expect.stringContaining("read-only"),
+    });
+  });
+});
+
 describe("SETTING_KEYS alignment", () => {
   test("every Criteria field has a matching SETTING_KEYS value", () => {
     // One-directional on purpose: searchCeiling and compFloor are settings
@@ -215,8 +312,9 @@ describe("setting-key shape partition", () => {
     }
   });
 
-  test("the stamp key is in no group — it is not user-editable", () => {
+  test("neither stamp key is in any group — they are not user-editable", () => {
     expect(grouped).not.toContain(CRITERIA_CHANGED_AT_KEY);
+    expect(grouped).not.toContain(COMP_SCORING_RESCORED_AT_KEY);
   });
 });
 

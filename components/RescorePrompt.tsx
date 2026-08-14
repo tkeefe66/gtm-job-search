@@ -1,41 +1,45 @@
 "use client";
 
-import { rescoreCostDollars } from "@/lib/rescore-progress";
+import { rescorePromptQuestion, type RescoreReason } from "@/lib/rescore-progress";
 
 /**
- * The offer to re-score existing roles against an edited fit brain.
+ * The offer to re-score existing roles whose scores are stale.
  *
- * A component rather than inline markup in Settings.tsx because the companion
- * compensation plan shows the same prompt after a comp-floor edit, and two
- * copies of this copy would drift — most importantly on the dollar figure.
+ * A component rather than inline markup in Settings.tsx because it is shown
+ * from three places now — a fit-brain edit, a comp-floor edit, and the
+ * compensation offer that fires on a bare page load — and three copies of this
+ * copy would drift, most importantly on the dollar figure.
  *
- * It derives that figure from `count` itself rather than taking one as a prop,
- * so DOLLARS_PER_RESCORE has exactly one home (lib/rescore-progress.ts) and a
- * caller cannot quote a number that disagrees with what the run bills.
+ * The wording and that figure both come from rescorePromptQuestion, which
+ * derives the dollars from `count` through rescoreCostDollars. Neither is a
+ * prop: DOLLARS_PER_RESCORE keeps exactly one home (lib/rescore-progress.ts),
+ * no caller can quote a number that disagrees with what the run bills, and the
+ * two wordings stay testable — this component is not.
+ *
+ * `reason` is a closed union rather than a free-text lead, so the load-time
+ * case cannot inherit the edit case's "Saved." (nothing was saved) or its
+ * claim that the scores predate the change (nothing knows that — there is no
+ * version column).
  *
  * `busy` comes from the caller because the caller owns the loop over
  * rescoreAll's batches; the label for it is owned here.
  */
 export default function RescorePrompt({
   count,
+  reason,
   onRescore,
   onDismiss,
   busy,
 }: {
   count: number;
+  reason: RescoreReason;
   onRescore: () => void;
   onDismiss: () => void;
   busy: boolean;
 }) {
-  const dollars = rescoreCostDollars(count);
-
   return (
     <div className="mt-3 rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-3">
-      <p className="text-sm text-ink/70">
-        Saved. {count} role{count === 1 ? "" : "s"}{" "}
-        {count === 1 ? "carries" : "carry"} scores from before this edit. Rescore
-        {count === 1 ? " it" : " them"} for about ${dollars.toFixed(2)}?
-      </p>
+      <p className="text-sm text-ink/70">{rescorePromptQuestion(reason, count)}</p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           onClick={onRescore}
