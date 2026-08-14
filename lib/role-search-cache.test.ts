@@ -54,4 +54,21 @@ describe("shouldReplaceRoleView", () => {
   test("a clean result with a cached row replaces the view", () => {
     expect(shouldReplaceRoleView({ fetchedAt: "2026-08-13T00:00:00.000Z" })).toBe(true);
   });
+
+  test("an EMPTY error message with no payload ALSO leaves the view intact", () => {
+    // The empty-message class, arriving at the one function written to reject
+    // exactly this input. `!res.error` is true for "", so a connection-level
+    // failure took the success branch and blanked roles the database still
+    // holds — the precise outcome the doc comment above says this exists to
+    // prevent. getCachedRoleSearch's error branch returns this shape verbatim.
+    expect(shouldReplaceRoleView({ fetchedAt: null, error: "" })).toBe(false);
+  });
+
+  test("an EMPTY error that still carries a payload replaces the view", () => {
+    // Both halves of the rule survive the fix: presence gates the refusal, but
+    // a result with a row is still applied so paid-for roles reach the screen.
+    expect(shouldReplaceRoleView({ fetchedAt: "2026-08-13T00:00:00.000Z", error: "" })).toBe(
+      true
+    );
+  });
 });

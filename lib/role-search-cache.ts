@@ -38,5 +38,10 @@ export interface RoleSearchResultLike {
 }
 
 export function shouldReplaceRoleView(res: RoleSearchResultLike): boolean {
-  return !res.error || res.fetchedAt !== null;
+  // PRESENCE, not truthiness. `!res.error` read a connection-level failure —
+  // whose message is the empty string — as "no error at all", so the one input
+  // this function exists to reject (an errored result with no payload) took
+  // the success branch and wiped the roles on screen. The doc comment above
+  // said the opposite of what the code did.
+  return res.error === undefined || res.fetchedAt !== null;
 }
