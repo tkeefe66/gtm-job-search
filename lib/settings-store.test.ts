@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { mergeSettings } from "./settings-store";
+import { mergeSettings, SETTING_KEYS } from "./settings-store";
+import { DEFAULT_CRITERIA } from "./search-criteria";
 
 describe("mergeSettings", () => {
   test("returns defaults when no rows are stored", () => {
@@ -39,26 +40,25 @@ describe("mergeSettings", () => {
     expect(mergeSettings(defaults, [{ key: "titles", value: "oops" }]).titles).toEqual(["A"]);
     expect(mergeSettings(defaults, [{ key: "rule", value: ["oops"] }]).rule).toBe("r");
   });
+
+  test("ignores a scalar value whose typeof mismatches the default", () => {
+    // Both sides are non-arrays here, so this exercises the second half of the
+    // shape guard (the typeof check) rather than the Array.isArray branch
+    // above — a default that is a string receiving a stored number.
+    const defaults = { compFloor: "150000" };
+    expect(mergeSettings(defaults, [{ key: "compFloor", value: 150000 }]).compFloor).toBe(
+      "150000"
+    );
+  });
 });
 
-// The "SETTING_KEYS alignment" test from the task-1 brief is deliberately
-// deferred to Task 2, not dropped. It asserts that every DEFAULT_CRITERIA
-// field name has a matching SETTING_KEYS value, but DEFAULT_CRITERIA does not
-// exist yet — lib/search-criteria.ts (Task 2) defines it. Importing it here
-// would make this file fail to run at all (undefined import -> every test in
-// it errors), which would break the "145 passing + new ones" gate for this
-// task. Task 2's brief must add this test back once DEFAULT_CRITERIA lands:
-//
-// import { SETTING_KEYS } from "./settings-store";
-// import { DEFAULT_CRITERIA } from "./search-criteria";
-//
-// describe("SETTING_KEYS alignment", () => {
-//   test("every Criteria field has a matching SETTING_KEYS value", () => {
-//     // One-directional on purpose: searchCeiling and compFloor are settings
-//     // but NOT Criteria fields, so a bijection assertion would fail. Drift
-//     // in the other direction makes every save a silent no-op.
-//     const fields = Object.keys(DEFAULT_CRITERIA);
-//     expect(fields.length).toBeGreaterThan(0);
-//     for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
-//   });
-// });
+describe("SETTING_KEYS alignment", () => {
+  test("every Criteria field has a matching SETTING_KEYS value", () => {
+    // One-directional on purpose: searchCeiling and compFloor are settings
+    // but NOT Criteria fields, so a bijection assertion would fail. Drift
+    // in the other direction makes every save a silent no-op.
+    const fields = Object.keys(DEFAULT_CRITERIA);
+    expect(fields.length).toBeGreaterThan(0);
+    for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
+  });
+});
