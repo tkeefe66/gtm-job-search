@@ -125,3 +125,12 @@ create table if not exists role_searches (
   fetched_at  timestamptz default now(),
   unique (family, search_term)
 );
+
+-- User-editable search criteria and scoring inputs. One row per setting;
+-- a missing row means "use the shipped default" (see lib/search-criteria.ts),
+-- which is also what makes "reset to defaults" a plain DELETE.
+create table if not exists app_settings (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz default now()
+);

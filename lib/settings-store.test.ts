@@ -1,0 +1,64 @@
+import { describe, expect, test } from "vitest";
+import { mergeSettings } from "./settings-store";
+
+describe("mergeSettings", () => {
+  test("returns defaults when no rows are stored", () => {
+    const defaults = { titles: ["A", "B"], rule: "r" };
+    expect(mergeSettings(defaults, [])).toEqual(defaults);
+  });
+
+  test("a stored row overrides its default", () => {
+    const defaults = { titles: ["A"], rule: "r" };
+    const merged = mergeSettings(defaults, [{ key: "titles", value: ["X", "Y"] }]);
+    expect(merged.titles).toEqual(["X", "Y"]);
+    expect(merged.rule).toBe("r");
+  });
+
+  test("a row with an unknown key is ignored, not merged in", () => {
+    const defaults = { titles: ["A"] };
+    const merged = mergeSettings(defaults, [{ key: "bogus", value: 1 }]);
+    expect(merged).toEqual({ titles: ["A"] });
+    expect("bogus" in merged).toBe(false);
+  });
+
+  test("a stored null does not blank out a default", () => {
+    const defaults = { titles: ["A"] };
+    expect(mergeSettings(defaults, [{ key: "titles", value: null }]).titles).toEqual(["A"]);
+  });
+
+  test("does not mutate the defaults object", () => {
+    const defaults = { titles: ["A"] };
+    mergeSettings(defaults, [{ key: "titles", value: ["X"] }]);
+    expect(defaults.titles).toEqual(["A"]);
+  });
+
+  test("ignores a value of the wrong shape rather than poisoning the crawler", () => {
+    // A string here would make titleListForPrompt call .join on a string and
+    // throw mid-crawl. Must fall back to the default, not merge.
+    const defaults = { titles: ["A"], rule: "r" };
+    expect(mergeSettings(defaults, [{ key: "titles", value: "oops" }]).titles).toEqual(["A"]);
+    expect(mergeSettings(defaults, [{ key: "rule", value: ["oops"] }]).rule).toBe("r");
+  });
+});
+
+// The "SETTING_KEYS alignment" test from the task-1 brief is deliberately
+// deferred to Task 2, not dropped. It asserts that every DEFAULT_CRITERIA
+// field name has a matching SETTING_KEYS value, but DEFAULT_CRITERIA does not
+// exist yet — lib/search-criteria.ts (Task 2) defines it. Importing it here
+// would make this file fail to run at all (undefined import -> every test in
+// it errors), which would break the "145 passing + new ones" gate for this
+// task. Task 2's brief must add this test back once DEFAULT_CRITERIA lands:
+//
+// import { SETTING_KEYS } from "./settings-store";
+// import { DEFAULT_CRITERIA } from "./search-criteria";
+//
+// describe("SETTING_KEYS alignment", () => {
+//   test("every Criteria field has a matching SETTING_KEYS value", () => {
+//     // One-directional on purpose: searchCeiling and compFloor are settings
+//     // but NOT Criteria fields, so a bijection assertion would fail. Drift
+//     // in the other direction makes every save a silent no-op.
+//     const fields = Object.keys(DEFAULT_CRITERIA);
+//     expect(fields.length).toBeGreaterThan(0);
+//     for (const f of fields) expect(Object.values(SETTING_KEYS)).toContain(f);
+//   });
+// });
