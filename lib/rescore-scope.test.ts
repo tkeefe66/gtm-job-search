@@ -10,6 +10,7 @@ import {
   SCORING_INPUT_COLUMNS,
   clampRescoreLimit,
   passStartFrom,
+  remainingCountFrom,
   scoringArgsFor,
   type ScoredJobRow,
 } from "./rescore-scope";
@@ -293,5 +294,42 @@ describe("tallyRescoreOutcomes", () => {
     expect(tallyRescoreOutcomes([])).toEqual({
       rescored: 0, scoreFailures: 0, writeFailures: 0,
     });
+  });
+});
+
+describe("remainingCountFrom", () => {
+  test("a successful count is the number the query returned", () => {
+    expect(remainingCountFrom([{ n: "75" }], null)).toBe(75);
+  });
+
+  test("a successful query with no rows is a REAL zero", () => {
+    // Distinct from the failure below: this pass genuinely drained, and 0 is
+    // what authorizes retiring the rescore offer for good.
+    expect(remainingCountFrom([], null)).toBe(0);
+    expect(remainingCountFrom(undefined, null)).toBe(0);
+  });
+
+  test("a FAILED count is null, never zero", () => {
+    // THE defect. `return 0` here is indistinguishable from a drained pass, so
+    // one blip on this query stamped comp_scoring_rescored_at permanently and
+    // stranded every row the pass had not reached — with "Rescored 25 roles."
+    // as the only thing the user saw.
+    expect(remainingCountFrom([], { message: "connection terminated" })).toBeNull();
+  });
+
+  test("an EMPTY driver message is still a failure", () => {
+    // pg with no DATABASE_URL rejects with message "". Nothing here may reach
+    // through to `error.message` and read a blank one as success — the shape
+    // of the UNDESCRIBED_DB_ERROR bug, arriving through this door instead.
+    // (The wrapper OBJECT is always truthy, so `if (error)` happens to be
+    // equivalent to the presence check here; the presence spelling is used
+    // anyway so the two readers in this file cannot drift apart.)
+    expect(remainingCountFrom([], { message: "" })).toBeNull();
+  });
+
+  test("null and undefined both mean 'no error'", () => {
+    // rawQuery yields `error: null`; a hand-built result may omit it.
+    expect(remainingCountFrom([{ n: "3" }], null)).toBe(3);
+    expect(remainingCountFrom([{ n: "3" }], undefined)).toBe(3);
   });
 });

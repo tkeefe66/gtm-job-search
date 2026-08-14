@@ -246,6 +246,31 @@ export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
 export const UNDESCRIBED_DB_ERROR =
   "the database driver failed without a message (typically an unset or unreachable DATABASE_URL)";
 
+/**
+ * Turns a writer's `{ error?: string }` into a sentence for the user, or
+ * undefined when the write succeeded.
+ *
+ * A function rather than an `if` at each call site because BOTH halves of the
+ * UNDESCRIBED_DB_ERROR doctrine are easy to get wrong and neither is testable
+ * inside a `"use server"` module:
+ *
+ *  - DETECTION is presence (`=== undefined`), never truthiness. pg with no
+ *    DATABASE_URL rejects with an EMPTY message, so `if (error)` skips the
+ *    failure path entirely. That exact defect shipped in `readAllSettings` and
+ *    produced a clean build, a permanently wrong page, and zero log output.
+ *  - DESCRIPTION substitutes the stand-in only where the text is shown, so a
+ *    message-less failure does not render a sentence trailing off after a dash.
+ *
+ * `what` completes "Could not ___" and is quoted verbatim.
+ */
+export function describeWriteFailure(
+  error: string | undefined,
+  what: string
+): string | undefined {
+  if (error === undefined) return undefined;
+  return `Could not ${what} — ${error || UNDESCRIBED_DB_ERROR}`;
+}
+
 export async function readAllSettingsResult(): Promise<{
   rows: SettingRow[];
   error?: string;

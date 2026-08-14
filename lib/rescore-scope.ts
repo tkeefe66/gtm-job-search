@@ -100,6 +100,30 @@ export const SCORED_JOBS_REMAINING_SQL = `select count(*) n from jobs
       where ${SCORED}
         and (updated_at is null or updated_at < $1)`;
 
+/**
+ * SCORED_JOBS_REMAINING_SQL's answer, or **null when the query failed**.
+ *
+ * The whole reason this is a function rather than four lines inside the action:
+ * the failure branch used to `return 0`, and 0 is indistinguishable from a
+ * genuinely drained pass. That is the one value that authorizes writing the
+ * permanent `comp_scoring_rescored_at` stamp, so a single blip on this count
+ * retired the rescue offer with rows still stale — 25 of 100 rescored, the
+ * other 75 stranded, and the only thing on screen was "Rescored 25 roles."
+ * Out here the rule is pinned by a test; inside a `"use server"` module it
+ * could not be.
+ *
+ * Detection is PRESENCE (`error != null`), not truthiness, so a driver failure
+ * carrying an empty message is still a failure — see UNDESCRIBED_DB_ERROR in
+ * lib/settings-store.ts. A successful query with no rows is a real zero.
+ */
+export function remainingCountFrom(
+  data: { n: string }[] | null | undefined,
+  error: { message: string } | null | undefined
+): number | null {
+  if (error !== null && error !== undefined) return null;
+  return Number(data?.[0]?.n ?? 0);
+}
+
 export const DEFAULT_RESCORE_LIMIT = 25;
 export const MAX_RESCORE_LIMIT = 100;
 

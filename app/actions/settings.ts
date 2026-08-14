@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
+import { passDrained } from "@/lib/rescore-progress";
 import { CRAWL_TITLE_MATCH_SQL, titleMatchPatterns } from "@/lib/removed-titles";
 import {
   SCORED_JOBS_COUNT_SQL,
@@ -13,6 +14,7 @@ import {
   tallyRescoreOutcomes,
   type RescoreOutcome,
   passStartFrom,
+  remainingCountFrom,
   scoringArgsFor,
   type ScoredJobRow,
 } from "@/lib/rescore-scope";
@@ -22,6 +24,7 @@ import {
   SETTING_KEYS,
   UNDESCRIBED_DB_ERROR,
   deleteSetting,
+  describeWriteFailure,
   type ListSettingKey,
   type TextSettingKey,
   readAllSettingsResult,
@@ -267,14 +270,41 @@ export async function getCriteriaChangedAt(): Promise<string | null> {
  * stamp written there would fire on the first of several and suppress the offer
  * while most of the pipeline still carried stale scores. The caller stamps, and
  * only when the whole pass drained cleanly.
+ *
+ * It takes the whole pass and re-applies `passDrained` rather than trusting the
+ * caller to have checked. Two independent bounds, the same idiom runRescorePass
+ * uses — because the caller's check lives in a React component, where no test
+ * in this repo can reach it: a review moved that call one line up, outside its
+ * `if`, and the suite stayed green while a partial pass retired the offer
+ * permanently. With the rule enforced here too, that edit becomes a no-op
+ * instead of a silent data-stranding bug. Returns `stamped` so a caller can
+ * tell "refused" from "written".
  */
-export async function markCompScoringRescored(): Promise<{ error?: string }> {
-  const { error } = await writeCompScoringRescoredAt();
-  if (error) {
-    console.error(`settings: could not stamp the compensation rescore — ${error}`);
-    return { error: `Could not record that the rescore ran — ${error}` };
+export async function markCompScoringRescored(pass: {
+  rescored: number;
+  remaining: number | null;
+  error?: string;
+}): Promise<{ error?: string; stamped: boolean }> {
+  if (!passDrained(pass)) {
+    console.warn(
+      `settings: refusing to stamp the compensation rescore — the pass did not ` +
+        `drain (rescored ${pass.rescored}, remaining ${pass.remaining ?? "uncounted"}` +
+        `${pass.error === undefined ? "" : `, error ${pass.error || "(undescribed)"}`})`
+    );
+    return { stamped: false };
   }
-  return {};
+  const { error } = await writeCompScoringRescoredAt();
+  // describeWriteFailure, not `if (error)`. Presence, not truthiness: pg with
+  // no DATABASE_URL rejects with an EMPTY message, so the truthiness spelling
+  // that shipped here reported a hard write failure as a clean stamp — the
+  // same defect readAllSettings once had, in a place where it would tell the
+  // user the offer was retired when nothing had been written.
+  const described = describeWriteFailure(error, "record that the rescore ran");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described, stamped: false };
+  }
+  return { stamped: true };
 }
 
 export interface RescoreResult {
@@ -283,11 +313,20 @@ export interface RescoreResult {
   /** Rows in this batch that failed to score or failed to write. */
   failed: number;
   /**
-   * Scored rows this pass has not finished yet. Not a drain condition on its
-   * own — a permanently failing row keeps it above zero forever. Loop while
-   * `remaining > 0 && rescored > 0`.
+   * Scored rows this pass has not finished yet, or **null when the count query
+   * itself failed**.
+   *
+   * Not a drain condition on its own — a permanently failing row keeps it above
+   * zero forever. Loop while `remaining > 0 && rescored > 0`.
+   *
+   * Null rather than 0 for the failure, and that distinction is load-bearing:
+   * 0 is what authorizes writing the PERMANENT `comp_scoring_rescored_at`
+   * stamp. Reporting a failed count as 0 turned "the count blipped" into "the
+   * pass drained", stamped it, and left the untouched rows stale forever with
+   * nothing on screen but a success message. See passDrained in
+   * lib/rescore-progress.ts.
    */
-  remaining: number;
+  remaining: number | null;
   /**
    * The pass timestamp `remaining` was counted against. Returned so the caller
    * can hand it back on the next batch — see `passStartFrom`. Dropping this
@@ -396,7 +435,7 @@ export async function rescoreAll(opts?: {
   console.log(
     `rescoreAll: batch of ${rows.length} (limit ${limit}) — rescored ${rescored}, ` +
       `${scoreFailures} scoring failures, ${writeFailures} write failures, ` +
-      `${remaining} still to do`
+      `${remaining === null ? "an uncounted number" : remaining} still to do`
   );
   return {
     rescored,
@@ -406,18 +445,24 @@ export async function rescoreAll(opts?: {
   };
 }
 
-async function countRemaining(passStartedAt: string): Promise<number> {
+async function countRemaining(passStartedAt: string): Promise<number | null> {
   const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_REMAINING_SQL, [
     passStartedAt,
   ]);
   if (error) {
-    // The batch itself already succeeded; only the "how much is left" figure
-    // is missing. 0 stops the caller's loop, which is the recoverable failure:
-    // the user clicks Rescore again and the next batch picks up where this one
-    // stopped. Guessing a positive number would keep an automated loop
-    // spending money on a count nobody can verify.
-    console.error(`rescoreAll: could not count remaining rows — ${error.message}`);
-    return 0;
+    console.error(
+      `rescoreAll: could not count remaining rows — ${error.message || UNDESCRIBED_DB_ERROR}`
+    );
   }
-  return Number(data?.[0]?.n ?? 0);
+  // remainingCountFrom, not an inline `return 0` on the failure branch. NULL,
+  // not 0. Both stop the caller's loop — which is still the right recoverable
+  // behavior, since guessing a positive number would keep an automated loop
+  // spending money on a count nobody can verify — but 0 ALSO reads as "this
+  // pass drained", and that answer is now permanent: it authorizes the
+  // comp_scoring_rescored_at stamp. A blip here used to be enough to strand
+  // every untouched row and retire the offer, reporting only "Rescored 25
+  // roles." Null says "unknown", which suppresses nothing. The rule lives in
+  // lib/rescore-scope.ts so it is pinned by a test; nothing in this module can
+  // be.
+  return remainingCountFrom(data, error);
 }

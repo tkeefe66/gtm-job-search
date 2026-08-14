@@ -23,7 +23,8 @@ import {
 } from "@/lib/criteria-validation";
 import { removedTitles, removedTitlesWarning } from "@/lib/removed-titles";
 import {
-  compRescoreOffer,
+  passDrained,
+  rescoreOffers,
   rescoreSummary,
   runRescorePass,
 } from "@/lib/rescore-progress";
@@ -166,8 +167,11 @@ export default function Settings() {
 
   const [rescoring, setRescoring] = useState(false);
   const [rescoreDismissed, setRescoreDismissed] = useState(false);
-  // Only ever WIDENS the prompt's gate (see showRescorePrompt) — it is never
-  // required for the prompt to appear, so it cannot bury it on a fresh load.
+  // Set by a fit-brain SAVE as well as a reset. It widens the gate (see
+  // fitBrainRescoreOffer) — never required for the prompt to appear, so it
+  // cannot bury it on a fresh load — and it is also what entitles the prompt
+  // to open with "Saved.". Before it covered saves, a bare page load with a
+  // stored brain rendered that word with nothing behind it.
   const [fitBrainTouchedHere, setFitBrainTouchedHere] = useState(false);
   // Same idea for the comp floor. The server half of ITS gate is
   // view.compScoringRescoredAt (see compRescoreOffer), so this flag only ever
@@ -302,8 +306,15 @@ export default function Settings() {
       key,
       () => saveCriteriaText(key, LABELS[key], draft[key]),
       // A fit-brain edit makes every existing score stale. Un-dismiss so the
-      // prompt reappears even if it was waved off earlier in this session.
-      key === "fitBrain" ? () => setRescoreDismissed(false) : undefined
+      // prompt reappears even if it was waved off earlier in this session, and
+      // mark it touched — that flag is what lets the prompt say "Saved.", which
+      // is true here and is not true on a bare page load.
+      key === "fitBrain"
+        ? () => {
+            setFitBrainTouchedHere(true);
+            setRescoreDismissed(false);
+          }
+        : undefined
     );
   }
 
@@ -401,23 +412,27 @@ export default function Settings() {
         setRescoreNotice(rescoreSummary(pass));
       }
       // Collapse the offer only when the pass actually finished. Rows left
-      // over, or rows that failed, keep the prompt on screen so a second run
-      // is one click away — and a fresh page load re-offers it either way.
+      // over, rows that failed, or a remainder that could not be COUNTED keep
+      // the prompt on screen so a second run is one click away — and a fresh
+      // page load re-offers it either way.
       //
       // The SAME condition stamps the server-side suppression, for exactly
-      // that reason: a partial or failed pass must not be able to switch the
-      // day-one offer off permanently. `remaining > 0` is not the test — a
-      // permanently failing row holds it above zero — which is why this reads
-      // the drained pass rather than looping on it.
+      // that reason: a partial, failed, or unverified pass must not be able to
+      // switch the day-one offer off permanently. The rule is passDrained, out
+      // in lib/rescore-progress.ts, so that "an uncounted remainder is not
+      // zero" is pinned by a test rather than by this expression.
       //
       // Stamped whatever put the prompt on screen. One pass re-scores every
       // scored row through the same scoreFit, compensation included, so a
       // fit-brain rescore satisfies the compensation offer just as fully as a
       // comp-floor one does; suppressing only "its own" trigger would bill a
       // second identical pass for nothing.
-      if (!pass.error && pass.rescored > 0 && pass.remaining === 0) {
+      if (passDrained(pass)) {
         setRescoreDismissed(true);
-        const stamp = await markCompScoringRescored();
+        // The pass goes with it: the action re-applies passDrained itself, so
+        // a future edit that moves this call out of the branch refuses rather
+        // than stamping a partial pass.
+        const stamp = await markCompScoringRescored(pass);
         if (stamp.error) {
           // The rescore itself succeeded and must not be reported as failed;
           // only the record of it is missing, and the visible cost of that is
@@ -449,33 +464,23 @@ export default function Settings() {
 
   const fitCheck = validateText(draft.fitBrain, LABELS.fitBrain, FIT_BRAIN_MAX_CHARS);
 
-  // Gated on SERVER state, not on "did the user edit the fit brain in this
-  // session". A client component has no memory across page loads, so a
-  // session-only rule would hide the prompt the moment the page is reloaded —
-  // exactly the burial the spec forbids. fitBrainTouchedHere is OR-ed in, so
-  // it can only add the reset case, never remove the server-driven one.
-  const showRescorePrompt =
-    !!view &&
-    view.scoredJobCount > 0 &&
-    (view.fitBrainOverridden || fitBrainTouchedHere) &&
-    !rescoreDismissed;
-
-  // Same shape as showRescorePrompt: SERVER state (has a compensation rescore
-  // pass ever completed?) with the session flag OR-ed in. The rule itself is
-  // compRescoreOffer, out in lib/rescore-progress.ts, because a rule expressed
-  // as a boolean here cannot be tested — this repo does not unit-test React.
-  // It returns the WORDING too, since "which gate opened" and "what the prompt
-  // may claim" are the same question. `rescoreDismissed` is still shared:
-  // dismissing either prompt dismisses both, since one rescoreAll pass covers
-  // whatever made scores stale.
-  const compRescoreReason = view
-    ? compRescoreOffer({
-        scoredJobCount: view.scoredJobCount,
-        compScoringRescoredAt: view.compScoringRescoredAt,
+  // BOTH offers, decided out in lib/rescore-progress.ts — whether to show each
+  // one and what each may claim. No gate expression and no wording literal
+  // lives in this file: rules written here cannot be tested (this repo does not
+  // unit-test React), and RescoreReason is branded precisely so a hardcoded
+  // wording at either call site below is a compile error rather than a silent
+  // revert to "Saved." on a page load where nothing was saved.
+  //
+  // `view` is passed WHOLE rather than field by field, so there is no per-field
+  // wiring here to get wrong. `rescoreDismissed` is shared: dismissing either
+  // prompt dismisses both, since one rescoreAll pass covers whatever went stale.
+  const offers = view
+    ? rescoreOffers(view, {
+        fitBrainEditedThisSession: fitBrainTouchedHere,
         floorEditedThisSession: compFloorTouchedHere,
         dismissed: rescoreDismissed,
       })
-    : null;
+    : { fitBrain: null, compensation: null };
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-ink/40">Loading…</div>;
@@ -615,10 +620,10 @@ export default function Settings() {
           onReset={() => handleReset("fitBrain")}
         />
 
-        {showRescorePrompt && (
+        {view && offers.fitBrain && (
           <RescorePrompt
             count={view.scoredJobCount}
-            reason="edit"
+            reason={offers.fitBrain}
             busy={rescoring}
             onRescore={() => void handleRescore()}
             onDismiss={() => setRescoreDismissed(true)}
@@ -682,24 +687,24 @@ export default function Settings() {
           resetLabel="Turn off"
         />
 
-        {view && compRescoreReason && (
+        {view && offers.compensation && (
           <RescorePrompt
             count={view.scoredJobCount}
-            reason={compRescoreReason}
+            reason={offers.compensation}
             busy={rescoring}
             onRescore={() => void handleRescore()}
             onDismiss={() => setRescoreDismissed(true)}
           />
         )}
-        {rescoring && !showRescorePrompt && (
+        {rescoring && !offers.fitBrain && (
           <div className="mt-2">
             <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
           </div>
         )}
-        {rescoreError && !showRescorePrompt && (
+        {rescoreError && !offers.fitBrain && (
           <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
         )}
-        {rescoreNotice && !showRescorePrompt && (
+        {rescoreNotice && !offers.fitBrain && (
           <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>
         )}
       </SectionCard>

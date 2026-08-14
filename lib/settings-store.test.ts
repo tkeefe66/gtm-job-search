@@ -16,6 +16,7 @@ import {
   ceilingFrom,
   compFloorFrom,
   compScoringRescoredFrom,
+  describeWriteFailure,
   mergeSettings,
   numberFrom,
   readAllSettings,
@@ -397,5 +398,43 @@ describe("the app_settings read failure channel", () => {
     } finally {
       err.mockRestore();
     }
+  });
+});
+
+describe("describeWriteFailure", () => {
+  // Both halves of the UNDESCRIBED_DB_ERROR doctrine, in the one place a
+  // `"use server"` caller can borrow them from. markCompScoringRescored
+  // branched on `if (error)` and therefore never reported an empty-message
+  // failure — the same defect readAllSettings shipped, in a place where it
+  // would tell the user the rescore offer was retired when nothing was
+  // written.
+  test("a successful write describes nothing", () => {
+    expect(describeWriteFailure(undefined, "record that the rescore ran")).toBeUndefined();
+  });
+
+  test("an EMPTY message is still a failure, and still explains itself", () => {
+    // pg with no DATABASE_URL rejects with an Error whose message is "".
+    // Truthiness drops this case entirely.
+    const s = describeWriteFailure("", "record that the rescore ran");
+    expect(s).toBeDefined();
+    expect(s).toContain(UNDESCRIBED_DB_ERROR);
+    // Never a sentence trailing off after the dash.
+    expect(s).not.toMatch(/—\s*$/);
+  });
+
+  test("a described failure keeps the driver's own words", () => {
+    const s = describeWriteFailure("read-only transaction", "stamp it");
+    expect(s).toContain("read-only transaction");
+    // The stand-in is for the undescribed case only; substituting it here
+    // throws away the one clue a real failure came with. Planted so a future
+    // transport layer that invents message text cannot make the presence
+    // check above untestable.
+    expect(s).not.toContain(UNDESCRIBED_DB_ERROR);
+  });
+
+  test("names the action that failed, not just the cause", () => {
+    expect(describeWriteFailure("boom", "record that the rescore ran")).toContain(
+      "record that the rescore ran"
+    );
   });
 });

@@ -25,11 +25,35 @@ export function rescoreCostDollars(count: number): number {
 /**
  * Why the rescore offer is on screen — which decides what it may claim.
  *
- * "edit": the user just saved something that changed scoring, so the prompt can
- * say so. "comp-scoring": nobody saved anything; compensation joined fit
- * scoring on DEPLOY, and the offer is firing on a bare page load.
+ * - "edit": the user just saved something that changed scoring, so the prompt
+ *   can say so.
+ * - "comp-scoring": nobody saved anything; compensation joined fit scoring on
+ *   DEPLOY, and the offer is firing on a bare page load.
+ * - "fit-brain": nobody saved anything this session either, but a customized
+ *   fit brain is stored, so the scores may not match it.
  */
-export type RescoreReason = "edit" | "comp-scoring";
+type RescoreReasonKind = "edit" | "comp-scoring" | "fit-brain";
+
+declare const REASON_BRAND: unique symbol;
+
+/**
+ * BRANDED on purpose: `reason="edit"` cannot be written at a call site, inside
+ * RescorePrompt, or in rescorePromptQuestion's own body, because a bare string
+ * literal is not assignable to this type. `rescoreOffers` below is the only
+ * producer.
+ *
+ * That is not decoration. A review of this component's wiring planted six
+ * mutants and all six shipped green; the two that mattered were a call site and
+ * the component each hardcoding "edit", which silently reverts the day-one
+ * prompt to claiming a save happened and that the scores predate an edit —
+ * both false, and neither observable from any test this repo supports. Those
+ * two are now compile errors instead. The brand is the only mechanism that
+ * reaches inside a React component here, since the components are not unit
+ * tested.
+ */
+export type RescoreReason = RescoreReasonKind & { readonly [REASON_BRAND]: true };
+
+const reason = (kind: RescoreReasonKind) => kind as RescoreReason;
 
 export interface CompRescoreOfferInput {
   /** Rows carrying a fit score, from the settings view. */
@@ -69,8 +93,100 @@ export function compRescoreOffer(input: CompRescoreOfferInput): RescoreReason | 
   // Nothing scored means nothing to rescore, and a prompt offering to spend
   // $0.00 on zero roles.
   if (input.scoredJobCount <= 0) return null;
-  if (input.floorEditedThisSession) return "edit";
-  return input.compScoringRescoredAt === null ? "comp-scoring" : null;
+  if (input.floorEditedThisSession) return reason("edit");
+  return input.compScoringRescoredAt === null ? reason("comp-scoring") : null;
+}
+
+export interface FitBrainRescoreOfferInput {
+  scoredJobCount: number;
+  /** Is a fit brain of the user's own stored, rather than the shipped one? */
+  fitBrainOverridden: boolean;
+  /** Did the user save or reset the fit brain in THIS session? */
+  fitBrainEditedThisSession: boolean;
+  dismissed: boolean;
+}
+
+/**
+ * The same decision for the fit-brain section, and in the same shape: server
+ * state (is a custom brain stored?) with the session flag OR-ed in, so the
+ * flag can only ADD the reset case — a reset DELETES the row, which turns
+ * `fitBrainOverridden` back off — and never remove the server-driven one.
+ *
+ * Out here for the second reason too: it decides the WORDING, and the version
+ * of this that shipped had none. It rendered "Saved." on a bare page load
+ * where nothing had been saved and nothing in the session had been touched,
+ * because the copy was hardcoded in the component. There is no stamp for the
+ * fit brain (nothing records when it was last rescored against), so on a bare
+ * load this can say only that a custom brain exists — not that any particular
+ * score predates it.
+ */
+export function fitBrainRescoreOffer(
+  input: FitBrainRescoreOfferInput
+): RescoreReason | null {
+  if (input.dismissed) return null;
+  if (input.scoredJobCount <= 0) return null;
+  if (input.fitBrainEditedThisSession) return reason("edit");
+  return input.fitBrainOverridden ? reason("fit-brain") : null;
+}
+
+/**
+ * The slice of SettingsView both offers read.
+ *
+ * Structural rather than a list of scalar parameters so the settings page
+ * passes `view` WHOLE. There are then no per-field arguments at the call site
+ * to mis-wire — one of the planted wiring mutants handed the gate a different
+ * `string` field of the view, which type-checked and shipped green. Passing
+ * the object closes that: the field names are matched by the compiler, and a
+ * rename in SettingsView breaks the call rather than silently rewiring it.
+ */
+export interface RescoreOfferView {
+  scoredJobCount: number;
+  fitBrainOverridden: boolean;
+  compScoringRescoredAt: string | null;
+}
+
+/** What the user has done in this page load. */
+export interface RescoreOfferSession {
+  fitBrainEditedThisSession: boolean;
+  floorEditedThisSession: boolean;
+  /** One dismissal covers both offers — one pass fixes whatever went stale. */
+  dismissed: boolean;
+}
+
+export interface RescoreOffers {
+  /** Shown in the fit-brain section, or null. */
+  fitBrain: RescoreReason | null;
+  /** Shown in the compensation section, or null. */
+  compensation: RescoreReason | null;
+}
+
+/**
+ * Both offers, decided in one place.
+ *
+ * The settings page holds no gate logic and writes no reason literal of its
+ * own: it renders whatever this returns. That is what makes the rules
+ * testable — this repo does not unit-test React — and, with the brand on
+ * RescoreReason, what makes a hardcoded wording at either call site a compile
+ * error rather than a green regression.
+ */
+export function rescoreOffers(
+  view: RescoreOfferView,
+  session: RescoreOfferSession
+): RescoreOffers {
+  return {
+    fitBrain: fitBrainRescoreOffer({
+      scoredJobCount: view.scoredJobCount,
+      fitBrainOverridden: view.fitBrainOverridden,
+      fitBrainEditedThisSession: session.fitBrainEditedThisSession,
+      dismissed: session.dismissed,
+    }),
+    compensation: compRescoreOffer({
+      scoredJobCount: view.scoredJobCount,
+      compScoringRescoredAt: view.compScoringRescoredAt,
+      floorEditedThisSession: session.floorEditedThisSession,
+      dismissed: session.dismissed,
+    }),
+  };
 }
 
 /**
@@ -81,20 +197,32 @@ export function compRescoreOffer(input: CompRescoreOfferInput): RescoreReason | 
  * including the component, gets to supply a number that disagrees with what the
  * pass bills.
  *
- * The "comp-scoring" wording is deliberately hedged. There is no version column
- * (the no-migration constraint ruled one out), so nothing here knows which rows
- * predate the change — some may have been scored yesterday with compensation
- * already in the prompt. "may not reflect it" is the most this can honestly
- * say. It also must not open with "Saved.": nothing was saved.
+ * The "comp-scoring" and "fit-brain" wordings are deliberately hedged. There is
+ * no version column (the no-migration constraint ruled one out) and no
+ * per-brain stamp, so nothing here knows which rows predate anything — some may
+ * have been scored yesterday with compensation and the current brain already in
+ * the prompt. "may not reflect it" is the most either can honestly say. Neither
+ * may open with "Saved.": on those two paths nothing was saved.
+ *
+ * `why`, not `reason`, because `reason` is the name of the branded-value
+ * constructor above; shadowing it here would make a hardcoded literal inside
+ * this function compile again.
  */
-export function rescorePromptQuestion(reason: RescoreReason, count: number): string {
+export function rescorePromptQuestion(why: RescoreReason, count: number): string {
   const dollars = rescoreCostDollars(count).toFixed(2);
   const roles = `${count} role${count === 1 ? "" : "s"}`;
   const them = count === 1 ? "it" : "them";
 
-  if (reason === "comp-scoring") {
+  if (why === "comp-scoring") {
     return (
       `Compensation is now part of fit scoring. ${roles} ` +
+      `${count === 1 ? "has a score" : "have scores"} that may not reflect it. ` +
+      `Rescore ${them} for about $${dollars}?`
+    );
+  }
+  if (why === "fit-brain") {
+    return (
+      `Your fit brain is customized. ${roles} ` +
       `${count === 1 ? "has a score" : "have scores"} that may not reflect it. ` +
       `Rescore ${them} for about $${dollars}?`
     );
@@ -114,12 +242,46 @@ export function rescorePromptQuestion(reason: RescoreReason, count: number): str
  * loop on that condition spins — spending a Claude call per row per pass —
  * until something times out. Requiring `rescored > 0` means every additional
  * batch is paid for by real forward progress.
+ *
+ * A null `remaining` (the count query failed — see RescoreTotals) also stops
+ * the loop. Continuing on a number nobody can verify is how a client loop
+ * bills indefinitely; the user clicks Rescore again instead.
  */
 export function shouldContinueRescore(result: {
   rescored: number;
-  remaining: number;
+  remaining: number | null;
 }): boolean {
+  if (result.remaining === null) return false;
   return result.remaining > 0 && result.rescored > 0;
+}
+
+/**
+ * Whether a pass finished ALL the work — the only condition under which the
+ * offer may be switched off permanently.
+ *
+ * Out here rather than inline in the component because of a defect this exact
+ * expression used to hide. `remaining` was typed `number` and the action
+ * returned `0` when its count query failed, which is indistinguishable from a
+ * genuinely drained pass. 100 stale rows, 25 rescored, one blip on the count
+ * query, and this read "drained": the permanent stamp got written, 75 rows
+ * stayed stale forever, and the only thing the user saw was "Rescored 25
+ * roles." That was survivable while the consequence was a session-scoped
+ * dismissal a reload undid; a stamp in app_settings made it permanent.
+ *
+ * So `remaining` is `number | null` at the boundary, and only a KNOWN zero
+ * counts. Unknown leaves the offer standing — the same asymmetry applied to
+ * the failed settings read: a redundant offer costs one dismissal, a wrongly
+ * suppressed one loses rows silently. Not encoded as a sentinel integer; a
+ * second magic number in this area is how the original bug happened.
+ */
+export function passDrained(pass: {
+  rescored: number;
+  remaining: number | null;
+  error?: string;
+}): boolean {
+  if (pass.error !== undefined) return false;
+  if (pass.remaining === null) return false;
+  return pass.rescored > 0 && pass.remaining === 0;
 }
 
 /**
@@ -142,7 +304,13 @@ export function maxRescoreBatches(
 export interface RescoreTotals {
   rescored: number;
   failed: number;
-  remaining: number;
+  /**
+   * Scored rows this pass has not finished, or **null when that could not be
+   * counted**. Null is not "none": the count is its own query and it fails on
+   * its own. Typed rather than folded into 0 because 0 is the one value that
+   * authorizes switching the offer off for good — see passDrained.
+   */
+  remaining: number | null;
 }
 
 /** What one call of the rescore action reports back. */
@@ -199,7 +367,10 @@ export async function runRescorePass(opts: {
 
   let rescored = 0;
   let failed = 0;
-  let remaining = 0;
+  // Starts at 0 so a pass that never reached a batch reads as "nothing left",
+  // which is true — no rows were touched and none are outstanding FROM it. Any
+  // batch that runs overwrites this with its own answer, null included.
+  let remaining: number | null = 0;
   let batches = 0;
   let error: string | undefined;
   // Pinned by the first batch that returns one, then handed to every batch
@@ -238,7 +409,10 @@ export async function runRescorePass(opts: {
     // re-scores 24 rows it already did, at ~$0.0076 each, and reports them as
     // rescores. Untouched rows are always the oldest, so a limit of
     // `remaining` selects exactly them.
-    limit = Math.min(batchSize, remaining);
+    //
+    // shouldContinueRescore has already returned false for a null `remaining`,
+    // so the loop broke above; this line is only reached with a real count.
+    limit = Math.min(batchSize, remaining ?? batchSize);
   }
 
   return { rescored, failed, remaining, batches, error };
@@ -250,6 +424,11 @@ export async function runRescorePass(opts: {
  * The one rule: a pass that left rows undone must SAY SO. Reporting "Rescored
  * 25 roles." after stopping with 60 to go reads as complete, and the user has
  * no other signal that their edit only reached part of their pipeline.
+ *
+ * A null `remaining` gets the same treatment for the same reason. "Rescored 25
+ * roles." when nobody knows whether 0 or 75 are left reads as complete too —
+ * and that silence was the whole visible symptom of the bug passDrained now
+ * closes.
  */
 export function rescoreSummary(totals: RescoreTotals): string {
   if (totals.rescored === 0 && totals.failed === 0 && totals.remaining === 0) {
@@ -270,7 +449,11 @@ export function rescoreSummary(totals: RescoreTotals): string {
     );
   }
 
-  if (totals.remaining > 0) {
+  if (totals.remaining === null) {
+    parts.push(
+      "how many are left could not be counted — run Rescore again to be sure"
+    );
+  } else if (totals.remaining > 0) {
     parts.push(`${totals.remaining} still to do — run Rescore again to continue`);
   }
 

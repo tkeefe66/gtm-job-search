@@ -3,14 +3,20 @@ import { DEFAULT_RESCORE_LIMIT, passStartFrom } from "./rescore-scope";
 import {
   DOLLARS_PER_RESCORE,
   compRescoreOffer,
+  fitBrainRescoreOffer,
   maxRescoreBatches,
+  passDrained,
   rescoreCostDollars,
+  rescoreOffers,
   rescorePromptQuestion,
   rescoreSummary,
   runRescorePass,
   shouldContinueRescore,
   type CompRescoreOfferInput,
+  type FitBrainRescoreOfferInput,
   type RescoreBatchResult,
+  type RescoreOfferSession,
+  type RescoreOfferView,
 } from "./rescore-progress";
 
 describe("rescoreCostDollars", () => {
@@ -405,9 +411,50 @@ describe("compRescoreOffer", () => {
   });
 });
 
+/**
+ * The only way to obtain a RescoreReason.
+ *
+ * RescoreReason is branded, so `rescorePromptQuestion("edit", n)` does not
+ * compile — anywhere, this file included. Values come from the gate that
+ * produces them, which is the point: it also pins that each gate hands the
+ * copy the wording that gate is supposed to produce.
+ */
+function reasonFrom(
+  view: Partial<RescoreOfferView>,
+  session: Partial<RescoreOfferSession>,
+  which: keyof ReturnType<typeof rescoreOffers>
+) {
+  const offers = rescoreOffers(
+    {
+      scoredJobCount: 26,
+      fitBrainOverridden: false,
+      compScoringRescoredAt: null,
+      ...view,
+    },
+    {
+      fitBrainEditedThisSession: false,
+      floorEditedThisSession: false,
+      dismissed: false,
+      ...session,
+    }
+  );
+  const value = offers[which];
+  if (value === null) throw new Error(`no ${which} offer for this input`);
+  return value;
+}
+
+// Lazy, not module-level constants. A mutant that closes one of these gates
+// would otherwise throw during import and take the whole FILE down as "0
+// tests" — still a failure, but one that names no rule and that a mutation
+// harness reading per-test results can mistake for a survivor. Called inside
+// each test, the same mutant fails one named assertion.
+const COMP_SCORING = () => reasonFrom({}, {}, "compensation");
+const EDIT = () => reasonFrom({}, { floorEditedThisSession: true }, "compensation");
+const FIT_BRAIN = () => reasonFrom({ fitBrainOverridden: true }, {}, "fitBrain");
+
 describe("rescorePromptQuestion", () => {
   test("the day-one wording claims nothing it cannot know", () => {
-    const s = rescorePromptQuestion("comp-scoring", 26);
+    const s = rescorePromptQuestion(COMP_SCORING(), 26);
     // Nothing was saved — this fires on a page load.
     expect(s).not.toContain("Saved.");
     // There is no version column, so no row can be said to predate anything.
@@ -418,38 +465,236 @@ describe("rescorePromptQuestion", () => {
     expect(s).toContain("26 roles");
   });
 
+  test("the fit-brain wording does not claim a save either", () => {
+    // The copy that shipped hardcoded "Saved." at this call site, so a bare
+    // page load with a stored brain said a save had happened when none had.
+    const s = rescorePromptQuestion(FIT_BRAIN(), 26);
+    expect(s).not.toContain("Saved.");
+    expect(s).not.toContain("this edit");
+    // …and it is about the brain, not about compensation.
+    expect(s).toMatch(/fit brain/i);
+    expect(s).not.toMatch(/compensation/i);
+    expect(s).toMatch(/may not reflect/i);
+  });
+
+  test("the three wordings are actually different from one another", () => {
+    // Guards every "not.toContain" above: a single shared string would satisfy
+    // most of them individually while making the reason prop decorative.
+    const all = [
+      rescorePromptQuestion(COMP_SCORING(), 26),
+      rescorePromptQuestion(FIT_BRAIN(), 26),
+      rescorePromptQuestion(EDIT(), 26),
+    ];
+    expect(new Set(all).size).toBe(3);
+  });
+
   test("the edit wording still says a save happened", () => {
-    const s = rescorePromptQuestion("edit", 26);
+    const s = rescorePromptQuestion(EDIT(), 26);
     expect(s).toContain("Saved.");
     expect(s).toContain("this edit");
   });
 
-  test("both wordings quote the figure the pass actually bills", () => {
+  test("every wording quotes the figure the pass actually bills", () => {
     // The prompt takes no dollar prop, from any caller: the number comes from
     // rescoreCostDollars or it does not exist.
     for (const count of [1, 26, 400]) {
       const expected = `$${rescoreCostDollars(count).toFixed(2)}`;
-      expect(rescorePromptQuestion("comp-scoring", count)).toContain(expected);
-      expect(rescorePromptQuestion("edit", count)).toContain(expected);
+      expect(rescorePromptQuestion(COMP_SCORING(), count)).toContain(expected);
+      expect(rescorePromptQuestion(FIT_BRAIN(), count)).toContain(expected);
+      expect(rescorePromptQuestion(EDIT(), count)).toContain(expected);
     }
     // Guards the loop above: a wrong `count` list would otherwise pass vacuously.
-    expect(rescorePromptQuestion("comp-scoring", 26)).toContain("$0.20");
+    expect(rescorePromptQuestion(COMP_SCORING(), 26)).toContain("$0.20");
   });
 
-  test("one role reads in the singular, in both wordings", () => {
-    const comp = rescorePromptQuestion("comp-scoring", 1);
-    expect(comp).toContain("1 role ");
-    expect(comp).not.toContain("1 roles");
-    expect(comp).toContain("Rescore it");
-
-    const edit = rescorePromptQuestion("edit", 1);
+  test("one role reads in the singular, in every wording", () => {
+    for (const why of [COMP_SCORING(), FIT_BRAIN()]) {
+      const s = rescorePromptQuestion(why, 1);
+      expect(s).toContain("1 role has a score");
+      expect(s).not.toContain("1 roles");
+      expect(s).toContain("Rescore it");
+    }
+    const edit = rescorePromptQuestion(EDIT(), 1);
     expect(edit).toContain("1 role carries");
     expect(edit).toContain("Rescore it");
   });
 
   test("more than one role reads in the plural", () => {
-    expect(rescorePromptQuestion("comp-scoring", 2)).toContain("2 roles");
-    expect(rescorePromptQuestion("comp-scoring", 2)).toContain("Rescore them");
-    expect(rescorePromptQuestion("edit", 2)).toContain("2 roles carry");
+    expect(rescorePromptQuestion(COMP_SCORING(), 2)).toContain("2 roles have scores");
+    expect(rescorePromptQuestion(COMP_SCORING(), 2)).toContain("Rescore them");
+    expect(rescorePromptQuestion(FIT_BRAIN(), 2)).toContain("2 roles have scores");
+    expect(rescorePromptQuestion(EDIT(), 2)).toContain("2 roles carry");
+  });
+});
+
+describe("passDrained", () => {
+  // The condition that authorizes a PERMANENT stamp. Everything below is a
+  // way of getting it wrong that used to ship green.
+  test("a clean pass with a known zero remainder is drained", () => {
+    expect(passDrained({ rescored: 26, remaining: 0 })).toBe(true);
+  });
+
+  test("an UNCOUNTED remainder is not a zero remainder", () => {
+    // THE defect. The action returned 0 when its count query failed, which is
+    // indistinguishable from a drained pass: 100 stale rows, 25 rescored, one
+    // blip, and the offer was retired with 75 rows still stale — the user
+    // seeing only "Rescored 25 roles."
+    expect(passDrained({ rescored: 25, remaining: null })).toBe(false);
+  });
+
+  test("rows still to do are not drained", () => {
+    expect(passDrained({ rescored: 25, remaining: 75 })).toBe(false);
+  });
+
+  test("a pass that scored nothing is not drained", () => {
+    // Otherwise a pass where every row failed would stamp: `remaining` can be
+    // 0 with `rescored` 0 when there was nothing to do in the first place.
+    expect(passDrained({ rescored: 0, remaining: 0 })).toBe(false);
+  });
+
+  test("an errored pass is never drained, however it counted", () => {
+    expect(passDrained({ rescored: 26, remaining: 0, error: "boom" })).toBe(false);
+    // Presence, not truthiness — an empty driver message is still a failure.
+    expect(passDrained({ rescored: 26, remaining: 0, error: "" })).toBe(false);
+  });
+});
+
+describe("an uncounted remainder through the whole pass", () => {
+  test("shouldContinueRescore stops rather than looping on an unknown", () => {
+    // Continuing on a number nobody can verify is how a client loop bills
+    // indefinitely.
+    expect(shouldContinueRescore({ rescored: 25, remaining: null })).toBe(false);
+  });
+
+  test("runRescorePass carries the unknown out rather than flattening it", () => {
+    // If the pass reported 0 here, passDrained above could never protect
+    // anything — the information would already be gone.
+    const batch: RescoreBatchResult = {
+      rescored: 25,
+      failed: 0,
+      remaining: null,
+      passStartedAt: "2026-08-14T00:00:00.000Z",
+    };
+    return runRescorePass({ total: 100, runBatch: async () => batch }).then((pass) => {
+      expect(pass.remaining).toBeNull();
+      expect(pass.rescored).toBe(25);
+      // One batch only: an unknown remainder stops the loop.
+      expect(pass.batches).toBe(1);
+      expect(passDrained(pass)).toBe(false);
+    });
+  });
+
+  test("rescoreSummary says the remainder is unknown instead of implying none", () => {
+    // "Rescored 25 roles." full stop was the entire visible symptom of the bug.
+    const s = rescoreSummary({ rescored: 25, failed: 0, remaining: null });
+    expect(s).toContain("Rescored 25 roles");
+    expect(s).toMatch(/could not be counted/i);
+    expect(s).toContain("run Rescore again");
+    // …and a real zero still reads as complete, or the message means nothing.
+    expect(rescoreSummary({ rescored: 25, failed: 0, remaining: 0 })).toBe(
+      "Rescored 25 roles."
+    );
+  });
+});
+
+describe("fitBrainRescoreOffer", () => {
+  const BARE_LOAD: FitBrainRescoreOfferInput = {
+    scoredJobCount: 26,
+    fitBrainOverridden: true,
+    fitBrainEditedThisSession: false,
+    dismissed: false,
+  };
+
+  test("a stored custom brain offers a rescore on a bare load, without claiming a save", () => {
+    const why = fitBrainRescoreOffer(BARE_LOAD);
+    expect(why).not.toBeNull();
+    expect(rescorePromptQuestion(why!, 26)).not.toContain("Saved.");
+    expect(rescorePromptQuestion(why!, 26)).toMatch(/fit brain/i);
+  });
+
+  test("an edit in this session is what earns the 'Saved.' wording", () => {
+    const why = fitBrainRescoreOffer({ ...BARE_LOAD, fitBrainEditedThisSession: true });
+    expect(why).not.toBeNull();
+    expect(rescorePromptQuestion(why!, 26)).toContain("Saved.");
+  });
+
+  test("a reset still offers, though it deleted the row the server gate reads", () => {
+    // Reverting to the shipped brain DELETES the app_settings row, so
+    // fitBrainOverridden goes false. The session flag is the only thing left.
+    expect(
+      fitBrainRescoreOffer({
+        ...BARE_LOAD,
+        fitBrainOverridden: false,
+        fitBrainEditedThisSession: true,
+      })
+    ).not.toBeNull();
+  });
+
+  test("the shipped brain, untouched, offers nothing", () => {
+    expect(
+      fitBrainRescoreOffer({ ...BARE_LOAD, fitBrainOverridden: false })
+    ).toBeNull();
+  });
+
+  test("dismissal and an empty pipeline each suppress it", () => {
+    expect(fitBrainRescoreOffer({ ...BARE_LOAD, dismissed: true })).toBeNull();
+    expect(fitBrainRescoreOffer({ ...BARE_LOAD, scoredJobCount: 0 })).toBeNull();
+  });
+});
+
+describe("rescoreOffers", () => {
+  const VIEW: RescoreOfferView = {
+    scoredJobCount: 26,
+    fitBrainOverridden: false,
+    compScoringRescoredAt: null,
+  };
+  const SESSION: RescoreOfferSession = {
+    fitBrainEditedThisSession: false,
+    floorEditedThisSession: false,
+    dismissed: false,
+  };
+
+  test("day one offers the compensation rescore and nothing else", () => {
+    const offers = rescoreOffers(VIEW, SESSION);
+    expect(offers.compensation).not.toBeNull();
+    expect(offers.fitBrain).toBeNull();
+  });
+
+  test("each section reads its own server flag, not the other's", () => {
+    // Crossed wiring here would put the compensation copy in the fit-brain
+    // section, or retire the day-one offer whenever a brain was saved.
+    const brainOnly = rescoreOffers(
+      { ...VIEW, fitBrainOverridden: true, compScoringRescoredAt: "2026-08-14T00:00:00.000Z" },
+      SESSION
+    );
+    expect(brainOnly.fitBrain).not.toBeNull();
+    expect(brainOnly.compensation).toBeNull();
+  });
+
+  test("each section reads its own session flag, not the other's", () => {
+    const floorOnly = rescoreOffers(
+      { ...VIEW, compScoringRescoredAt: "2026-08-14T00:00:00.000Z" },
+      { ...SESSION, floorEditedThisSession: true }
+    );
+    expect(floorOnly.compensation).not.toBeNull();
+    expect(floorOnly.fitBrain).toBeNull();
+  });
+
+  test("one dismissal covers both offers", () => {
+    const offers = rescoreOffers(
+      { ...VIEW, fitBrainOverridden: true },
+      { ...SESSION, dismissed: true }
+    );
+    expect(offers.fitBrain).toBeNull();
+    expect(offers.compensation).toBeNull();
+  });
+
+  test("the wordings the two sections get are the ones their gates decided", () => {
+    const offers = rescoreOffers(
+      { ...VIEW, fitBrainOverridden: true },
+      { ...SESSION, floorEditedThisSession: true }
+    );
+    expect(rescorePromptQuestion(offers.fitBrain!, 26)).toMatch(/fit brain/i);
+    expect(rescorePromptQuestion(offers.compensation!, 26)).toContain("Saved.");
   });
 });
