@@ -162,8 +162,11 @@ export async function readCriteriaChangedAt(): Promise<string | null> {
   return data?.[0]?.value ?? null;
 }
 
-export async function writeSetting(
-  key: SettingKey,
+// One upsert for every writer in this file. `key` is a plain string here
+// because the stamp below is not a SettingKey; the exported wrappers are what
+// keep the type discipline at the surface, so no caller can invent a key.
+async function upsertSetting(
+  key: string,
   value: unknown
 ): Promise<{ error?: string }> {
   const { error } = await rawQuery(
@@ -173,6 +176,32 @@ export async function writeSetting(
     [key, JSON.stringify(value)]
   );
   return { error: error?.message };
+}
+
+export async function writeSetting(
+  key: SettingKey,
+  value: unknown
+): Promise<{ error?: string }> {
+  return upsertSetting(key, value);
+}
+
+/**
+ * Stamps `criteria_changed_at` with now — the writer `readCriteriaChangedAt`
+ * above has been waiting for.
+ *
+ * Lives here, next to the reader and the key, rather than in
+ * app/actions/settings.ts: the doc on CRITERIA_CHANGED_AT_KEY says the
+ * constant exists so writer and reader cannot drift on the spelling, and a
+ * writer in another file that has to widen `SettingKey` to reach it would
+ * reopen exactly that hazard. Callers decide WHETHER to stamp (see
+ * lib/settings-effects.ts); this decides HOW.
+ *
+ * Stored as a JSON string so `#>> '{}'` reads it straight back out as text.
+ */
+export async function writeCriteriaChangedAt(
+  when: Date = new Date()
+): Promise<{ error?: string }> {
+  return upsertSetting(CRITERIA_CHANGED_AT_KEY, when.toISOString());
 }
 
 export async function deleteSetting(key: SettingKey): Promise<{ error?: string }> {
