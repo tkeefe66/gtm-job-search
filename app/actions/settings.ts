@@ -229,7 +229,17 @@ export async function saveCompFloor(n: number | null): Promise<{ error?: string 
     n === null
       ? await deleteSetting(SETTING_KEYS.compFloor)
       : await writeSetting(SETTING_KEYS.compFloor, n);
-  if (error) return { error: `Could not save the minimum base — ${error}` };
+  // describeWriteFailure, not `if (error)`. Presence, not truthiness: pg with an
+  // unset or unreachable DATABASE_URL rejects with an EMPTY message, which is
+  // falsy — the truthiness spelling returned {} for a write that never landed,
+  // so the page reported a saved floor, armed the rescore offer, and billed a
+  // pass against a floor that was not stored. Nothing in the build or the log
+  // would have said so.
+  const described = describeWriteFailure(error, "save the minimum base");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
 
   await applySideEffects(SETTING_KEYS.compFloor);
   return {};

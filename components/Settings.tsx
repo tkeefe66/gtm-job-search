@@ -42,6 +42,9 @@ type ListSection = "titles" | "locations" | "stackTerms";
 type TextSection = "locationRule" | "fitBrain";
 type Section = ListSection | TextSection | "ceiling" | "compFloor";
 
+/** The two cards that can offer a rescore, and therefore own its progress. */
+type RescoreOwner = Extract<Section, "fitBrain" | "compFloor">;
+
 const LABELS: Record<Section, string> = {
   titles: "Target titles",
   locations: "Location terms",
@@ -182,6 +185,17 @@ export default function Settings() {
   const [compFloorTouchedHere, setCompFloorTouchedHere] = useState(false);
   const [rescoreNotice, setRescoreNotice] = useState<string | null>(null);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
+  // Which card's Rescore button started the pass. There are two prompts and ONE
+  // pass, so its spinner, error and summary have to belong to exactly one card:
+  // rendered unconditionally in the fit-brain card and again under
+  // `!offers.fitBrain` in the compensation card, they both fired on the day-one
+  // path (shipped fit brain → no fit-brain offer → the compensation prompt is
+  // the only one on screen) and the user saw everything twice, once in a card
+  // showing no prompt at all. Owner-keyed rather than offer-keyed because the
+  // offers vanish the moment a drained pass sets `rescoreDismissed` — a guard
+  // written on `offers` moves the finished summary to the other card, or drops
+  // it, at the exact moment it becomes worth reading.
+  const [rescoreOwner, setRescoreOwner] = useState<RescoreOwner | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,8 +400,9 @@ export default function Settings() {
    * loop written inline in a React component cannot be tested in this repo.
    * Out there it is pinned by a simulated multi-batch pass.
    */
-  async function handleRescore() {
+  async function handleRescore(owner: RescoreOwner) {
     const total = view?.scoredJobCount ?? 0;
+    setRescoreOwner(owner);
     setRescoring(true);
     setRescoreError(null);
     setRescoreNotice(null);
@@ -457,6 +472,32 @@ export default function Settings() {
     }
 
     await refresh();
+  }
+
+  /**
+   * The rescore spinner, error and summary — for the card that started the pass
+   * and no other. One function, not the same three blocks pasted into both
+   * cards: pasted, their guards drifted apart and the day-one path rendered
+   * everything twice.
+   */
+  function rescoreProgress(owner: RescoreOwner) {
+    if (rescoreOwner !== owner) return null;
+    return (
+      <>
+        {rescoring && (
+          <div className="mt-2">
+            <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
+          </div>
+        )}
+        {/* Both, not either. A batch that failed part-way still rescored rows,
+            and hiding that count behind the error would leave the user unable
+            to tell how much of their pipeline is current. */}
+        {rescoreError && (
+          <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
+        )}
+        {rescoreNotice && <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>}
+      </>
+    );
   }
 
   const estimateInput: EstimateInput = {
@@ -630,22 +671,11 @@ export default function Settings() {
             count={view.scoredJobCount}
             reason={offers.fitBrain}
             busy={rescoring}
-            onRescore={() => void handleRescore()}
+            onRescore={() => void handleRescore("fitBrain")}
             onDismiss={() => setRescoreDismissed(true)}
           />
         )}
-        {rescoring && (
-          <div className="mt-2">
-            <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
-          </div>
-        )}
-        {/* Both, not either. A batch that failed part-way still rescored rows,
-            and hiding that count behind the error would leave the user unable
-            to tell how much of their pipeline is current. */}
-        {rescoreError && (
-          <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
-        )}
-        {rescoreNotice && <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>}
+        {rescoreProgress("fitBrain")}
       </SectionCard>
 
       <SectionCard
@@ -697,21 +727,11 @@ export default function Settings() {
             count={view.scoredJobCount}
             reason={offers.compensation}
             busy={rescoring}
-            onRescore={() => void handleRescore()}
+            onRescore={() => void handleRescore("compFloor")}
             onDismiss={() => setRescoreDismissed(true)}
           />
         )}
-        {rescoring && !offers.fitBrain && (
-          <div className="mt-2">
-            <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
-          </div>
-        )}
-        {rescoreError && !offers.fitBrain && (
-          <p className="mt-2 text-sm text-[#92400E]">Rescore: {rescoreError}</p>
-        )}
-        {rescoreNotice && !offers.fitBrain && (
-          <p className="mt-2 text-sm text-ink/50">{rescoreNotice}</p>
-        )}
+        {rescoreProgress("compFloor")}
       </SectionCard>
 
       <SectionCard

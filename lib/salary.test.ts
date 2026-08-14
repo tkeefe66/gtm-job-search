@@ -212,6 +212,141 @@ describe("parseSalaryRange", () => {
     });
   });
 
+  describe("a per-period figure is not an annual base", () => {
+    // THE bug: every figure here is compared against an ANNUAL floor. Read as
+    // annual, `$4,500 per week` — $234,000 a year — buckets `below` a $180,000
+    // floor and the row disappears from the table, while scoreFit gets the raw
+    // string and reads it correctly. Routed to `unparseable`, which "Meets
+    // minimum" does not hide, rather than annualized: 52 weeks is a guess, and
+    // hours-per-week is a bigger one.
+    const SUB_ANNUAL = [
+      "$4,500 per week",
+      "$4,500/week",
+      "$4,500 weekly",
+      "$4,500 per wk",
+      "$12,000 per month",
+      "$12,000/month",
+      "$12,000 monthly",
+      "$12,000 /mo",
+      "$12,000 a month",
+      "$1,500 per day",
+      "$1,500 daily",
+      "$1,200 per hour",
+      "$1,200/hr",
+      "$1,200 hourly",
+      "$4,500 - $5,000 per week",
+      "$4,500 to $5,000 per month",
+      "$12,000 per month (base)",
+      "$4,500 (per week)",
+    ];
+
+    test("every sub-annual form refuses to be read as a base range", () => {
+      expect(SUB_ANNUAL.length).toBe(18);
+      for (const raw of SUB_ANNUAL) {
+        expect(parseSalaryRange(raw)).toEqual({ kind: "unparseable", raw });
+        // The point of the whole rule: nothing reaches the floor comparison.
+        expect(baseMaxFor(parseSalaryRange(raw))).toBeNull();
+      }
+    });
+
+    // The other half, and the one that matters more: a rule that rejected
+    // everything would pass the test above. Rejecting `per year` would hide far
+    // more roles than the bug being fixed.
+    const ANNUAL = [
+      ["$180,000 per year", 180000, 180000],
+      ["$180,000/year", 180000, 180000],
+      ["$180,000/yr", 180000, 180000],
+      ["$180,000 per yr", 180000, 180000],
+      ["$180,000 annually", 180000, 180000],
+      ["$180,000 annual", 180000, 180000],
+      ["$180,000 per annum", 180000, 180000],
+      ["$180,000 a year", 180000, 180000],
+      ["$180,000 - $220,000 per year", 180000, 220000],
+      ["$180,000 - $220,000 annually", 180000, 220000],
+      ["$180,000 - $220,000 (annual base)", 180000, 220000],
+    ] as const;
+
+    test("every annual form still parses as base", () => {
+      expect(ANNUAL.length).toBe(11);
+      for (const [raw, min, max] of ANNUAL) {
+        expect(parseSalaryRange(raw)).toEqual({ kind: "base", min, max });
+      }
+    });
+
+    test("a period word about some OTHER figure does not poison the range", () => {
+      // The qualifier is anchored to the character after the figure, never
+      // searched across the segment. A segment-wide search makes both of these
+      // unreadable — the second is already a regression test for the
+      // MIN_PLAUSIBLE_SALARY rule.
+      expect(
+        parseSalaryRange("$165,000 - $175,000 base + $500 monthly wellness stipend")
+      ).toEqual({ kind: "base", min: 165000, max: 175000 });
+      expect(parseSalaryRange("$500 monthly stipend; $150,000 - $170,000")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 170000,
+      });
+      // "monthly" here describes the bonus, not the salary that precedes it.
+      expect(parseSalaryRange("$150,000 - $170,000 plus a monthly bonus")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 170000,
+      });
+      // Nor does a unit buried inside a longer word: "more" is not "mo".
+      expect(parseSalaryRange("$150,000 or more, depending on experience")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 150000,
+      });
+      // Why the unit alternation carries a trailing \b: a city name eats "day".
+      expect(parseSalaryRange("$150,000 - $170,000 (Dayton)")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 170000,
+      });
+      // Why the abbreviations require a "per"/"/" lead-in: a bare `hr` claims
+      // this string, and a real $150k role becomes "Range unreadable".
+      expect(parseSalaryRange("$150,000 HR Manager")).toEqual({
+        kind: "base",
+        min: 150000,
+        max: 150000,
+      });
+    });
+
+    test("an OTE figure stays OTE even when it carries a period qualifier", () => {
+      // Deliberate precedence. OTE never reaches the floor comparison
+      // (baseMaxFor returns null), so demoting it to `unparseable` fixes
+      // nothing — and `unparseable` IS hidden by "Hide no range listed" while
+      // `ote` is not, so the demotion would newly hide a priced role. The
+      // employer published a range; it just is not a base.
+      expect(parseSalaryRange("$12,000 per month OTE")).toEqual({
+        kind: "ote",
+        min: 12000,
+        max: 12000,
+      });
+      expect(baseMaxFor(parseSalaryRange("$12,000 per month OTE"))).toBeNull();
+    });
+
+    test("logs the refusal with its own sentence", () => {
+      // "We found a figure and refuse to treat it as annual" is a different
+      // fact from "we found no figures", and it is the only trace of a role
+      // that quietly became untagged-comparable.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        parseSalaryRange("$4,500 per week");
+        expect(warn).toHaveBeenCalledTimes(1);
+        const line = String(warn.mock.calls[0][0]);
+        expect(line).toContain("$4,500 per week");
+        expect(line).toContain("per-period");
+        warn.mockClear();
+        parseSalaryRange("$180,000 per year");
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   test("distinguishes empty input from unparseable input", () => {
     expect(parseSalaryRange("")).toEqual({ kind: "absent" });
     expect(parseSalaryRange(null)).toEqual({ kind: "absent" });

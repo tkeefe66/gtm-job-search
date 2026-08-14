@@ -12,14 +12,23 @@ vi.mock("@/app/actions/parse-role", () => ({ scoreFit: vi.fn() }));
 vi.mock("@/lib/settings-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings-store")>()),
   writeCompScoringRescoredAt: vi.fn(),
+  writeSetting: vi.fn(),
+  deleteSetting: vi.fn(),
 }));
 
-import { markCompScoringRescored, rescoreAll } from "./settings";
+import { markCompScoringRescored, rescoreAll, saveCompFloor } from "./settings";
 import { SCORED_JOBS_REMAINING_SQL, SCORED_JOBS_SQL } from "@/lib/rescore-scope";
-import { writeCompScoringRescoredAt } from "@/lib/settings-store";
+import {
+  SETTING_KEYS,
+  deleteSetting,
+  writeCompScoringRescoredAt,
+  writeSetting,
+} from "@/lib/settings-store";
 import { rawQuery } from "@/lib/supabase";
 
 const write = vi.mocked(writeCompScoringRescoredAt);
+const writeKey = vi.mocked(writeSetting);
+const deleteKey = vi.mocked(deleteSetting);
 const query = vi.mocked(rawQuery);
 
 /** A pass that drained cleanly — the ONLY shape allowed to stamp. */
@@ -28,6 +37,10 @@ const DRAINED = { rescored: 26, remaining: 0 };
 beforeEach(() => {
   write.mockReset();
   write.mockResolvedValue({});
+  writeKey.mockReset();
+  writeKey.mockResolvedValue({});
+  deleteKey.mockReset();
+  deleteKey.mockResolvedValue({});
   query.mockReset();
   query.mockResolvedValue({ data: [], error: null } as never);
 });
@@ -95,6 +108,40 @@ describe("markCompScoringRescored — the second bound on the stamp", () => {
     expect(res.stamped).toBe(false);
     expect(res.error).toBeDefined();
     expect(res.error).not.toMatch(/—\s*$/);
+  });
+});
+
+describe("saveCompFloor reports a write that failed", () => {
+  test("a stored floor is written under its own key", async () => {
+    // Both sides of the branch: without this, "always report a failure" passes.
+    expect(await saveCompFloor(180000)).toEqual({});
+    expect(writeKey).toHaveBeenCalledWith(SETTING_KEYS.compFloor, 180000);
+  });
+
+  test("a write that failed with NO message is a failure, not a save", async () => {
+    // The sixth instance of this branch's own recurring bug. pg with an unset or
+    // unreachable DATABASE_URL rejects with an EMPTY message, which is falsy, so
+    // `if (error)` returned {} for a write that never landed: the page said
+    // "Saved.", armed the rescore offer, and billed a pass against a floor that
+    // was not stored — with nothing in the build or the log to say so.
+    writeKey.mockResolvedValue({ error: "" });
+    const res = await saveCompFloor(180000);
+    expect(res.error).toBeDefined();
+    // And it does not trail off after the dash with nothing behind it.
+    expect(res.error).not.toMatch(/—\s*$/);
+  });
+
+  test("turning the floor OFF reports its failure the same way", async () => {
+    // The delete path is a separate call with the same spelling hazard.
+    deleteKey.mockResolvedValue({ error: "" });
+    const res = await saveCompFloor(null);
+    expect(deleteKey).toHaveBeenCalledWith(SETTING_KEYS.compFloor);
+    expect(res.error).toBeDefined();
+  });
+
+  test("a described failure keeps the driver's own words", async () => {
+    writeKey.mockResolvedValue({ error: "read-only transaction" });
+    expect((await saveCompFloor(180000)).error).toContain("read-only transaction");
   });
 });
 

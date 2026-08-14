@@ -56,6 +56,25 @@ describe("salaryBucketFor", () => {
     expect(salaryBucketFor(job("$300,000 - $340,000 OTE"), null)).toBe("ote");
   });
 
+  test("a per-period figure is never bucketed below the floor", () => {
+    // The display seam H1 was about. $4,500 a week is $234,000 a year; read as
+    // an annual figure it buckets "below" a $180,000 floor and the row vanishes
+    // from the table, while scoreFit — which gets the raw string — likes the
+    // role. "unreadable" keeps it on screen under "Meets minimum".
+    expect(salaryBucketFor(job("$4,500 per week"), 180000)).toBe("unreadable");
+    expect(salaryBucketFor(job("$12,000 per month"), 180000)).toBe("unreadable");
+    expect(
+      bucketPasses(salaryBucketFor(job("$4,500 per week"), 180000), {
+        meetsOnly: true,
+        hideNoRange: false,
+      })
+    ).toBe(true);
+    // The annual spelling of the same rate keeps comparing normally — a rule
+    // that rejected "per year" too would hide far more than it saves.
+    expect(salaryBucketFor(job("$234,000 per year"), 180000)).toBe("meets");
+    expect(salaryBucketFor(job("$120,000 annually"), 180000)).toBe("below");
+  });
+
   test("with no floor set, anything with a readable base range meets", () => {
     expect(salaryBucketFor(job("$90,000 - $95,000"), null)).toBe("meets");
     expect(salaryBucketFor(job(null), null)).toBe("no-range");
