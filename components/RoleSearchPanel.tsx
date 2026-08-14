@@ -11,6 +11,7 @@ import { groupRolesByCompany } from "@/lib/group-by-company";
 import { shouldReplaceRoleView } from "@/lib/role-search-cache";
 import { describeTrackOutcome } from "@/lib/track-outcome";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { Spinner, Tag } from "./ui";
 
 const FAMILIES: { value: RoleSearchFamily; label: string }[] = [
@@ -54,7 +55,16 @@ export default function RoleSearchPanel() {
       fetchedAt: string | null;
       error?: string;
     }) => {
-      if (res.error) setError(res.error);
+      // PRESENCE, not truthiness, and this one got WORSE before it got better.
+      // getCachedRoleSearch returns `error.message` verbatim, so a
+      // connection-level failure arrives as "". Before shouldReplaceRoleView
+      // was fixed, that combination wiped the list — visibly wrong, which at
+      // least prompts a reload. After the fix the list is correctly LEFT
+      // ALONE, so toggling family during an outage renders the previous
+      // family's roles under the new label with no banner at all: it looks
+      // right and is not. The banner is what makes the retained list honest,
+      // so the two halves of this pair have to move together.
+      if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       if (!shouldReplaceRoleView(res)) return;
       setMatches(res.matches);
       setUntracked(new Set(res.untrackedCompanies));

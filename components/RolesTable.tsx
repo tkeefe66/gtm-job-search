@@ -59,20 +59,38 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   const [meetsOnly, setMeetsOnly] = useState(false);
   const [hideNoRange, setHideNoRange] = useState(false);
 
-  async function load() {
+  /**
+   * Refetches the table and reports its own failure. Never throws — a load
+   * that rejects must not leave the spinner up forever, and commitWrite below
+   * depends on getting an answer rather than an exception.
+   *
+   * Returns the failure so a CALLER can tell "the reload proved me wrong" from
+   * "the reload failed too". Those are different sentences and the difference
+   * is load-bearing; see commitWrite.
+   */
+  async function load(): Promise<string | null> {
     setLoading(true);
-    const res = await getJobs();
-    // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
-    // getJobs returns `error.message` verbatim and a connection-level failure
-    // carries an EMPTY one, so the truthiness spelling took the `else` branch,
-    // cleared the banner, and rendered `jobs: []` as a genuinely empty
-    // pipeline. "You have no roles" and "the database is unreachable" are the
-    // two answers that must never be confused, and this table showed the
-    // first for the second.
-    const failure = describeWriteFailure(res.error, "load your roles");
-    setError(failure ?? null);
-    setJobs(res.jobs);
+    let failure: string | null = null;
+    try {
+      const res = await getJobs();
+      // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
+      // getJobs returns `error.message` verbatim and a connection-level failure
+      // carries an EMPTY one, so the truthiness spelling took the `else` branch,
+      // cleared the banner, and rendered `jobs: []` as a genuinely empty
+      // pipeline. "You have no roles" and "the database is unreachable" are the
+      // two answers that must never be confused, and this table showed the
+      // first for the second.
+      failure = describeWriteFailure(res.error, "load your roles") ?? null;
+      setJobs(res.jobs);
+    } catch (err) {
+      failure = describeWriteFailure(
+        err instanceof Error ? err.message : String(err),
+        "load your roles"
+      ) ?? null;
+    }
+    setError(failure);
     setLoading(false);
+    return failure;
   }
 
   /**
@@ -96,20 +114,46 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
    * The error is surfaced as well — a silent reload that snaps the row back
    * with no explanation is its own confusing bug.
    *
-   * setError runs AFTER load(), deliberately: load() clears the banner on a
-   * clean read, so setting the message first would have it wiped by the very
-   * reload that proves it.
+   * THE RELOAD'S OWN FAILURE IS KEPT, NOT OVERWRITTEN. An empty message is
+   * only ever produced by a connection-level outage, which fails every query
+   * at once — so the reload that is supposed to reveal the truth fails too,
+   * `res.jobs` comes back `[]`, and the table renders EMPTY. Claiming "what you
+   * see now is what is actually stored" over an empty table would assert that
+   * the user's whole pipeline is gone. That is a confident falsehood, and it is
+   * worse than the silence this function was written to end. So the two cases
+   * get two different sentences and the failed-reload one promises nothing.
+   *
+   * Wrapped in try/catch because a server action can REJECT rather than return
+   * — offline, a restart, a 500 — which would otherwise leave the optimistic
+   * state standing with nothing logged and nothing shown.
+   * components/Discover.tsx and components/RoleSearchPanel.tsx both wrap the
+   * equivalent call; this file was the odd one out.
    */
   async function commitWrite(
     what: string,
     write: () => Promise<{ error?: string }>
   ) {
-    const failure = describeWriteFailure((await write()).error, what);
+    let failure: string | undefined;
+    try {
+      failure = describeWriteFailure((await write()).error, what);
+    } catch (err) {
+      // describeWriteFailure, not a raw interpolation: a rejection can carry an
+      // empty message for exactly the same reason a returned error can.
+      failure = describeWriteFailure(
+        err instanceof Error ? err.message : String(err),
+        what
+      );
+    }
     if (failure === undefined) return;
     console.error(`RolesTable: ${failure}`);
-    await load();
+
+    const reloadFailure = await load();
     setError(
-      `${failure}. The table has been reloaded, so what you see now is what is actually stored.`
+      reloadFailure === null
+        ? `${failure}. The table has been reloaded, so what you see now is what is actually stored.`
+        : `${failure}. Reloading the table failed too (${reloadFailure}), so the rows below ` +
+          `are NOT reliable — they may be neither what you just changed nor what is stored. ` +
+          `Reload the page once the database is reachable.`
     );
   }
 
