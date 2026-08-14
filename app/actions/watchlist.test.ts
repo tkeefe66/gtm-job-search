@@ -120,14 +120,14 @@ describe("addToWatchlist refuses to write on an unverified name", () => {
     // AND the row was upserted under an unverified casing.
     readFailed("");
     const res = await addToWatchlist(STARTUP);
-    expect(res.error).toBeDefined();
+    expect(res.error).toBeTruthy();
     expect(h.state.writes).toHaveLength(0);
   });
 
   test("a read that failed WITH a message writes nothing either", async () => {
     readFailed("relation \"watchlist\" does not exist");
     const res = await addToWatchlist(STARTUP);
-    expect(res.error).toBeDefined();
+    expect(res.error).toBeTruthy();
     expect(h.state.writes).toHaveLength(0);
   });
 });
@@ -157,7 +157,7 @@ describe("trackCompanyByName refuses to write on an unverified name", () => {
     // a crawl on a name that may not exist bills Claude for nothing.
     readFailed("");
     const res = await trackCompanyByName("clay");
-    expect(res.error).toBeDefined();
+    expect(res.error).toBeTruthy();
     expect(h.state.writes).toHaveLength(0);
     expect(crawl).not.toHaveBeenCalled();
   });
@@ -193,7 +193,7 @@ describe("resolveWriteTarget tells 'could not look' apart from 'not there'", () 
     // sitting right there.
     readFailed("");
     const res = await setTracking("Clay", false);
-    expect(res.error).toBeDefined();
+    expect(res.error).toBeTruthy();
     expect(res.error).not.toContain("is not on the watchlist");
     expect(h.state.writes).toHaveLength(0);
   });
