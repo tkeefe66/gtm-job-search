@@ -18,6 +18,23 @@ export const SETTING_KEYS = {
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
 
+/**
+ * Where `markCriteriaChanged` (Task 6) stamps the last edit to a setting that
+ * changes WHAT THE CRAWLER LOOKS FOR — titles, locations, locationRule.
+ *
+ * Deliberately NOT in SETTING_KEYS. It is a stamp the app writes, not a
+ * user-editable setting: it is not a `Criteria` field, mergeSettings must
+ * never see it, and a settings form must never offer it. It is a named
+ * constant only so the writer and the reader below cannot drift apart on the
+ * spelling — the same silent-no-op hazard the SETTING_KEYS comment describes.
+ *
+ * Scope is narrower than "any setting changed" on purpose: `searchCeiling` and
+ * `compFloor` do not change what the crawler looks for, so stamping on them
+ * would suppress stale-posting closure for ~2 crawl cycles per company after
+ * a change that cannot have invalidated a single previous result.
+ */
+export const CRITERIA_CHANGED_AT_KEY = "criteria_changed_at";
+
 export interface SettingRow {
   key: string;
   value: unknown;
@@ -62,12 +79,28 @@ export function mergeSettings<T extends Record<string, unknown>>(
   return merged;
 }
 
-/** Reads one scalar setting. A missing row, or a row holding a non-number
- *  (a bad write, a hand-edit), reads as null — the same as "not set". */
-export async function readNumberSetting(key: SettingKey): Promise<number | null> {
-  const rows = await readAllSettings();
+/**
+ * Picks one scalar setting out of rows ALREADY read. A missing row, or a row
+ * holding a non-number (a bad write, a hand-edit), reads as null — the same as
+ * "not set".
+ *
+ * Pure, and separate from readNumberSetting, so a caller that needs two values
+ * can take one snapshot of app_settings and derive both from it. Two
+ * sequential reads are not just two round trips: a save landing between them
+ * splits the caller across two different versions of the settings.
+ */
+export function numberFrom(rows: SettingRow[], key: SettingKey): number | null {
   const row = rows.find((r) => r.key === key);
   return typeof row?.value === "number" ? row.value : null;
+}
+
+/** The search ceiling out of rows already read. See numberFrom. */
+export const ceilingFrom = (rows: SettingRow[]) =>
+  numberFrom(rows, SETTING_KEYS.searchCeiling);
+
+/** Reads one scalar setting, taking its own snapshot of app_settings. */
+export async function readNumberSetting(key: SettingKey): Promise<number | null> {
+  return numberFrom(await readAllSettings(), key);
 }
 
 export const readCeiling = () => readNumberSetting(SETTING_KEYS.searchCeiling);
@@ -91,30 +124,42 @@ export async function readAllSettings(): Promise<SettingRow[]> {
 }
 
 /**
- * When any setting was last written, as an ISO string, or null when nothing
- * has ever been saved (a fresh install running purely on shipped defaults).
+ * When the search criteria were last edited, as the ISO string
+ * `markCriteriaChanged` stamped, or null when they never have been.
  *
- * Read separately from readAllSettings rather than widening SettingRow: the
- * merge path has no use for per-row timestamps, and widening the row type
- * would ripple into mergeSettings' shape guard.
+ * Reads the single stamped row rather than `max(updated_at)` across the
+ * table: the stamp's whole value is that it covers ONLY the settings that
+ * change what the crawler looks for. See CRITERIA_CHANGED_AT_KEY.
+ *
+ * Returns null until Task 6 lands the writer — which is the correct answer
+ * for a database where nothing has stamped it yet, not a placeholder.
+ *
+ * `#>> '{}'` extracts the jsonb scalar as plain text, so a stored JSON string
+ * comes back without its quotes.
+ *
+ * The query is exported (rather than inlined) so the key-scoping decision can
+ * be pinned by a string-content test without a database — same pattern, and
+ * the same motivation, as LAST_TRUSTWORTHY_RUN_SQL in lib/crawler.ts.
  *
  * Fails soft to null for the same reason readAllSettings does — this is
  * decoration on a crawl run, and a failed read must not abort one.
  */
+export const CRITERIA_CHANGED_AT_SQL = `select value #>> '{}' as value
+      from app_settings
+     where key = $1`;
+
 export async function readCriteriaChangedAt(): Promise<string | null> {
-  const { data, error } = await rawQuery<{ changed_at: string | Date | null }>(
-    `select max(updated_at) as changed_at from app_settings`
+  const { data, error } = await rawQuery<{ value: string | null }>(
+    CRITERIA_CHANGED_AT_SQL,
+    [CRITERIA_CHANGED_AT_KEY]
   );
   if (error) {
     console.error(
-      `settings-store: could not read the settings timestamp — ${error.message}.`
+      `settings-store: could not read "${CRITERIA_CHANGED_AT_KEY}" — ${error.message}.`
     );
     return null;
   }
-  const raw = data?.[0]?.changed_at ?? null;
-  // pg returns timestamptz as a Date; normalize so callers always see ISO.
-  if (raw instanceof Date) return raw.toISOString();
-  return raw;
+  return data?.[0]?.value ?? null;
 }
 
 export async function writeSetting(

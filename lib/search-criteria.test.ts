@@ -1,8 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
+  emptySearchReason,
   pickQueries,
   planQueries,
   roleExtractionSchema,
@@ -208,6 +209,34 @@ describe("planQueries", () => {
     expect(plan.queries.length).toBe(39);
   });
 
+  test("a rejected ceiling is reported as ignored, not as absent", () => {
+    // The diagnostic must not lie about the one input it exists to explain:
+    // the user DID set a value and the run DID ignore it. "no ceiling set"
+    // would send someone looking at the wrong thing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const plan = planQueries(list, 0);
+      expect(plan.reason).not.toContain("no ceiling set");
+      expect(plan.reason).toContain("ignored");
+      expect(plan.reason).toContain("0");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("ignoring a stored search ceiling");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an honored ceiling and an absent one warn about nothing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      planQueries(list, 12);
+      planQueries(list, null);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a stored ceiling of 0 reads as 'no ceiling', never as 'zero searches'", () => {
     // The precedence trap this function exists to close. `ceiling ? a : b` is
     // falsy at 0 (sends all 39) while `ceiling ?? c` is NOT nullish at 0
@@ -228,6 +257,62 @@ describe("planQueries", () => {
     // Every title deleted → an empty enumeration → max_uses 0, which the API
     // rejects outright rather than degrading to "no searches".
     expect(planQueries([], null).maxSearches).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("emptySearchReason", () => {
+  test("a fully-populated criteria set can run either family", () => {
+    expect(emptySearchReason("title", SMALL)).toBeNull();
+    expect(emptySearchReason("stack", SMALL)).toBeNull();
+    expect(emptySearchReason("title", DEFAULT_CRITERIA)).toBeNull();
+  });
+
+  test("an empty title list blocks the title search before anything is billed", () => {
+    const reason = emptySearchReason("title", { ...SMALL, titles: [] });
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("target titles");
+    // Says what to do about it, not just that it failed.
+    expect(reason).toContain("Settings");
+  });
+
+  test("an empty stack list blocks the stack search", () => {
+    expect(emptySearchReason("stack", { ...SMALL, stackTerms: [] })).toContain(
+      "stack terms"
+    );
+  });
+
+  test("an empty location list blocks BOTH families", () => {
+    // titleQueries and stackQueries both cross their list with locations, so
+    // an empty locations list zeroes either enumeration.
+    const empty = { ...SMALL, locations: [] };
+    expect(emptySearchReason("title", empty)).toContain("location terms");
+    expect(emptySearchReason("stack", empty)).toContain("location terms");
+  });
+
+  test("the other family's empty list does not block this one", () => {
+    // A user who cleared stack terms can still run a title search. Blocking
+    // on the wrong list would be a self-inflicted outage.
+    expect(emptySearchReason("title", { ...SMALL, stackTerms: [] })).toBeNull();
+    expect(emptySearchReason("stack", { ...SMALL, titles: [] })).toBeNull();
+  });
+
+  test("agrees with the enumeration it guards, in both directions", () => {
+    // The guard is only worth anything if "blocked" means exactly "zero
+    // queries". Pinning it against the real query builders keeps the two from
+    // drifting apart, in a way that hand-written cases cannot.
+    const cases: Array<Partial<Criteria>> = [
+      {},
+      { titles: [] },
+      { stackTerms: [] },
+      { locations: [] },
+      { titles: [], stackTerms: [] },
+      { titles: [], locations: [] },
+    ];
+    for (const patch of cases) {
+      const c = { ...SMALL, ...patch };
+      expect(emptySearchReason("title", c) === null).toBe(titleQueries(c).length > 0);
+      expect(emptySearchReason("stack", c) === null).toBe(stackQueries(c).length > 0);
+    }
   });
 });
 

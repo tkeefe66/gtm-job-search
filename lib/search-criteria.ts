@@ -11,7 +11,8 @@
 // database.
 
 import type { FitInputs } from "@/lib/fit-inputs";
-import { mergeSettings, readAllSettings } from "@/lib/settings-store";
+import { ceilingFrom, mergeSettings, readAllSettings } from "@/lib/settings-store";
+import type { RoleSearchFamily } from "@/lib/types";
 
 export const DEFAULT_TARGET_TITLES = [
   "Head of GTM Systems",
@@ -178,7 +179,18 @@ export function planQueries(
   allQueries: string[],
   ceiling: number | null
 ): QueryPlan {
-  const cap = ceiling !== null && ceiling > 0 ? ceiling : null;
+  const ignored = ceiling !== null && ceiling <= 0;
+  if (ignored) {
+    // A stored ceiling that cannot be honored must say so. Reporting it as
+    // "no ceiling set" would make the diagnostic lie about the single input
+    // it exists to explain — the user set a value, and the run ignored it.
+    console.warn(
+      `search-criteria: ignoring a stored search ceiling of ${ceiling} — a ceiling ` +
+        `must be at least 1. Running with no ceiling. Set a positive value on the ` +
+        `Settings page, or clear the field to run uncapped on purpose.`
+    );
+  }
+  const cap = ignored || ceiling === null ? null : ceiling;
   const queries = cap === null ? allQueries : pickQueries(allQueries, cap);
   // Floored at 1: max_uses: 0 is a request the API would reject outright, and
   // an empty criteria list (every title deleted) would otherwise produce it.
@@ -186,8 +198,9 @@ export function planQueries(
   return {
     queries,
     maxSearches,
-    reason:
-      cap === null
+    reason: ignored
+      ? `stored ceiling ${ceiling} ignored (must be >= 1), max_uses ${maxSearches}`
+      : cap === null
         ? `no ceiling set, max_uses ${maxSearches}`
         : `ceiling ${cap}, max_uses ${maxSearches}`,
   };
@@ -217,6 +230,47 @@ export function dateContextLine(now: Date = new Date()): string {
 export async function loadCriteria(): Promise<Criteria> {
   const rows = await readAllSettings();
   return mergeSettings(DEFAULT_CRITERIA, rows);
+}
+
+/**
+ * Everything a role search needs from settings, off ONE read of app_settings.
+ *
+ * Not `loadCriteria()` followed by `readCeiling()`: that is two round trips,
+ * and a save landing between them would run the search with one version's
+ * title list and another version's ceiling. Same consistency rule the crawl
+ * batch gets from RunContext.
+ */
+export async function loadSearchInputs(): Promise<{
+  criteria: Criteria;
+  ceiling: number | null;
+}> {
+  const rows = await readAllSettings();
+  return { criteria: mergeSettings(DEFAULT_CRITERIA, rows), ceiling: ceilingFrom(rows) };
+}
+
+/**
+ * Why a search cannot run at all, or null when it can.
+ *
+ * With every title (or every location) deleted the enumeration is empty, and
+ * the search below would still build a prompt with an empty bullet list, spend
+ * a Claude call, and return nothing — indistinguishable from "the market has
+ * no matching roles". Pure and exported so the guard is testable;
+ * findRolesByCriteria itself reads the database and calls the model.
+ */
+export function emptySearchReason(
+  family: RoleSearchFamily,
+  criteria: Criteria
+): string | null {
+  const missing: string[] = [];
+  if (family === "title" && criteria.titles.length === 0) missing.push("target titles");
+  if (family === "stack" && criteria.stackTerms.length === 0) missing.push("stack terms");
+  if (criteria.locations.length === 0) missing.push("location terms");
+  if (missing.length === 0) return null;
+  return (
+    `Cannot run the ${family} search: your ${missing.join(" and ")} list is empty, ` +
+    `so there are no queries to send. Add at least one entry on the Settings page, ` +
+    `or reset that list to its default.`
+  );
 }
 
 /**

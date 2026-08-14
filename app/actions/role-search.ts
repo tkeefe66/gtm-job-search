@@ -4,11 +4,11 @@ import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
-import { readCeiling } from "@/lib/settings-store";
 import {
   ROLE_SEARCH_SYSTEM,
   dateContextLine,
-  loadCriteria,
+  emptySearchReason,
+  loadSearchInputs,
   planQueries,
   roleExtractionSchema,
   stackQueries,
@@ -116,19 +116,33 @@ export async function findRolesByCriteria(
   }
 
   try {
-    // Loaded once and threaded through the prompt and the ingest below, so a
-    // settings save landing mid-run cannot split it across two title lists.
-    const criteria = await loadCriteria();
+    // ONE read of app_settings, both values derived from it. Loaded before the
+    // prompt and reused by the ingest below, so a settings save landing mid-run
+    // can neither split the run across two title lists nor pair one version's
+    // titles with another version's ceiling.
+    const { criteria, ceiling } = await loadSearchInputs();
+
+    // An empty title (or location) list enumerates to zero queries. Without
+    // this the run would build a prompt with an empty bullet list, spend a
+    // Claude call, and return nothing — reading as "no roles on the market"
+    // rather than as a misconfiguration. Checked before anything is billed.
+    const emptyReason = emptySearchReason(family, criteria);
+    if (emptyReason) {
+      console.error(`findRolesByCriteria(${family}): ${emptyReason}`);
+      return {
+        matches: [],
+        untrackedCompanies: [],
+        fetchedAt: null,
+        error: emptyReason,
+      };
+    }
 
     // Every web search Claude issues is billed separately. With no user
     // ceiling set the full enumeration is sent (coverage beats sixty cents,
     // see MAX_QUERY_MULTIPLIER); a ceiling narrows it to a proportional
     // spread. planQueries decides both the offer and the hard cap together.
     const allQueries = allQueriesFor(family, criteria);
-    const { queries, maxSearches, reason } = planQueries(
-      allQueries,
-      await readCeiling()
-    );
+    const { queries, maxSearches, reason } = planQueries(allQueries, ceiling);
     console.log(
       `findRolesByCriteria(${family}): sending ${queries.length} of ${allQueries.length} queries ` +
         `(${reason}) — ${queries.join(" | ")}`

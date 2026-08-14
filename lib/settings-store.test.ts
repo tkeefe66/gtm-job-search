@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { mergeSettings, SETTING_KEYS } from "./settings-store";
+import {
+  CRITERIA_CHANGED_AT_KEY,
+  CRITERIA_CHANGED_AT_SQL,
+  ceilingFrom,
+  mergeSettings,
+  numberFrom,
+  SETTING_KEYS,
+} from "./settings-store";
 import { DEFAULT_CRITERIA } from "./search-criteria";
 
 describe("mergeSettings", () => {
@@ -49,6 +56,61 @@ describe("mergeSettings", () => {
     expect(mergeSettings(defaults, [{ key: "compFloor", value: 150000 }]).compFloor).toBe(
       "150000"
     );
+  });
+});
+
+describe("numberFrom / ceilingFrom", () => {
+  const rows = [
+    { key: "searchCeiling", value: 15 },
+    { key: "titles", value: ["A"] },
+  ];
+
+  test("picks the stored number out of rows already read", () => {
+    expect(ceilingFrom(rows)).toBe(15);
+  });
+
+  test("a missing row reads as not set", () => {
+    expect(ceilingFrom([{ key: "titles", value: ["A"] }])).toBeNull();
+  });
+
+  test("a non-number row reads as not set rather than as a cap", () => {
+    // A hand-edit storing "15" as a string must not become a ceiling — it
+    // would flow into pickQueries and max_uses as a string.
+    expect(ceilingFrom([{ key: "searchCeiling", value: "15" }])).toBeNull();
+    expect(numberFrom([{ key: "compFloor", value: null }], "compFloor")).toBeNull();
+  });
+
+  test("reads the key it was asked for, not whichever row came first", () => {
+    expect(numberFrom([...rows, { key: "compFloor", value: 150000 }], "compFloor")).toBe(
+      150000
+    );
+  });
+});
+
+describe("criteria-changed stamp", () => {
+  test("is scoped to one key, never an aggregate over the whole table", () => {
+    // The scoping decision this whole constant exists for. max(updated_at)
+    // across app_settings would also stamp on searchCeiling and compFloor —
+    // neither changes what the crawler looks for, and stamping on them
+    // suppresses stale-posting closure for ~2 crawl cycles per company.
+    expect(CRITERIA_CHANGED_AT_SQL).toContain("where key = $1");
+    expect(CRITERIA_CHANGED_AT_SQL).not.toContain("max(");
+    expect(CRITERIA_CHANGED_AT_SQL).toContain("#>> '{}'");
+  });
+
+  test("its key is NOT a mergeable setting", () => {
+    // It is a stamp the app writes, not a user-editable setting. If it ever
+    // landed in SETTING_KEYS and DEFAULT_CRITERIA, the timestamp would merge
+    // into the criteria object and be handed to the crawler as criteria.
+    expect(Object.values(SETTING_KEYS)).not.toContain(CRITERIA_CHANGED_AT_KEY);
+    expect(CRITERIA_CHANGED_AT_KEY in DEFAULT_CRITERIA).toBe(false);
+  });
+
+  test("a stored stamp cannot leak into the merged criteria", () => {
+    const merged = mergeSettings(DEFAULT_CRITERIA, [
+      { key: CRITERIA_CHANGED_AT_KEY, value: "2026-08-13T00:00:00.000Z" },
+    ]);
+    expect(merged).toEqual(DEFAULT_CRITERIA);
   });
 });
 
