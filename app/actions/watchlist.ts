@@ -6,6 +6,7 @@ import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
 import { normalizeCompanyName } from "@/lib/role-key";
 import { rawQuery, supabase } from "@/lib/supabase";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import type { Startup, TrackedCompany } from "@/lib/types";
 
 // Company identity across this file is resolved case-insensitively using a
@@ -38,6 +39,18 @@ interface ExistingCompanyRow {
 
 interface ResolvedCompany {
   row: ExistingCompanyRow;
+  /**
+   * The watchlist read itself failed, so `row` and `found` are both guesses
+   * rather than answers.
+   *
+   * Kept separate from `found` deliberately. Collapsing them would be the
+   * original bug wearing a new name: "no such company" and "I could not look"
+   * license completely different writes. This flag is what stops the second
+   * being treated as the first — see addToWatchlist (which must not let a
+   * guessed careers_url overwrite a stored one) and trackCompanyByName (which
+   * must not upsert under an unverified casing).
+   */
+  readFailed: boolean;
   // False means no row matched under normalizeCompanyName — `row.company`
   // is then just the trimmed input, not a real stored value. Callers that
   // mutate an existing row (setTracking, markChecked, setCareersUrl,
@@ -49,13 +62,34 @@ interface ResolvedCompany {
 
 async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
   const trimmed = name.trim();
-  const { data } = await rawQuery<ExistingCompanyRow>(
+  const { data, error } = await rawQuery<ExistingCompanyRow>(
     `select company, careers_url from watchlist`
   );
+
+  // The error used to be discarded here, which made a failed read
+  // indistinguishable from an empty watchlist: `found: false` and
+  // `careers_url: null`. Both of those are ACTIVELY WRONG rather than merely
+  // conservative, and each one licensed a write — a guessed careers_url over a
+  // hand-typed one, and a second watchlist row under a different casing.
+  //
+  // Still fails soft (this is a read on the path of several writes, and
+  // throwing would take the whole action down), but soft to a value that
+  // cannot authorize either write. That is the distinction: readAllSettings
+  // fails soft to the shipped defaults, which are SAFE; this used to fail soft
+  // to "no such company", which is not.
+  const readFailed = error !== null && error !== undefined;
+  if (readFailed) {
+    console.error(
+      `watchlist: could not read the watchlist to resolve "${trimmed}" — ` +
+        `${error.message || UNDESCRIBED_DB_ERROR}. Treating the stored row as UNKNOWN, ` +
+        `which blocks any write that would depend on knowing it.`
+    );
+  }
+
   const match = findExistingCompany(data ?? [], trimmed);
   return match
-    ? { row: match, found: true }
-    : { row: { company: trimmed, careers_url: null }, found: false };
+    ? { row: match, found: true, readFailed }
+    : { row: { company: trimmed, careers_url: null }, found: false, readFailed };
 }
 
 // Shared guard for the four functions that mutate an EXISTING row
@@ -70,7 +104,19 @@ async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
 async function resolveWriteTarget(
   company: string
 ): Promise<{ company: string; careers_url: string | null; error?: string }> {
-  const { row, found } = await resolveExistingCompany(company);
+  const { row, found, readFailed } = await resolveExistingCompany(company);
+  // Told apart from "not on the watchlist", because they are not the same
+  // claim and the old message asserted the wrong one: a user shown `"Acme" is
+  // not on the watchlist` for a database outage goes looking for a company
+  // that is sitting right there.
+  if (readFailed) {
+    return {
+      ...row,
+      error:
+        `Could not check whether "${row.company}" is on the watchlist — the database ` +
+        `could not be read, so nothing was changed. Try again.`,
+    };
+  }
   if (!found) {
     return { ...row, error: `"${row.company}" is not on the watchlist.` };
   }
@@ -96,7 +142,7 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   // "not found" is the normal case here (a company Discover has never seen
   // tracked before) — this is an upsert, so `found` is irrelevant and only
   // `row` is used.
-  const { row: existing } = await resolveExistingCompany(startup.company);
+  const { row: existing, readFailed } = await resolveExistingCompany(startup.company);
 
   // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
   // empty string for careers_url ("best guess ... or empty string"), and
@@ -108,7 +154,15 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   // which is also exactly when crawl_method/last_crawl_status/
   // last_crawl_error need resetting (see setCareersUrl below for why — a new
   // URL invalidates everything the crawler learned about the old one).
-  const careersUrl = resolveCareersUrlWrite(existing.careers_url, startup.careers_url);
+  // `{ known: false }` when the read failed, NOT `existing.careers_url` — which
+  // is null in that case and would read as "nothing stored", letting the guess
+  // through. resolveCareersUrlWrite's own rule 0 refuses on unknown; the
+  // discriminated union is what makes passing the wrong thing a compile error
+  // rather than a plausible edit.
+  const careersUrl = resolveCareersUrlWrite(
+    readFailed ? { known: false } : { known: true, url: existing.careers_url },
+    startup.careers_url
+  );
 
   const payload: Record<string, unknown> = {
     company: existing.company,
@@ -155,7 +209,11 @@ export async function markChecked(company: string): Promise<{ error?: string }> 
   return { error: error?.message };
 }
 
-export async function getWatchedCompanyKeys(): Promise<Set<string>> {
+export async function getWatchedCompanyKeys(): Promise<{
+  keys: Set<string>;
+  /** Present (empty string included) when the lookup failed. Presence, not truthiness. */
+  error?: string;
+}> {
   // Only rows still actively tracked count as "watched" — a company the user
   // stopped tracking (tracking_enabled = false) must be able to show up
   // un-starred in Discover again, not read as permanently claimed.
@@ -167,11 +225,34 @@ export async function getWatchedCompanyKeys(): Promise<Set<string>> {
   // Discover result) reading as the same company. Renamed from
   // getWatchedCompanyNames to make that contract change explicit at every
   // call site instead of a same-shaped-but-different-meaning silent swap.
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("watchlist")
     .select("company")
     .eq("tracking_enabled", true);
-  return new Set((data ?? []).map((r: { company: string }) => normalizeCompanyName(r.company)));
+
+  // The error used to be dropped, leaving a bare empty Set — "nothing is
+  // watched", which is a perfectly plausible answer and therefore
+  // indistinguishable from the failure. Every company then rendered un-starred
+  // with a live Track button, and that button writes.
+  //
+  // Reported rather than swallowed, and the KEYS still come back so a caller
+  // that only paints a star can carry on. Callers that would act on the
+  // absence must check `error` — see untrackedFromWatched in
+  // lib/untracked-companies.ts, which answers "nothing to track" instead of
+  // "everything to track" when this failed.
+  if (error) {
+    console.error(
+      `watchlist: could not read which companies are tracked — ` +
+        `${error.message || UNDESCRIBED_DB_ERROR}`
+    );
+    return { keys: new Set<string>(), error: error.message };
+  }
+
+  return {
+    keys: new Set(
+      (data ?? []).map((r: { company: string }) => normalizeCompanyName(r.company))
+    ),
+  };
 }
 
 export async function getTrackedCompanies(): Promise<{
@@ -208,7 +289,27 @@ export async function trackCompanyByName(
   // "not found" is the normal first-time-tracking case, not an error.
   const {
     row: { company },
+    readFailed,
   } = await resolveExistingCompany(trimmed);
+
+  // Refused rather than guessed. The watchlist's unique index is on RAW text,
+  // so this lookup is the only thing that keeps "clay" from upserting a second
+  // row beside a stored "Clay" — billed separately, and invisible to
+  // ingestRoles' dedupe, so every role re-inserts as a duplicate "New" job.
+  // With the read failed we do not know the canonical casing, and a wrong
+  // guess is permanent. Not tracking is recoverable by clicking again; a
+  // duplicate row is deleted by hand.
+  //
+  // This uses the existing error channel rather than throwing, so the caller
+  // renders it like any other refusal.
+  if (readFailed) {
+    return {
+      error:
+        `Could not check the watchlist before tracking "${trimmed}" — the database could ` +
+        `not be read. Nothing was written, because tracking under an unverified name can ` +
+        `create a duplicate company. Try again.`,
+    };
+  }
 
   const { error } = await supabase.from("watchlist").upsert(
     {

@@ -19,6 +19,44 @@ import type { RoleMatch } from "@/lib/types";
 // (in particular: neither collapsed internal whitespace or U+00A0 the way
 // normalizeCompanyName does). Routing both through the same function is
 // what task 5's R1 was written to enforce.
+/**
+ * What the watchlist lookup returned, WITH its failure channel.
+ *
+ * getWatchedCompanyKeys used to discard its query error and hand back a bare
+ * empty Set, which reads as "nothing is tracked" — a perfectly plausible answer
+ * and therefore indistinguishable from the failure.
+ */
+export interface WatchedCompanies {
+  keys: string[];
+  /** Present (even as "") when the lookup failed. Presence, not truthiness. */
+  error?: string;
+}
+
+/**
+ * untrackedCompanyNames, but refusing to answer when the tracked set is not
+ * actually known.
+ *
+ * The safe soft value here is the EMPTY list, not the full one, and that is the
+ * whole point of this function. "Untracked" drives a Track button, and that
+ * button writes: trackCompanyByName upserts a watchlist row. Answering "all of
+ * them are untracked" when the lookup failed offers a write for every company
+ * on screen, on evidence that does not exist. An absent button costs a click
+ * later; a wrongly-offered one costs a duplicate row.
+ *
+ * This is the same asymmetry lib/settings-view.ts applies to the rescore offer
+ * and lib/rescore-scope.ts applies to a failed remaining-count: when the
+ * evidence is missing, pick the answer whose cost is a redundant action rather
+ * than an irreversible one.
+ */
+export function untrackedFromWatched(
+  matches: RoleMatch[],
+  watched: WatchedCompanies
+): string[] {
+  // Presence, not truthiness — an empty message is still a failed lookup.
+  if (watched.error !== undefined) return [];
+  return untrackedCompanyNames(matches, watched.keys);
+}
+
 export function untrackedCompanyNames(
   matches: RoleMatch[],
   trackedCompanies: string[]

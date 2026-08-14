@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { untrackedCompanyNames } from "./untracked-companies";
+import { untrackedCompanyNames, untrackedFromWatched } from "./untracked-companies";
 import type { RoleMatch } from "./types";
 
 function role(company: string): RoleMatch {
@@ -82,5 +82,42 @@ describe("untrackedCompanyNames", () => {
     const nbspTracked = "Big" + "\xa0" + "Co";
     const out = untrackedCompanyNames([role("Big Co")], [nbspTracked]);
     expect(out).toEqual([]);
+  });
+});
+
+describe("untrackedFromWatched", () => {
+  // getWatchedCompanyKeys discarded its query error and returned a bare empty
+  // Set, which reads as "nothing is tracked" — indistinguishable from the
+  // failure. Every company then rendered with a Track button, and that button
+  // WRITES.
+
+  test("a failed lookup offers NOTHING to track, rather than everything", () => {
+    // The regression. With the old bare-Set shape this returned both
+    // companies, offering a write for each on evidence that did not exist.
+    const matches = [role("Acme"), role("Globex")];
+    expect(untrackedFromWatched(matches, { keys: [], error: "connection refused" })).toEqual([]);
+  });
+
+  test("an EMPTY error message is still a failed lookup", () => {
+    // Presence, not truthiness — the whole defect class. `if (watched.error)`
+    // sends a connection-level failure straight down the success branch.
+    const matches = [role("Acme"), role("Globex")];
+    expect(untrackedFromWatched(matches, { keys: [], error: "" })).toEqual([]);
+  });
+
+  test("a clean lookup with genuinely nothing tracked DOES offer every company", () => {
+    // The other side of the branch, and it is load-bearing: without it,
+    // "always return []" passes both tests above. A real empty watchlist must
+    // still surface Track buttons — that is the normal first-run state.
+    const matches = [role("Acme"), role("Globex")];
+    const out = untrackedFromWatched(matches, { keys: [] });
+    expect(out).toHaveLength(2);
+    expect(out).toEqual(["Acme", "Globex"]);
+  });
+
+  test("a clean lookup still excludes what is tracked, case-insensitively", () => {
+    const out = untrackedFromWatched([role("Acme"), role("Globex")], { keys: ["ACME"] });
+    expect(out).toHaveLength(1);
+    expect(out).toEqual(["Globex"]);
   });
 });

@@ -19,11 +19,33 @@
 // comment in app/actions/watchlist.ts for why — a new URL invalidates
 // everything the crawler learned about the old one). When it returns
 // undefined, nothing changed, so nothing needs resetting.
+// Rule 0, ahead of all three above: if we do not KNOW what is stored, we do
+// not write.
+//
+// The caller learns `existing` by reading the watchlist, and that read can
+// fail. It used to fail soft to `null` — indistinguishable from "no URL
+// stored" — which walked straight into rule 2 and had Discover's guess
+// overwrite a hand-typed URL, plus reset crawl_method / last_crawl_status /
+// last_crawl_error, on the strength of a read that never happened.
+//
+// Failing soft is fine; failing soft to a value that licenses an overwrite is
+// not. So "unknown" is a state of its own rather than a null, and it is spelled
+// as a discriminated union so that `{ known: false }` cannot be confused with
+// `{ known: true, url: null }` at a call site — passing a bare string here is
+// now a compile error, which is what stops the old shape being reintroduced by
+// a plausible-looking edit.
+export type StoredCareersUrl =
+  | { known: true; url: string | null | undefined }
+  | { known: false };
+
 export function resolveCareersUrlWrite(
-  existing: string | null | undefined,
+  existing: StoredCareersUrl,
   guess: string | null | undefined
 ): string | undefined {
-  const existingTrimmed = (existing ?? "").trim();
+  // Unknown beats everything, including a confident-looking guess.
+  if (!existing.known) return undefined;
+
+  const existingTrimmed = (existing.url ?? "").trim();
   if (existingTrimmed) return undefined;
 
   const guessTrimmed = (guess ?? "").trim();

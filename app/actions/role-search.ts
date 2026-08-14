@@ -18,7 +18,7 @@ import {
 } from "@/lib/search-criteria";
 import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
-import { untrackedCompanyNames } from "@/lib/untracked-companies";
+import { untrackedFromWatched } from "@/lib/untracked-companies";
 import { getWatchedCompanyKeys } from "@/app/actions/watchlist";
 
 export interface RoleSearchResult {
@@ -85,7 +85,16 @@ async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
   // normalizer is idempotent, so passing keys is equivalent to passing the
   // raw names and avoids a second read of the same table.
   const watched = await getWatchedCompanyKeys();
-  return untrackedCompanyNames(matches, Array.from(watched));
+  // untrackedFromWatched, not untrackedCompanyNames: when the lookup FAILED
+  // this must answer "nothing to track" rather than "everything to track".
+  // The Track button it feeds performs a write, so offering one for every
+  // company on screen — on evidence that does not exist — is how a failed read
+  // turns into duplicate watchlist rows. The rule is pinned by a test out in
+  // lib/untracked-companies.ts; nothing in this module can be.
+  return untrackedFromWatched(matches, {
+    keys: Array.from(watched.keys),
+    error: watched.error,
+  });
 }
 
 export async function getCachedRoleSearch(

@@ -81,9 +81,21 @@ export default function Discover() {
         getWatchedCompanyKeys(),
       ]);
       if (cancelled) return;
-      setStartups(res.startups.filter((s) => !isCompanyWatched(s.company, watchedKeysResult)));
+      setStartups(
+        res.startups.filter((s) => !isCompanyWatched(s.company, watchedKeysResult.keys))
+      );
       setFetchedAt(res.fetchedAt);
-      setWatchedKeys(watchedKeysResult);
+      setWatchedKeys(watchedKeysResult.keys);
+      // Presence, not truthiness. An empty key set means "nothing is watched",
+      // which is a plausible answer and therefore hides the failure completely:
+      // every company would render un-starred with a live Track button. Saying
+      // so is the minimum; the keys themselves cannot be recovered here.
+      if (watchedKeysResult.error !== undefined) {
+        setError(
+          "Could not check which companies you are already watching, so the stars below " +
+            "may be wrong. Reload before watching or un-watching anything."
+        );
+      }
       setLoadingCached(false);
     })();
     return () => { cancelled = true; };
