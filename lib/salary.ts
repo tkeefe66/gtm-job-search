@@ -49,13 +49,19 @@ const MIN_PLAUSIBLE_SALARY = 1000;
  */
 const SUB_ANNUAL_PERIOD = new RegExp(
   "^[\\s()]*(?:" +
-    // Abbreviations REQUIRE a "per"/"/" lead-in. Bare `hr` would claim
-    // "$150,000 HR Manager", and bare `mo` is a word fragment.
-    "(?:(?:per|an|a|each)\\s+|/\\s?)(?:hrs?|wks?|mos?)" +
+    // Unit NOUNS and abbreviations REQUIRE a "per"/"/" lead-in, because a noun
+    // abutting a figure is usually not qualifying it: "$180,000 - $220,000
+    // hours are flexible", "days off unlimited", "Month 1 ramp" are annual
+    // salaries with a period noun standing next to them, and bare `hr` claims
+    // "$150,000 HR Manager" outright. The lead-in is what turns a noun into a
+    // rate.
+    "(?:(?:per|an|a|each)\\s+|/\\s?)(?:hrs?|wks?|mos?|hours?|days?|weeks?|months?)" +
     "|" +
-    // Spelled-out periods stand on their own — "$4,500 weekly" carries no
-    // "per" — and take the same optional lead-in.
-    "(?:(?:per|an|a|each)\\s+|/\\s?)?(?:hourly|daily|weekly|monthly|hours?|days?|weeks?|months?)" +
+    // The -ly ADVERBS stand alone, and only they do: "$4,500 weekly" carries no
+    // "per" and there is no reading of it that is not a rate. They take the
+    // same lead-in optionally ("$4,500 per weekly" is not written, but
+    // "$4,500/monthly" is).
+    "(?:(?:per|an|a|each)\\s+|/\\s?)?(?:hourly|daily|weekly|monthly)" +
     ")\\b",
   "i"
 );

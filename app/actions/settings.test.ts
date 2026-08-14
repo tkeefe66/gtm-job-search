@@ -235,6 +235,27 @@ describe("rescoreAll counts a row only when its write landed", () => {
     }
   });
 
+  test("a scoring failure is logged as a SCORING failure, not a write one", async () => {
+    // The mirror of the test above, and the same blind spot: scoreFit returns
+    // score 0 rather than throwing when the call or the JSON parse fails, and
+    // labelling that "write-failed" leaves every returned number identical
+    // while telling an operator the database broke when the model did.
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      score.mockResolvedValue({ score: 0, rationale: "" });
+      oneRowBatch();
+      const res = await rescoreAll();
+      expect(res.rescored).toBe(0);
+      expect(res.failed).toBe(1);
+      // No write was even attempted — the score never got past the 1-5 check.
+      expect(update).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0][0])).toContain("1 scoring failures, 0 write failures");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test("an empty-message write failure cannot reach the permanent stamp", async () => {
     // Why this line is a stamp-correctness bug and not a tally nit. Counted as
     // rescored, the batch reports rescored 1 / remaining 0 — which satisfies

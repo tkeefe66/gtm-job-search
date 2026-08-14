@@ -238,10 +238,14 @@ describe("parseSalaryRange", () => {
       "$4,500 to $5,000 per month",
       "$12,000 per month (base)",
       "$4,500 (per week)",
+      // The `"i"` flag, which nothing pinned before: postings capitalize.
+      "$4,500 Per Week",
+      "$12,000 Monthly",
+      "$12,000 /Mo",
     ];
 
     test("every sub-annual form refuses to be read as a base range", () => {
-      expect(SUB_ANNUAL.length).toBe(18);
+      expect(SUB_ANNUAL.length).toBe(21);
       for (const raw of SUB_ANNUAL) {
         expect(parseSalaryRange(raw)).toEqual({ kind: "unparseable", raw });
         // The point of the whole rule: nothing reaches the floor comparison.
@@ -264,10 +268,19 @@ describe("parseSalaryRange", () => {
       ["$180,000 - $220,000 per year", 180000, 220000],
       ["$180,000 - $220,000 annually", 180000, 220000],
       ["$180,000 - $220,000 (annual base)", 180000, 220000],
+      // Spellings the first draft of this list left unpinned. Each one is a
+      // real posting shape, and each is one alternation entry away from being
+      // hidden by the rule above.
+      ["$180,000 yearly", 180000, 180000],
+      ["$180,000 p.a.", 180000, 180000],
+      ["$180,000 USD/year", 180000, 180000],
+      ["$180,000 annualized", 180000, 180000],
+      ["$180,000 each year", 180000, 180000],
+      ["$180,000 Per Year", 180000, 180000],
     ] as const;
 
     test("every annual form still parses as base", () => {
-      expect(ANNUAL.length).toBe(11);
+      expect(ANNUAL.length).toBe(17);
       for (const [raw, min, max] of ANNUAL) {
         expect(parseSalaryRange(raw)).toEqual({ kind: "base", min, max });
       }
@@ -311,6 +324,28 @@ describe("parseSalaryRange", () => {
         min: 150000,
         max: 150000,
       });
+    });
+
+    test("a unit NOUN next to the figure is not a rate without a per or a slash", () => {
+      // L6. The -ly adverbs qualify a figure on their own ("$4,500 weekly" has
+      // no other reading); the bare nouns do not. Left standing alone they
+      // claimed a genuine $180-220k salary and labelled it "Range unreadable" —
+      // the wrong answer in the feature whose whole point is reading ranges.
+      const NOUN_PROSE = [
+        "$180,000 - $220,000 hours are flexible",
+        "$180,000 - $220,000 days off unlimited",
+        "$180,000 - $220,000 Month 1 ramp",
+        "$180,000 - $220,000 week one bonus",
+        "$180,000 - $220,000 month-end close ownership",
+        "$180,000 - $220,000 weeks of PTO included",
+      ];
+      expect(NOUN_PROSE.length).toBe(6);
+      for (const raw of NOUN_PROSE) {
+        expect(parseSalaryRange(raw)).toEqual({ kind: "base", min: 180000, max: 220000 });
+      }
+      // The lead-in is what turns the same noun into a rate, both spellings.
+      expect(parseSalaryRange("$4,500 per week").kind).toBe("unparseable");
+      expect(parseSalaryRange("$4,500/week").kind).toBe("unparseable");
     });
 
     test("an OTE figure stays OTE even when it carries a period qualifier", () => {
