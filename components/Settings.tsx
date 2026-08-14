@@ -24,6 +24,7 @@ import {
 import { removedTitles, removedTitlesWarning } from "@/lib/removed-titles";
 import {
   passDrained,
+  rescoreErrorText,
   rescoreOffers,
   rescoreSummary,
   runRescorePass,
@@ -402,8 +403,12 @@ export default function Settings() {
         onProgress: (totals) => setRescoreNotice(rescoreSummary(totals)),
       });
 
-      if (pass.error) {
-        setRescoreError(pass.error);
+      // Presence, not truthiness, and rescoreErrorText for the display half —
+      // the same doctrine runRescorePass now follows. `if (pass.error)` sent an
+      // empty-message failure down the SUCCESS branch, rendering a clean
+      // summary for a pass that had failed.
+      if (pass.error !== undefined) {
+        setRescoreError(rescoreErrorText(pass.error));
         // Partial work still happened; report it rather than losing the count.
         if (pass.rescored > 0 || pass.failed > 0) {
           setRescoreNotice(rescoreSummary(pass));

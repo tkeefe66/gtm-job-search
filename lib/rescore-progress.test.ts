@@ -7,11 +7,13 @@ import {
   maxRescoreBatches,
   passDrained,
   rescoreCostDollars,
+  rescoreErrorText,
   rescoreOffers,
   rescorePromptQuestion,
   rescoreSummary,
   runRescorePass,
   shouldContinueRescore,
+  UNDESCRIBED_RESCORE_ERROR,
   type CompRescoreOfferInput,
   type FitBrainRescoreOfferInput,
   type RescoreBatchResult,
@@ -689,6 +691,47 @@ describe("rescoreOffers", () => {
     expect(offers.compensation).toBeNull();
   });
 
+  test("BOTH sections read the real scored-role count, not a hardcoded one", () => {
+    // rescoreOffers is the sole producer and the component holds no logic, so
+    // this forwarding is the one wire in the design with nothing else watching
+    // it. Hardcoding `scoredJobCount` in either sub-call survives every other
+    // test here: a literal 0 hides both offers, a literal 1 shows them on an
+    // empty pipeline. Pinned from both directions.
+    const empty = rescoreOffers(
+      { ...VIEW, scoredJobCount: 0, fitBrainOverridden: true },
+      SESSION
+    );
+    expect(empty.fitBrain).toBeNull();
+    expect(empty.compensation).toBeNull();
+
+    const populated = rescoreOffers({ ...VIEW, fitBrainOverridden: true }, SESSION);
+    expect(populated.fitBrain).not.toBeNull();
+    expect(populated.compensation).not.toBeNull();
+  });
+
+  test("a floor edit reaches the compensation gate even after a stamp", () => {
+    // W5: hardcoding `floorEditedThisSession: false` in the sub-call. NOT
+    // fail-safe — it biases toward NOT showing, so a floor edit made after the
+    // stamp is written gets no offer, permanently and silently, which is the
+    // direction passDrained's own doc calls unsafe. The only test that fails
+    // on it is one where the stamp is already present.
+    const stamped = { ...VIEW, compScoringRescoredAt: "2026-08-14T00:00:00.000Z" };
+    expect(rescoreOffers(stamped, SESSION).compensation).toBeNull();
+    expect(
+      rescoreOffers(stamped, { ...SESSION, floorEditedThisSession: true }).compensation
+    ).not.toBeNull();
+  });
+
+  test("a fit-brain reset reaches the fit-brain gate after the row is gone", () => {
+    // The mirror of the above. A reset DELETES the app_settings row, so
+    // fitBrainOverridden is false and the session flag is the only thing that
+    // can still open the gate — hardcoding it false silently loses that case.
+    expect(rescoreOffers(VIEW, SESSION).fitBrain).toBeNull();
+    expect(
+      rescoreOffers(VIEW, { ...SESSION, fitBrainEditedThisSession: true }).fitBrain
+    ).not.toBeNull();
+  });
+
   test("the wordings the two sections get are the ones their gates decided", () => {
     const offers = rescoreOffers(
       { ...VIEW, fitBrainOverridden: true },
@@ -696,5 +739,60 @@ describe("rescoreOffers", () => {
     );
     expect(rescorePromptQuestion(offers.fitBrain!, 26)).toMatch(/fit brain/i);
     expect(rescorePromptQuestion(offers.compensation!, 26)).toContain("Saved.");
+  });
+});
+
+describe("an undescribed batch failure", () => {
+  // The fourth outing for this class on this project, and the last spelling of
+  // it left in the rescore path.
+  const EMPTY_ERROR: RescoreBatchResult = {
+    rescored: 25,
+    failed: 0,
+    remaining: 0,
+    passStartedAt: "2026-08-14T00:00:00.000Z",
+    error: "",
+  };
+
+  test("runRescorePass reports it rather than swallowing it", async () => {
+    const pass = await runRescorePass({ total: 100, runBatch: async () => EMPTY_ERROR });
+    expect("error" in pass).toBe(true);
+    expect(pass.error).toBe("");
+  });
+
+  test("…so the pass cannot read as drained and stamp", async () => {
+    // The actual harm. Swallowed, `pass.error` is undefined and passDrained
+    // returns TRUE on these totals — the permanent stamp, off a failed batch.
+    const pass = await runRescorePass({ total: 100, runBatch: async () => EMPTY_ERROR });
+    expect(passDrained(pass)).toBe(false);
+    // …and a batch with no error at all on the same totals still does drain,
+    // or this assertion proves nothing.
+    const clean = await runRescorePass({
+      total: 100,
+      runBatch: async () => ({ ...EMPTY_ERROR, error: undefined }),
+    });
+    expect(passDrained(clean)).toBe(true);
+  });
+
+  test("the pass stops on it rather than buying another batch", async () => {
+    let calls = 0;
+    const pass = await runRescorePass({
+      total: 100,
+      runBatch: async () => {
+        calls++;
+        return { ...EMPTY_ERROR, remaining: 75 };
+      },
+    });
+    expect(calls).toBe(1);
+    expect(pass.batches).toBe(1);
+  });
+
+  test("rescoreErrorText gives it words rather than rendering 'Rescore: '", () => {
+    expect(rescoreErrorText("")).toBe(UNDESCRIBED_RESCORE_ERROR);
+    // A described failure keeps its own words — planted so a future layer that
+    // invents message text cannot make the presence check above untestable.
+    expect(rescoreErrorText("connection terminated")).toBe("connection terminated");
+    expect(rescoreErrorText("connection terminated")).not.toContain(
+      UNDESCRIBED_RESCORE_ERROR
+    );
   });
 });

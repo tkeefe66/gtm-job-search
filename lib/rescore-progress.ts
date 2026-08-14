@@ -16,6 +16,23 @@ import { DEFAULT_RESCORE_LIMIT } from "@/lib/rescore-scope";
  */
 export const DOLLARS_PER_RESCORE = 0.0075;
 
+/**
+ * Stands in for a rescore failure that arrived with nothing to say — the
+ * client-side twin of UNDESCRIBED_DB_ERROR, which lives in lib/settings-store
+ * and cannot be imported here without dragging `pg` into the browser bundle.
+ *
+ * Same split of duties: DETECTION is presence (`error !== undefined`) at every
+ * branch, DESCRIPTION is substituted only where the text is about to be shown.
+ * A driver failure carrying an empty message otherwise renders "Rescore: " and
+ * tells the user nothing.
+ */
+export const UNDESCRIBED_RESCORE_ERROR = "it failed without saying why";
+
+/** What to show for a pass error, including one that came with no message. */
+export function rescoreErrorText(error: string): string {
+  return error || UNDESCRIBED_RESCORE_ERROR;
+}
+
 /** What rescoring `count` rows costs, rounded to whole cents for display. */
 export function rescoreCostDollars(count: number): number {
   if (!Number.isFinite(count) || count <= 0) return 0;
@@ -390,7 +407,14 @@ export async function runRescorePass(opts: {
       error = err instanceof Error ? err.message : String(err);
       break;
     }
-    if (res.error) {
+    // PRESENCE, not truthiness. A batch reporting `error: ""` was swallowed
+    // here: `pass.error` came back undefined, passDrained then returned TRUE,
+    // and the pass stamped. It also filtered out exactly the input passDrained's
+    // own empty-error test exists to guard, so the two halves disagreed. Not
+    // reachable through rescoreAll today — every error string there is a
+    // non-empty template — but this is the fourth time this class has bitten
+    // this project, and the driver's empty message is where it comes from.
+    if (res.error !== undefined) {
       error = res.error;
       break;
     }
