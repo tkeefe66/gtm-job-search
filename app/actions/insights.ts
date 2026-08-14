@@ -2,6 +2,7 @@
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning } from "@/lib/cache-write-warning";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { supabase } from "@/lib/supabase";
 import type { Insights } from "@/lib/types";
 
@@ -66,12 +67,11 @@ export async function analyzePipeline(): Promise<{
     // (a web search plus the entire pipeline as prompt input), and a failed
     // cache write meant the next visit re-ran all of it silently.
     //
-    // The delete's failure is reported too, not just the insert's: a delete
-    // that fails followed by an insert that succeeds leaves TWO rows, and
-    // getCachedInsights takes `order by fetched_at desc limit 1`, so the
-    // duplicate is invisible until it accumulates. `.neq("id", <sentinel>)` is
-    // sound here — insights_cache.id is a non-null uuid primary key, so
-    // `id <> '000…'` matches every real row. It is NOT the `<> NULL` bug.
+    // The delete's failure is reported too, not just the insert's — but with
+    // its OWN message, since the consequences differ entirely (see below).
+    // `.neq("id", <sentinel>)` is sound here: insights_cache.id is a non-null
+    // uuid primary key, so `id <> '000…'` matches every real row. It is NOT
+    // the `<> NULL` bug.
     const { error: deleteError } = await supabase
       .from("insights_cache")
       .delete()
@@ -81,17 +81,36 @@ export async function analyzePipeline(): Promise<{
       fetched_at: new Date().toISOString(),
     });
 
-    const cacheError = insertError ?? deleteError;
-    if (cacheError) {
+    // The two failures have DIFFERENT consequences and must not share a
+    // message. Reporting a delete-only failure with the re-bill warning was
+    // simply untrue: the insert landed, so the next visit is served from cache
+    // and nothing is re-billed. The real damage is the row that did not get
+    // cleared.
+    if (insertError) {
+      // Nothing was cached, so the next visit re-runs all of it — this is the
+      // case the re-bill warning describes.
       const warning = cacheWriteWarning({
         produced: "The pipeline analysis finished",
         table: "insights_cache",
-        error: cacheError.message,
+        error: insertError.message,
       });
       console.error(`analyzePipeline: ${warning}`);
       // On `error`, alongside the insights: Insights' run() sets the banner and
       // still renders `res.insights`, so the analysis the user paid for stays
       // on screen.
+      return { insights, error: warning };
+    }
+
+    if (deleteError) {
+      // The new row IS cached and will be served — `order by fetched_at desc
+      // limit 1` picks it. But the old rows survived, so insights_cache now
+      // grows by one row per analysis, invisibly, until something counts them.
+      const warning =
+        `The analysis was saved, but clearing the previous insights_cache rows failed — ` +
+        `${deleteError.message || UNDESCRIBED_DB_ERROR}. Nothing is lost and nothing will be ` +
+        `re-billed: the newest row is the one served. The stale rows just accumulate, one ` +
+        `per analysis, until they are cleared by hand.`;
+      console.error(`analyzePipeline: ${warning}`);
       return { insights, error: warning };
     }
 

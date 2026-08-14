@@ -125,8 +125,16 @@ export async function discoverStartups(
     );
 
     // Returned on `error`, unlike findAndSaveRoles' separate `cacheWarning`
-    // key: Discover's run() sets the banner and carries on rendering rather
-    // than returning early, so the results still reach the screen.
+    // key: Discover's run() sets the banner and does NOT return early, so the
+    // warning and the list render together.
+    //
+    // Be precise about what the user then sees, because it is not these
+    // results. run() discards `res.startups` and re-reads the cache — the same
+    // table this write just failed against — so the list on screen is the
+    // PREVIOUS rounds, not the one just paid for. The banner is therefore the
+    // only evidence the new search happened at all. Merging the fresh rows in
+    // would need company-level dedupe against the cached ones (see
+    // getAllDiscoveredStartups), which is why it is not done inline here.
     if (cacheError) {
       const warning = cacheWriteWarning({
         produced: `Found ${countPhrase(result.length, "startup")}`,
