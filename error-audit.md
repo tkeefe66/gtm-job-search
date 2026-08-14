@@ -471,3 +471,187 @@ are not that shape.
 
 5. **`settings.ts:107/111` (#10)** is the one clean `UNDESCRIBED_DB_ERROR` drop-in in the
    whole list, and it is cosmetic.
+
+---
+
+# Fixes
+
+Items 1-6 implemented, plus item 10. Five commits off `8499a66`, one per
+independent fix so a reviewer can reject any one without rejecting the rest.
+
+| # | commit | item |
+|---|---|---|
+| 1 | `53a98f9` | #1 — RolesTable's three optimistic writes (+ the `write-failure` extraction and the transport diagnostic) |
+| 2 | `ef46cc0` | #2 — billed Claude results that could not be cached |
+| 3 | `8d84e95` | #3 — the four remaining settings writes (+ item #10) |
+| 4 | `b94415b` | #4 and #5 — the coupled watchlist pair |
+| 5 | `ff84e7b` | #6 — `shouldReplaceRoleView` |
+
+**Gate: `npm run build` compiled successfully, `npm test` 568 tests / 28 files
+passed.** Floor was 531 / 26; +37 tests, +2 files, none removed or skipped.
+`npm run lint` never run.
+
+## Rulings, as applied
+
+**Ruling 1 (no normalization in `app/actions/jobs.ts`) — followed.** All five
+of its functions still return `error.message` verbatim, and each caller detects
+presence itself. The one structural consequence: `describeWriteFailure` and
+`UNDESCRIBED_DB_ERROR` had to become reachable from a client component, because
+they lived in `lib/settings-store.ts`, which imports `pg` through
+`lib/supabase.ts`. They moved to a new **import-free `lib/write-failure.ts`**
+and `settings-store` re-exports them, so no existing importer changed. This is
+the doctrine intact, not bent — the transport still invents nothing, and the
+move is what killed the reason `lib/rescore-progress.ts` had to hand-copy a
+twin.
+
+**Ruling 2 (re-`load()`, do not revert) — followed**, with the failure surfaced
+as instructed. One ordering subtlety worth flagging: `setError` must run
+**after** `await load()`, because `load()` clears the banner on a clean read and
+would otherwise wipe the very message that explains the reload.
+
+**Ruling 3 (copy `role-search.ts`, name `db/apply-schema.mjs`) — followed.**
+The message moved into `lib/cache-write-warning.ts` and `role-search.ts` now
+uses it too, so all four paths say the same thing and the schema command exists
+in one place rather than four.
+
+## The `AggregateError` finding, carried into the work
+
+Two places, deliberately not everywhere.
+
+**Copy.** `UNDESCRIBED_DB_ERROR` now says the database is *"unreachable
+entirely rather than one operation having failed"*. That is not a stylistic
+edit: an empty message is only ever produced by a connection-level failure, so
+the old wording sent a reader looking for one bad write when every query in the
+process was failing together. Pinned by a test, because a future copy edit that
+softens it back reintroduces the misdirection silently.
+
+**Diagnostic.** `aggregateCauses` + one log line in `lib/supabase.ts`'s two
+catch blocks. This is the only place in the process where the real cause still
+exists — `AggregateError.message` is `""` but `.errors[]` holds
+`"connect ECONNREFUSED ::1:5432"` and its siblings, and every layer above sees
+only the empty string.
+
+It feeds a **log line and nothing else**, and that restraint is the point.
+Filling in `message` from `.errors[]` would (a) make the transport invent text,
+which the doctrine forbids, and (b) erase the empty-message case that roughly
+a dozen presence checks in this codebase are written to survive — turning all
+of them into untestable dead code. Behavior is byte-identical; only the log
+gains anything.
+
+## Mutation results
+
+Every fix mutated, a **specific named test** watched to fail, then reverted and
+watched to pass. Runtime kills and compile-time rejections reported separately,
+as asked.
+
+### Runtime kills
+
+| mutation | test that failed |
+|---|---|
+| `error === undefined` → `!error` in `describeWriteFailure` | `describeWriteFailure > an EMPTY message is still a failure — presence, not truthiness` |
+| drop the empty-cause filter in `aggregateCauses` | `aggregateCauses > a cause with an empty message of its own is dropped, not carried through` |
+| drop the `Array.isArray` guard in `aggregateCauses` | `aggregateCauses > an ordinary Error has no hidden causes` |
+| drop `node db/apply-schema.mjs` from the warning | `cacheWriteWarning > names the schema command …` + `… names the table in BOTH the failure and the fix` |
+| drop `\|\| UNDESCRIBED_DB_ERROR` from the warning | `cacheWriteWarning > an EMPTY driver message gets the stand-in, not a dangling dash` |
+| pluralize unconditionally in `countPhrase` | `countPhrase > pluralizes everything except exactly one` |
+| name the table once instead of twice | `cacheWriteWarning > names the table in BOTH the failure and the fix` |
+| lead with the failure instead of the result | `cacheWriteWarning > the produced clause leads …` |
+| weaken the cost clause ("re-billed" → "repeated") | `cacheWriteWarning > says the cost of ignoring it` |
+| `saveCriteriaList` back to truthiness | `… > saveCriteriaList: a write with NO message is a failure, not a save` + `… does NOT run the side effects` |
+| `saveCriteriaText` back to truthiness | `… > saveCriteriaText: an empty-message failure does not report success` |
+| `saveCeiling` back to truthiness | `… > saveCeiling: … on the write path` + `… on the DELETE path` |
+| `resetSetting` back to truthiness | `… > resetSetting: an empty-message delete failure is reported` + `… does NOT run the side effects` |
+| move `applySideEffects` above the guard | `… > resetSetting: a failed delete does NOT run the side effects` |
+| unknown careers URL treated as "nothing stored" (the original bug) | `… UNKNOWN > a guess NEVER wins against an unknown stored value` (+2 more) |
+| unknown short-circuits every case | `resolveCareersUrlWrite > existing null yields to a non-empty guess` (+4 more) |
+| `untrackedFromWatched` presence → truthiness | `untrackedFromWatched > an EMPTY error message is still a failed lookup` |
+| failed lookup answers "everything is untracked" | `untrackedFromWatched > a failed lookup offers NOTHING to track, rather than everything` |
+| `shouldReplaceRoleView` back to truthiness | `shouldReplaceRoleView > an EMPTY error message with no payload ALSO leaves the view intact` |
+| drop `shouldReplaceRoleView`'s payload escape hatch | `shouldReplaceRoleView > an error that still carries results replaces the view` (+1) |
+
+One mutation attempt (`M1` on `cache-write-warning`, first pass) broke the file
+rather than mutating it — vitest collected zero tests, which is **not** a kill.
+Re-run correctly; the row above is the valid result.
+
+The `cacheWriteWarning` "says the cost of ignoring it" test **failed on first
+write against my own implementation** — the message never actually contained
+the word it promised. The message was fixed, not the test.
+
+### Compile-time rejections
+
+Two, both from making an unsafe state unrepresentable rather than merely
+discouraged. Neither could have been a runtime kill, because neither call site
+would have compiled to run:
+
+1. `resolveCareersUrlWrite`'s `StoredCareersUrl` union rejects the old bare
+   `string | null` argument. The whole bug was that `null` meant both "nothing
+   stored" and "could not look"; passing a string now cannot type-check.
+2. `getWatchedCompanyKeys` returning `{ keys, error }` rejected **both** its
+   callers (`app/actions/role-search.ts:88`, `components/Discover.tsx:84` and
+   `:86`). The compiler found them, not a grep — which is the argument for
+   changing the return type rather than adding an optional out-parameter.
+
+### Not testable, stated plainly
+
+`vitest` runs `environment: "node"` with no jsdom and no RTL, so **no React
+component in this repo is testable**, and I did not manufacture a test for one.
+That covers `components/RolesTable.tsx` (item #1's three handlers, `commitWrite`
+and `load`), `components/Discover.tsx` (the `cacheWarning` branch and the
+watched-keys banner). What *is* pinned is every pure decision those components
+call into — which is why item #1's cure was extracted into `lib/write-failure.ts`
+rather than inlined: the logic is now tested even though the component is not.
+
+Also untested and unavoidably so: `lib/supabase.ts`'s two catch blocks
+(`describeThrown`) need a live pool to reach. `aggregateCauses`, the part that
+holds the actual reasoning, is tested against a hand-built `AggregateError`
+matching the shape a real `pg` probe produced.
+
+**SKIPPED** — everything requiring a live database, an Anthropic key, a
+browser, or a deploy: no query was executed against Postgres, no Claude call
+was made, no page was rendered, nothing was deployed. Reachability claims here
+rest on reading code plus the local driver probe in §0, which needs no server.
+
+## Items 7-10
+
+**Took #10 only** (folded into commit 3): `countCrawlJobsMatchingTitles` now
+substitutes `UNDESCRIBED_DB_ERROR` the way its sibling twenty lines above does.
+Genuinely free — same file, same edit, and the module is untestable either way,
+so it added no test. Cosmetic: the failure was already reported, the sentence
+just trailed off after the dash.
+
+**Left #7, #8, #9.** Reasoning, since the cut is the point:
+
+- **#7** (`updateJob` result discarded at `ingest-roles.ts:165`,
+  `RolesTable.tsx:628`, `RecruiterPanel.tsx:128`) — three files, only one of
+  which this work otherwise opened, and even there a different function. Not a
+  neighbouring edit.
+- **#8** (`addJob` presence check at `RolesTable.tsx:625` and
+  `RecruiterPanel.tsx:123`) — the closest call. `RolesTable.tsx:625` sits in a
+  file already open and would reuse the helper already imported, so it is free;
+  `RecruiterPanel.tsx:123` is byte-identical and is not. Fixing one and leaving
+  its twin is exactly the drift this codebase keeps writing comments to warn
+  about, so both are deferred as a pair. They are ~2 lines and want one commit.
+- **#9** (`ingest-roles.ts:142`) — the audit judged the empty case
+  near-unreachable (the same function throws on its own read error 60 lines
+  earlier), and nothing in the implementation changed that. Net damage in the
+  reachable case is one inflated count and one lost log line.
+
+## Still open
+
+1. **#7, #8 and #9 above** — a single small follow-up commit, if wanted. #8 is
+   the only one with real (outage-only) user cost.
+2. **`lib/rescore-progress.ts`'s `UNDESCRIBED_RESCORE_ERROR`** is now a twin
+   with no reason to exist: it was hand-copied *because* the original could not
+   be imported into a client bundle, and `lib/write-failure.ts` fixes exactly
+   that. Deliberately left alone — its wording is rescore-specific UX copy, and
+   collapsing it is a judgment call about voice, not a correctness fix.
+3. **`components/Discover.tsx`'s suppressed `router.push`** on a cache-write
+   warning is a deliberate UX change, argued in the commit message (an unread
+   bill is not recoverable; the roles are one nav click away). It deserves an
+   explicit yes/no rather than passing as an implementation detail.
+4. **Nothing verified against a running system.** Every claim here is static.
+   The changed paths that would most repay a live check, in order: a settings
+   save against an unreachable database (item #3), a Discover "Find roles"
+   click with `discovered_roles` dropped (item #2), and the new
+   `supabase: the driver failed with no message` log line actually appearing
+   with its causes attached.
