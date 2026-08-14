@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
 import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
 import { JOB_STATUSES, ACTIVE_STATUSES, TERMINAL_STATUSES, type Job, type JobStatus } from "@/lib/types";
+import { COMP_BUCKET_TAGS, passesCompFilters, salaryBucketFor } from "@/lib/salary-filter";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -34,7 +35,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
-export default function RolesTable() {
+export default function RolesTable({ compFloor }: { compFloor: number | null }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,12 @@ export default function RolesTable() {
   const [showRecruiter, setShowRecruiter] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("fit_score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Two INDEPENDENT booleans, not another exclusive chip group like
+  // statusFilter: "pays too little" and "didn't tell me" are different facts
+  // and the user needs to answer them separately. Both start off, so the table
+  // looks exactly as it did before this feature until the user opts in.
+  const [meetsOnly, setMeetsOnly] = useState(false);
+  const [hideNoRange, setHideNoRange] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -91,6 +98,7 @@ export default function RolesTable() {
       } else if (statusFilter === "Out") {
         if (!TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
       } else if (j.status !== statusFilter) return false;
+      if (!passesCompFilters(j, compFloor, { meetsOnly, hideNoRange })) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
@@ -118,7 +126,9 @@ export default function RolesTable() {
     });
 
     return list;
-  }, [jobs, search, statusFilter, sortKey, sortDir]);
+    // meetsOnly, hideNoRange and compFloor belong here: omitting them leaves a
+    // memo that paints correctly once and then never reacts to a toggle again.
+  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, compFloor]);
 
   async function handleStatus(job: Job, status: JobStatus) {
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
@@ -215,6 +225,33 @@ export default function RolesTable() {
         </div>
       </div>
 
+      {/* Compensation toggles. Chip STYLING from the status row above, not its
+          mechanism — these two are independent, and neither is exclusive. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* Hidden entirely when no floor is set: with nothing to compare
+            against it would be a control that visibly does nothing. */}
+        {compFloor !== null && (
+          <button
+            onClick={() => setMeetsOnly((v) => !v)}
+            title={`Hide roles whose base tops out under $${compFloor.toLocaleString()}`}
+            className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+              meetsOnly ? "border-ink bg-ink text-white" : "border-slate bg-white hover:border-ink"
+            }`}
+          >
+            Meets minimum
+          </button>
+        )}
+        <button
+          onClick={() => setHideNoRange((v) => !v)}
+          title="Hide roles that published no readable salary range"
+          className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+            hideNoRange ? "border-ink bg-ink text-white" : "border-slate bg-white hover:border-ink"
+          }`}
+        >
+          Hide no range listed
+        </button>
+      </div>
+
       {loading && <div className="py-12"><Spinner label="Loading roles…" /></div>}
       {error && !loading && (
         <div className="rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">{error}</div>
@@ -288,6 +325,7 @@ export default function RolesTable() {
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink/40">
+                    <CompTag job={job} floor={compFloor} />
                     {job.salary_range && <span>{job.salary_range}</span>}
                     {job.salary_range && job.location && <span>·</span>}
                     {job.location && <span>{job.location}</span>}
@@ -395,6 +433,21 @@ export default function RolesTable() {
         <RecruiterPanel onClose={() => setShowRecruiter(false)} onAdded={() => { setShowRecruiter(false); void load(); }} />
       )}
     </div>
+  );
+}
+
+/**
+ * Names what a row's salary figure is when it is not a comparable base range.
+ * "Range unreadable" is deliberately its own label: it is the only surface
+ * where a salary-parser gap becomes visible to a human.
+ */
+function CompTag({ job, floor }: { job: Job; floor: number | null }) {
+  const tag = COMP_BUCKET_TAGS[salaryBucketFor(job, floor)];
+  if (!tag) return null;
+  return (
+    <span className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50">
+      {tag}
+    </span>
   );
 }
 
