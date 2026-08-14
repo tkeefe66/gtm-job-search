@@ -1,14 +1,15 @@
 # Compensation floor — live checks and follow-ups
 
-Merged to `main` at `2b06793` (13 commits from `65a4db0`). 531 tests / 26 files, build
-green, `/roles` confirmed `ƒ (Dynamic)`. **Not yet deployed.**
+**DEPLOYED 2026-08-14.** `main` at `495a8b3`, 533 tests / 26 files, build green,
+`/roles` confirmed `ƒ (Dynamic)`. Verified in the running container, not just on a green
+deploy status.
 
 Plan: `docs/superpowers/plans/2026-08-13-compensation-floor.md`
 Spec: `docs/superpowers/specs/2026-08-13-search-settings-design.md`
 
-Everything below needs a running app with `DATABASE_URL` and `ANTHROPIC_API_KEY`. None of
-it was verifiable during implementation — no database, no API key, no browser existed in
-that environment. Every one was reported SKIPPED rather than guessed.
+None of this was verifiable during implementation — no database, no API key, no browser
+existed in that environment, and every check was reported SKIPPED rather than guessed.
+The section below records which have since been run against production and which have not.
 
 ## Deploy
 
@@ -19,49 +20,69 @@ No schema migration. `app_settings` is key/value jsonb, so the two new keys
 railway up --service web --detach
 ```
 
+**Confirm the service.** The linked service is `crawler`, so a bare `railway up` deploys
+the app over the cron service. `--service web` is not optional.
+
 **One thing is NOT a no-op on an empty `app_settings`.** Search and crawl behave exactly
 as before, but **fit scoring does not**: the prompt now carries a `Posted compensation:`
 line whether or not a floor is set. That is deliberate — it is why the day-one rescore
 offer exists — but it means scores shift on rescore even if you never open `/settings`.
 
-## Live checks, highest value first
+## The boundary rule (changed 2026-08-14, after first use)
 
-1. **The parser against real data.** The single biggest unknown. Nothing has ever run
-   `lib/salary.ts` against the ~21 real `salary_range` values in `jobs`. Pull them and
-   check each lands on the right kind:
-   ```sql
-   select distinct salary_range from jobs where salary_range is not null;
-   ```
-   Watch specifically for weekly/monthly figures — whether any real posting uses one is
-   still unknown, and it decides whether the H1 fix and the L6 residual matter at all in
-   practice.
+A band whose top only **reaches** the floor counts as **below** it — `>`, not `>=`.
+`$150,000 - $200,000` is below a $200,000 floor; `$177,000 - $221,000` clears it. Hitting
+the number would mean negotiating to the absolute ceiling of the band, which is the best
+possible case of failing to meet a minimum rather than meeting one.
 
-2. **Does the model honor "cap at 3" over the AI-GTM floor-of-4?** The prompt's
-   AI-DRIVEN GTM TRANSFORMATION RULE sets an unconditional floor score of 4 on three
-   conditions, none about pay. A carve-out was added as the third arrow line *inside*
-   that rule, with explicit precedence text, and the rendered prompt was read by two
-   reviewers. But **prompt placement is not model behavior.** Set a floor above a known
-   role's posted base at an established B2B SaaS company with an AI mandate, rescore it,
-   and confirm it lands at 3 rather than 4.
+This lives in **two places that must not drift**: `lib/salary-filter.ts` (the display
+bucket) and `compScoringClause` + `aiGtmCompCarveOut` in `lib/fit-prompt.ts` (the scoring
+rule). Changing one without the other produces the table-vs-score split the whole-branch
+review existed to catch — a role hidden by the filter while its fit score still reads 4.
+The carve-out needs it too: it outranks the compensation clause, so a narrow reading of
+"below the minimum" there re-opens the split through the one rule that beats it.
 
-3. **The day-one rescore offer, end to end.** On first load after deploy with scored rows
-   present, the offer should appear. Run it. Confirm: it completes, the summary is
-   accurate, and **it does not return on the next page load** (the
-   `comp_scoring_rescored_at` stamp). Then confirm a later comp-floor edit *does* bring it
-   back.
+## Live checks
 
-4. **The stamp's round trip.** Verify the row actually lands:
-   ```sql
-   select key, value, updated_at from app_settings where key = 'comp_scoring_rescored_at';
-   ```
+**Done, against production 2026-08-14:**
 
-5. **Both toggles default OFF** and the table looks unchanged until you opt in.
+1. ~~**The parser against real data.**~~ **PASSED.** All 20 distinct `salary_range` values
+   in `jobs` parse correctly: 19 `base`, 1 `ote`, **zero unparseable, zero absent**.
+   `$280,000 - $325,000 (base); $305,000 - $365,000 OTE` → base max 325,000, not the OTE
+   figure. `$165,000 - $175,000 base + annual bonus` → 175,000, not confused by the bonus.
+   **No weekly or monthly figures exist in the data at all**, so the H1 fix and the L6
+   residual do not fire in practice.
+2. ~~**The day-one rescore offer.**~~ **PASSED.** 41 roles, two batches, `0 scoring
+   failures, 0 write failures`, 41 Claude calls — no over-billing. The log showed
+   `16 still to do` after batch 1 (cumulative, not per-batch) and `batch of 16 (limit 16)`
+   on the tail, so both the over-billing and the never-terminating bugs stayed fixed.
+3. ~~**The stamp round trip.**~~ **PASSED.** `comp_scoring_rescored_at` written at
+   `2026-08-14T20:52:07.203Z`; the offer does not return.
+
+**Still open — needs a browser or a billed call:**
+
+1. **Does the model honor "cap at 3" over the AI-GTM floor-of-4?** *Still the one
+   unverified claim in the feature.* The rule sets an unconditional floor score of 4 on
+   three conditions, none about pay. The carve-out is verifiably the third arrow line
+   *inside* that rule with explicit precedence text, read by two reviewers and pinned by
+   fixtures — but **prompt placement is not model behavior.** With a floor set, a
+   below-floor role at an established B2B SaaS company with an AI mandate must land on 3.
+   The band-top case (`$150,000 - $200,000` at a $200,000 floor) is the same test for the
+   newer rule.
+
+2. **The rescore offer after a floor *edit*.** The day-one offer is stamped and gone.
+   A later comp-floor edit should bring it back via the session flag. Confirm it does —
+   and note a prompt-text change alone offers nothing, since it touches neither the stamp
+   nor the session flag. Re-saving the floor is the way to force a pass.
+
+3. **Both toggles default OFF** and the table looks unchanged until you opt in.
    "Meets minimum" must not appear at all with no floor set.
 
-6. **An OTE-only role is never hidden by the floor toggle.** This is the spec's hard
-   line — comparing OTE against a base floor is forbidden.
+4. **An OTE-only role is never hidden by the floor toggle.** This is the spec's hard
+   line — comparing OTE against a base floor is forbidden. `$300,000 - $340,000 OTE` is
+   the live row that proves it.
 
-7. **The duplicate-render fix (M2).** Derived from source, never rendered. Start a rescore
+5. **The duplicate-render fix (M2).** Derived from source, never rendered. Start a rescore
    from each card and confirm the spinner/error/summary appears exactly once, and that the
    finished summary survives a completed pass on both paths.
 
