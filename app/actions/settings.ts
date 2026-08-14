@@ -3,6 +3,7 @@
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
+import { CRAWL_TITLE_MATCH_SQL, titleMatchPatterns } from "@/lib/removed-titles";
 import {
   SCORED_JOBS_COUNT_SQL,
   SCORED_JOBS_REMAINING_SQL,
@@ -68,6 +69,39 @@ async function countScoredJobs(): Promise<{ count: number; error?: string }> {
     // rescore" — the one answer that makes the button look pointless when it
     // is not.
     return { count: 0, error: `Could not count scored roles — ${error.message}` };
+  }
+  return { count: Number(data?.[0]?.n ?? 0) };
+}
+
+/**
+ * How many crawler-found, untouched roles match a set of titles.
+ *
+ * Feeds the titles section's warning, which has to name a number: "editing
+ * titles changes what the crawler hunts for" is abstract, "9 tracked roles
+ * match titles you are removing" is not. Called with the titles the draft is
+ * DROPPING, so it answers "what stops being monitored if I save this".
+ *
+ * Reads nothing else and writes nothing — safe to call on every keystroke's
+ * debounce.
+ */
+export async function countCrawlJobsMatchingTitles(
+  titles: string[]
+): Promise<{ count: number; error?: string }> {
+  const patterns = titleMatchPatterns(titles);
+  // No patterns means nothing is being removed. `ilike any('{}')` matches zero
+  // rows and would answer 0 correctly, but spending a round trip to learn that
+  // on every keystroke is pointless.
+  if (patterns.length === 0) return { count: 0 };
+
+  const { data, error } = await rawQuery<{ n: string }>(CRAWL_TITLE_MATCH_SQL, [
+    patterns,
+  ]);
+  if (error) {
+    console.error(`settings: could not count roles matching titles — ${error.message}`);
+    // Surfaced, not swallowed as 0: "0 tracked roles match" is a specific
+    // reassurance, and giving it when the count actually failed would tell the
+    // user a title removal is free when it may not be.
+    return { count: 0, error: `Could not count matching roles — ${error.message}` };
   }
   return { count: Number(data?.[0]?.n ?? 0) };
 }

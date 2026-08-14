@@ -46,3 +46,54 @@ export function validateList(items: string[], label: string): ValidationResult {
 
   return { ok: true, value };
 }
+
+/**
+ * The fit brain's length guideline. Today's shipped default is ~1,800
+ * characters; it is pasted verbatim into EVERY scoreFit call, so its length is
+ * paid once per role scored — and a rescore pays it once per row all over
+ * again. Advisory, not a limit.
+ */
+export const FIT_BRAIN_MAX_CHARS = 4000;
+
+export interface TextCheck {
+  /** Blocks the save. Mirrors saveCriteriaText's own empty check. */
+  error: string | null;
+  /** Shown, but the save is still allowed. */
+  warning: string | null;
+}
+
+/**
+ * Checks a free-text setting before it is saved.
+ *
+ * Two OUTCOMES, deliberately not one. Empty is an error because a blank fit
+ * brain or location rule silently guts the prompt it is pasted into; over-long
+ * is only a warning because there is no correct maximum — the cost is real but
+ * the user may well want the longer text. Collapsing them into a single
+ * `ok: boolean` would force one of those two behaviors onto the other.
+ *
+ * Length is measured on the TRIMMED text, because trimmed is what
+ * saveCriteriaText stores and therefore what every prompt pays for.
+ */
+export function validateText(
+  text: string,
+  label: string,
+  maxChars: number
+): TextCheck {
+  const trimmed = text.trim();
+
+  if (!trimmed) {
+    return { error: `${label} cannot be empty.`, warning: null };
+  }
+
+  if (trimmed.length > maxChars) {
+    return {
+      error: null,
+      warning:
+        `${label} is ${trimmed.length} characters, over the ${maxChars}-character ` +
+        `guideline. It is sent on every fit-scoring call, so the extra length is ` +
+        `paid once per role scored. You can still save it.`,
+    };
+  }
+
+  return { error: null, warning: null };
+}

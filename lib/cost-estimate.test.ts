@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { estimateRunCost } from "./cost-estimate";
+import { estimateRunCost, formatEstimate } from "./cost-estimate";
 
 describe("estimateRunCost", () => {
   test("counts the title and stack grids separately", () => {
@@ -42,5 +42,48 @@ describe("estimateRunCost", () => {
     const e = estimateRunCost({ titles: 0, locations: 3, stackTerms: 0, ceiling: null });
     expect(e.searches).toBe(0);
     expect(e.dollars).toBe(0);
+  });
+});
+
+describe("formatEstimate", () => {
+  test("renders the shipped defaults as one line", () => {
+    expect(
+      formatEstimate({ titles: 13, locations: 3, stackTerms: 8, ceiling: null })
+    ).toBe("13 titles × 3 locations = 39 queries · ~$1.17 per By Role run");
+  });
+
+  test("shows the title grid, not the larger stack grid", () => {
+    // 2 × 3 = 6 title queries against 20 × 3 = 60 stack queries. The two
+    // numbers on the left multiply to 6, so showing 60 would be arithmetic
+    // the user can see is wrong.
+    const s = formatEstimate({ titles: 2, locations: 3, stackTerms: 20, ceiling: null });
+    expect(s).toContain("2 titles × 3 locations = 6 queries");
+  });
+
+  test("states the cap when a ceiling cuts the grid down", () => {
+    const s = formatEstimate({ titles: 13, locations: 3, stackTerms: 8, ceiling: 15 });
+    expect(s).toBe(
+      "13 titles × 3 locations = 39 queries (capped at 15) · ~$0.56 per By Role run"
+    );
+  });
+
+  test("says nothing about a ceiling that does not bind", () => {
+    const s = formatEstimate({ titles: 2, locations: 2, stackTerms: 2, ceiling: 100 });
+    expect(s).not.toContain("capped");
+  });
+
+  test("says nothing about a cap when there is no ceiling", () => {
+    const s = formatEstimate({ titles: 13, locations: 3, stackTerms: 8, ceiling: null });
+    expect(s).not.toContain("capped");
+  });
+
+  test("singularizes each of the three counts", () => {
+    const s = formatEstimate({ titles: 1, locations: 1, stackTerms: 1, ceiling: null });
+    expect(s).toBe("1 title × 1 location = 1 query · ~$0.21 per By Role run");
+  });
+
+  test("always shows two decimal places", () => {
+    const s = formatEstimate({ titles: 2, locations: 2, stackTerms: 2, ceiling: null });
+    expect(s).toContain("~$0.29 per By Role run");
   });
 });

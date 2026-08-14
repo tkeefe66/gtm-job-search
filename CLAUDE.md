@@ -35,21 +35,24 @@ The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-trig
 
 **Every "search" feature is a Claude call with the `web_search` server tool** — there's no scraper. `lib/anthropic.ts` has the two shared helpers: `callWithWebSearch()` (model `claude-sonnet-4-6`) and `parseJson()` (fence-stripping/boundary-finding, because responses aren't strict JSON mode). When adding a web-search call, budget `maxTokens` generously: the model's search narration counts against it, and 2000 tokens has truncated responses before the JSON was emitted (see comment in `app/actions/roles.ts`).
 
-**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (seven tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`, `role_searches`); `supabase/migrations/` is legacy.
+**`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (eight tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`, `role_searches`, `app_settings`); `supabase/migrations/` is legacy.
 
-**The fit-scoring brain** is `CANDIDATE_BACKGROUND` + the 1–5 rubric in `app/actions/parse-role.ts` (`scoreFit`). Target role titles and the Denver/remote location filter are duplicated in the prompts in `app/actions/roles.ts` and `app/actions/discover.ts`. Changing what "a good fit" means = edit these prompts, nothing else.
+**Search criteria are user-editable at `/settings`** — target titles, location terms, GTM stack terms, the location rule, the fit brain, and an optional search ceiling. They are stored one row per key in `app_settings` (key/value jsonb, so a new setting needs no migration) and resolved by `loadCriteria()` in `lib/search-criteria.ts`, which overlays saved rows on the shipped `DEFAULT_*` constants in that same file. Nothing is duplicated across prompts any more: every consumer takes the resolved `Criteria` as a parameter. `scoreFit` in `app/actions/parse-role.ts` still holds the 1–5 rubric but takes the fit brain as an argument (`FitInputs`, from `loadScoringInputs()`). Changing what "a good fit" means = edit the fit brain on `/settings`, then accept the rescore offer. A save clears only the caches that change invalidates and, for crawler-relevant keys only, stamps `criteria_changed_at` — both decided in `lib/settings-effects.ts`. With `app_settings` empty the app behaves exactly as it did before the settings page existed.
 
 **The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → the URL-verification and fit-scoring block lives in `lib/ingest-roles.ts` (shared with the crawler and role search below), which liveness-checks every `job_url` in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots), saves dead roles with status `"Posting Closed"` and skips fit-scoring for them, and saves live ones as `"New"`, `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
 
 **Role-first discovery**: `app/actions/role-search.ts` searches for roles by title
 and by GTM tool stack (`titleQueries` / `stackQueries` in `lib/search-criteria.ts`)
 rather than by company, so companies that never appear in funding news still
-surface. Queries are capped in two places, both from `MAX_QUERIES_PER_SEARCH`
-in `lib/search-criteria.ts`: `pickQueries` bounds how many of the 39 title / 24
-stack queries the prompt offers (advisory — the model decides what to run), and
-the same number is passed as `callWithWebSearch`'s optional `maxSearches`, which
-sets the `web_search` tool block's `max_uses` and is the actual ceiling on
-billed searches. `maxSearches` is opt-in; the discover, roles, and crawler
+surface. How many queries run is decided by `planQueries` in
+`lib/search-criteria.ts` from the user's optional search ceiling: with a ceiling
+set, `pickQueries` strides the enumeration down to it (advisory — the model
+decides what to run) and that same number becomes `callWithWebSearch`'s
+`maxSearches`, which sets the `web_search` block's `max_uses` and is the actual
+ceiling on billed searches; with no ceiling the full list is offered and
+`max_uses` is `MAX_QUERY_MULTIPLIER ×` the query count, a runaway rail rather
+than a ration. A stored ceiling below 1 is ignored with a warning.
+`maxSearches` is opt-in; the discover, roles, and crawler
 callers omit it and are uncapped. Both the sent list and the searches Claude
 actually issued are logged. Results cache
 in `role_searches` per family and route through the same `lib/ingest-roles.ts`

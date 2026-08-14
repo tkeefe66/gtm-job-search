@@ -36,3 +36,30 @@ export function estimateRunCost(input: EstimateInput): Estimate {
 
   return { titleQueries, stackQueries, searches, dollars };
 }
+
+function plural(n: number, one: string, many: string = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The one-line estimate the settings page shows under the titles and locations
+ * lists, e.g. `13 titles × 3 locations = 39 queries · ~$1.17 per By Role run`.
+ *
+ * The query figure is the TITLE grid, because that is the grid the two numbers
+ * beside it multiply out to; the dollar figure comes from estimateRunCost,
+ * which prices the larger of the two grids. When a ceiling cuts the grid down,
+ * the cap is stated — otherwise the line would show 39 queries for a run the
+ * user has capped at 15 and the dollar figure would look inexplicably low.
+ */
+export function formatEstimate(input: EstimateInput): string {
+  const e = estimateRunCost(input);
+  const capped =
+    input.ceiling !== null && e.searches < e.titleQueries
+      ? ` (capped at ${e.searches})`
+      : "";
+  return (
+    `${plural(input.titles, "title")} × ${plural(input.locations, "location")} = ` +
+    `${plural(e.titleQueries, "query", "queries")}${capped} · ` +
+    `~$${e.dollars.toFixed(2)} per By Role run`
+  );
+}
