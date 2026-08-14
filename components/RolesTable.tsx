@@ -717,7 +717,11 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
         source: "Manual",
       }),
     ]);
-    if (jobRes.error) { setSaving(false); setSaveError(jobRes.error); return; }
+    // describeWriteFailure, not `if (jobRes.error)`. Presence, not truthiness:
+    // an unreachable database rejects with an empty message (lib/write-failure.ts),
+    // and a truthiness check would report the add as saved and clear the form.
+    const failure = describeWriteFailure(jobRes.error, "save this role");
+    if (failure !== undefined) { setSaving(false); setSaveError(failure); return; }
     if (jobRes.job && scoreRes.score > 0) {
       const { updateJob } = await import("@/app/actions/jobs");
       await updateJob(jobRes.job.id, {

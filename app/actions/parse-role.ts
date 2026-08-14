@@ -70,7 +70,11 @@ ${text}`,
   } catch (err) {
     console.error("parseRecruiterText error:", err);
     return {
-      error: err instanceof Error ? err.message : "Failed to parse role details.",
+      // `|| `, not a bare `err.message` — the same empty-message case as
+      // parseJobUrl below, read by components/RecruiterPanel.tsx.
+      error:
+        (err instanceof Error ? err.message : "") ||
+        "Failed to parse role details.",
     };
   }
 }
@@ -115,8 +119,16 @@ Return ONLY the JSON object.`,
     return { role };
   } catch (err) {
     console.error("parseJobUrl error:", err);
+    // `|| `, not a bare `err.message`: an Error can carry an empty message
+    // (Node's AggregateError always does — see lib/write-failure.ts), and the
+    // caller in components/RolesTable.tsx branches on `if (res.error)`. An
+    // empty string there reads as a successful parse and advances the form to
+    // an empty review step with nothing shown to explain it. The substitution
+    // belongs here rather than at the call site because this is where the
+    // failure is already being turned into user-facing text.
     return {
-      error: err instanceof Error ? err.message : "Failed to parse job URL.",
+      error:
+        (err instanceof Error ? err.message : "") || "Failed to parse job URL.",
     };
   }
 }

@@ -131,7 +131,7 @@ rubric missing a scoring tier. So:
 `if (error)` where `error` is a **string** — an empty message is falsy, so the failure path
 never fires. Clean build, wrong behavior, zero log output. Invisible by construction.
 
-**Eight instances surfaced. Six fixed on this branch.** Seven sites remain, none of which
+**Eight instances surfaced. Six fixed on this branch.** Seven sites remained, none of which
 can reach the rescore stamp (verified — the stamp's only inputs are the batch query error,
 the now-fixed `updateJob` check, and `countRemaining`):
 
@@ -145,6 +145,33 @@ the now-fixed `updateJob` check, and `countRemaining`):
 into a reviewed shipping branch. The cure already exists in-repo: `describeWriteFailure`
 in `app/actions/settings.ts` — presence to detect (`error !== undefined`), substitution
 only to describe.
+
+### What actually happened (2026-08-14, after this doc was written)
+
+The sweep ran — `71aa3d7`…`440ff89`, deployed — and closed the four `settings.ts` writes,
+`getWatchedCompanyKeys`, and `RolesTable`'s reload/optimistic-write path. **It missed four
+sites**, found by re-reading the list above against the code rather than trusting this
+section:
+
+- `lib/ingest-roles.ts:142` — the worst of them. On an empty message the role was pushed
+  to `added` and reported as stored, and the next crawl's dedupe would have skipped it as
+  already seen. Now `describeWriteFailure`; pinned by `lib/ingest-roles.test.ts`.
+- `components/RolesTable.tsx:720` and `components/RecruiterPanel.tsx:123` — both `addJob`
+  writes. Now `describeWriteFailure`. Wiring untestable (no jsdom); the cure is
+  library-pinned.
+- `components/RolesTable.tsx:681` and `components/RecruiterPanel.tsx:59` — reads of
+  `parseJobUrl` / `parseRecruiterText`, whose catch blocks returned `err.message`
+  verbatim. Fixed at the source in `app/actions/parse-role.ts` rather than at the call
+  site: `UNDESCRIBED_DB_ERROR` names the database and would have been the wrong sentence
+  for a Claude failure. Pinned by `app/actions/parse-role.test.ts`.
+
+`scoreFit`'s `error` field has the same shape but no truthiness reader — every caller
+branches on `score > 0`. Left alone.
+
+**Still unaudited:** the wider set of `if (res.error)` reads on `string`-typed errors in
+`Discover.tsx`, `Settings.tsx`, `Watchlist.tsx`, `Insights.tsx`, and `RoleSearchPanel.tsx`.
+Those were never on the list of eight; nobody has checked whether their sources can return
+an empty message.
 
 ## Two lessons worth keeping
 

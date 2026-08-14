@@ -3,6 +3,7 @@ import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
+import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
   normalizeCompanyName,
@@ -139,8 +140,17 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         source,
       });
 
-      if (jobRes.error) {
-        console.error(`ingestRoles: addJob failed for ${company} / ${role.role_title} — ${jobRes.error}`);
+      // describeWriteFailure, not `if (jobRes.error)`. Presence, not
+      // truthiness: an unreachable database rejects with an empty message
+      // (see lib/write-failure.ts), which a truthiness check reads as a
+      // successful insert — the role would then be pushed to `added` and
+      // reported as stored, and the next crawl's dedupe would skip it.
+      const failure = describeWriteFailure(
+        jobRes.error,
+        `store ${company} / ${role.role_title}`
+      );
+      if (failure !== undefined) {
+        console.error(`ingestRoles: ${failure}`);
         return;
       }
 

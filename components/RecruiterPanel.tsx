@@ -4,6 +4,7 @@ import { useState } from "react";
 import { parseRecruiterText, scoreFit } from "@/app/actions/parse-role";
 import { addJob } from "@/app/actions/jobs";
 import { JOB_STATUSES, type JobStatus } from "@/lib/types";
+import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 
 interface Props {
@@ -120,7 +121,11 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
       }),
     ]);
 
-    if (jobRes.error) { setSaving(false); setSaveError(jobRes.error); return; }
+    // describeWriteFailure, not `if (jobRes.error)`. Presence, not truthiness:
+    // an unreachable database rejects with an empty message (lib/write-failure.ts),
+    // and a truthiness check would close this panel as if the role had saved.
+    const failure = describeWriteFailure(jobRes.error, "save this role");
+    if (failure !== undefined) { setSaving(false); setSaveError(failure); return; }
 
     // If we got a fit score, patch it onto the saved job.
     if (jobRes.job && scoreRes.score > 0) {
