@@ -1,6 +1,7 @@
 "use server";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { cacheWriteWarning } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Insights } from "@/lib/types";
 
@@ -60,11 +61,39 @@ export async function analyzePipeline(): Promise<{
     const insights = parseJson<Insights>(raw);
 
     // Persist to cache — delete old, insert new.
-    await supabase.from("insights_cache").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-    await supabase.from("insights_cache").insert({
+    //
+    // Both results were discarded. This is the priciest single call in the app
+    // (a web search plus the entire pipeline as prompt input), and a failed
+    // cache write meant the next visit re-ran all of it silently.
+    //
+    // The delete's failure is reported too, not just the insert's: a delete
+    // that fails followed by an insert that succeeds leaves TWO rows, and
+    // getCachedInsights takes `order by fetched_at desc limit 1`, so the
+    // duplicate is invisible until it accumulates. `.neq("id", <sentinel>)` is
+    // sound here — insights_cache.id is a non-null uuid primary key, so
+    // `id <> '000…'` matches every real row. It is NOT the `<> NULL` bug.
+    const { error: deleteError } = await supabase
+      .from("insights_cache")
+      .delete()
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+    const { error: insertError } = await supabase.from("insights_cache").insert({
       insights,
       fetched_at: new Date().toISOString(),
     });
+
+    const cacheError = insertError ?? deleteError;
+    if (cacheError) {
+      const warning = cacheWriteWarning({
+        produced: "The pipeline analysis finished",
+        table: "insights_cache",
+        error: cacheError.message,
+      });
+      console.error(`analyzePipeline: ${warning}`);
+      // On `error`, alongside the insights: Insights' run() sets the banner and
+      // still renders `res.insights`, so the analysis the user paid for stays
+      // on screen.
+      return { insights, error: warning };
+    }
 
     return { insights };
   } catch (err) {

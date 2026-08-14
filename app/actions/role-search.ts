@@ -1,6 +1,7 @@
 "use server";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
@@ -182,15 +183,19 @@ export async function findRolesByCriteria(
     // Reported, not thrown: the results below were paid for and must still
     // reach the user. The panel keeps them because the result carries a
     // payload (see shouldReplaceRoleView in lib/role-search-cache.ts).
+    // The message moved to lib/cache-write-warning.ts so the three sibling
+    // paths that were discarding this error entirely (roles, discover,
+    // insights) say the same thing, and so the schema command cannot drift
+    // across four copies. Substitution of an empty driver message happens
+    // there, at the point of display.
     let cacheWriteError: string | undefined;
     if (cacheError) {
-      cacheWriteError =
-        `Found ${matches.length} role${matches.length === 1 ? "" : "s"}, but saving them to ` +
-        `the role_searches cache failed — ${cacheError.message}. The results below are live ` +
-        `and were not saved, so the next search re-runs (and re-bills) every query. If the ` +
-        `role_searches table is missing, apply the schema: ` +
-        `DATABASE_URL=... node db/apply-schema.mjs`;
-      console.error(`findRolesByCriteria(${family}): cache write failed — ${cacheError.message}`);
+      cacheWriteError = cacheWriteWarning({
+        produced: `Found ${countPhrase(matches.length, "role")}`,
+        table: "role_searches",
+        error: cacheError.message,
+      });
+      console.error(`findRolesByCriteria(${family}): ${cacheWriteError}`);
     }
 
     // Ingest per company so dedupe, URL verification, and fit scoring run

@@ -1,6 +1,7 @@
 "use server";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
 import { dateContextLine, loadCriteria } from "@/lib/search-criteria";
@@ -106,8 +107,14 @@ export async function discoverStartups(
     const startups = parseJson<Startup[]>(raw);
     const result = Array.isArray(startups) ? startups : [];
 
-    // Persist to Supabase — upsert so re-running refreshes the data.
-    await supabase.from("discovered_startups").upsert(
+    // Persist — upsert so re-running refreshes the data.
+    //
+    // The result was discarded here. Discover's search is billed per web
+    // search and the prompt above deliberately asks for MANY of them ("Do
+    // multiple searches to ensure completeness"), so a failed cache write that
+    // nobody reports means every subsequent Discover click re-bills the whole
+    // set with nothing in the log to say why.
+    const { error: cacheError } = await supabase.from("discovered_startups").upsert(
       {
         date_range: dateRange,
         search_term: searchTerm ?? "",
@@ -116,6 +123,19 @@ export async function discoverStartups(
       },
       { onConflict: "date_range,search_term" }
     );
+
+    // Returned on `error`, unlike findAndSaveRoles' separate `cacheWarning`
+    // key: Discover's run() sets the banner and carries on rendering rather
+    // than returning early, so the results still reach the screen.
+    if (cacheError) {
+      const warning = cacheWriteWarning({
+        produced: `Found ${countPhrase(result.length, "startup")}`,
+        table: "discovered_startups",
+        error: cacheError.message,
+      });
+      console.error(`discoverStartups: ${warning}`);
+      return { startups: result, error: warning };
+    }
 
     return { startups: result };
   } catch (err) {

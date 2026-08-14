@@ -116,6 +116,16 @@ export default function Discover() {
       );
       return;
     }
+    // A cache-write failure is NOT a failed search — the roles were found and
+    // are already ingested into `jobs` — so it does not take the early-return
+    // above. But it does suppress the navigation: /roles unmounts this
+    // component and takes the warning with it, and the warning is about money
+    // being spent again on every future click. The roles are one click away on
+    // the nav; an unread bill is not recoverable.
+    if (res.cacheWarning) {
+      setError(res.cacheWarning);
+      return;
+    }
     router.push("/roles");
   }
 

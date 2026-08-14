@@ -1,7 +1,9 @@
 "use server";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
@@ -35,14 +37,27 @@ export async function getAllSavedRoles(): Promise<{
 export async function findAndSaveRoles(
   startup: Startup,
   force = false
-): Promise<RolesResult & { error?: string; cached?: boolean }> {
+): Promise<RolesResult & { error?: string; cached?: boolean; cacheWarning?: string }> {
   // Return cached result if available and not forcing a refresh.
   if (!force) {
-    const { data } = await supabase
+    const { data, error: cacheReadError } = await supabase
       .from("discovered_roles")
       .select("roles")
       .eq("company", startup.company)
       .maybeSingle();
+
+    // Bound and logged rather than dropped. Falling through to the billed
+    // search is the right BEHAVIOR — a cache that cannot be read cannot be
+    // served — but doing it silently is how an unreachable database turns into
+    // an uncapped web search on every single click with nothing in the log to
+    // explain the bill. See the maxSearches note below: this path sets no
+    // ceiling at all.
+    if (cacheReadError) {
+      console.error(
+        `findAndSaveRoles(${startup.company}): could not read the discovered_roles cache — ` +
+          `${cacheReadError.message || UNDESCRIBED_DB_ERROR}. Falling through to a billed search.`
+      );
+    }
 
     if (data) {
       return { roles: data.roles as Role[], cached: true };
@@ -86,7 +101,14 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
     }
 
     // Persist roles to discovered_roles table.
-    await supabase.from("discovered_roles").upsert(
+    //
+    // The result was discarded here, which made this the most expensive
+    // silence in the app: the web search above is UNCAPPED (no maxSearches),
+    // so every repeat click re-bills the full set. A missing table after a
+    // deploy without `node db/apply-schema.mjs` produced exactly that, with
+    // nothing in the log connecting the two. Same treatment as
+    // findRolesByCriteria's cache write.
+    const { error: cacheError } = await supabase.from("discovered_roles").upsert(
       {
         company: startup.company,
         roles,
@@ -94,6 +116,19 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
       },
       { onConflict: "company" }
     );
+
+    // Reported on its OWN key, not on `error`. Discover's handleFindRoles
+    // treats `error` as "the search failed" and returns early; the roles here
+    // were found, ingested and paid for, so folding this into `error` would
+    // discard a successful result to report a cache miss.
+    const cacheWarning = cacheError
+      ? cacheWriteWarning({
+          produced: `Found ${countPhrase(roles.length, "role")} at ${startup.company}`,
+          table: "discovered_roles",
+          error: cacheError.message,
+        })
+      : undefined;
+    if (cacheWarning) console.error(`findAndSaveRoles: ${cacheWarning}`);
 
     await ingestRoles({
       company: startup.company,
@@ -110,7 +145,7 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
       fitInputs,
     });
 
-    return { roles, message };
+    return { roles, message, cacheWarning };
   } catch (err) {
     console.error("findAndSaveRoles error:", err);
     return {
