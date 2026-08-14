@@ -54,8 +54,9 @@ export const CACHES_TO_CLEAR: Record<SettingKey, string[]> = {
   // The ceiling caps how many queries run. It changes coverage of a FUTURE
   // run, never the correctness of a past one.
   [SETTING_KEYS.searchCeiling]: [],
-  // Reserved by the companion compensation plan; nothing reads it yet, and a
-  // comp floor filters results rather than changing what is searched for.
+  // The comp floor filters results at DISPLAY time rather than changing what
+  // is searched for, so no cached search result is stale because of it. It is
+  // not effect-free, though — see PATHS_TO_REVALIDATE below.
   [SETTING_KEYS.compFloor]: [],
 };
 
@@ -67,6 +68,49 @@ export const CACHES_TO_CLEAR: Record<SettingKey, string[]> = {
  */
 export function cachesToClear(key: SettingKey): string[] {
   return [...CACHES_TO_CLEAR[key]];
+}
+
+/**
+ * Which RENDERED ROUTES a change to each setting invalidates.
+ *
+ * `export const dynamic = "force-dynamic"` on app/roles/page.tsx opts that
+ * route out of the full-route cache, but NOT out of Next 14's client-side
+ * Router Cache: a soft navigation from /settings to /roles serves the
+ * prefetched payload, carrying the OLD floor, for up to `staleTimes.dynamic`
+ * (~30s by default). Save a floor, click through, and the filter ignores it —
+ * then a manual reload fixes it, which is the shape of bug report that costs
+ * an hour to reproduce. `revalidatePath` evicts both caches for the route.
+ *
+ * Only routes that READ a setting DURING RENDER belong here. /settings itself
+ * does not: it re-reads through its own server action after every save, and
+ * listing it would make each save do a redundant round trip. Nothing else in
+ * the app reads a setting at render time — every other page is a client
+ * component that fetches for itself.
+ *
+ * Typed `Record<SettingKey, string[]>` for the same reason CACHES_TO_CLEAR is:
+ * a new setting must be a compile error here, not a silent "revalidates
+ * nothing" that shows up as a stale page nobody can reproduce.
+ */
+export const PATHS_TO_REVALIDATE: Record<SettingKey, string[]> = {
+  [SETTING_KEYS.titles]: [],
+  [SETTING_KEYS.locations]: [],
+  [SETTING_KEYS.stackTerms]: [],
+  [SETTING_KEYS.locationRule]: [],
+  [SETTING_KEYS.fitBrain]: [],
+  [SETTING_KEYS.searchCeiling]: [],
+  // /roles reads the floor in its server component and filters the table by
+  // it. It is the only route in the app that renders a setting.
+  [SETTING_KEYS.compFloor]: ["/roles"],
+};
+
+/**
+ * The routes a save or reset of `key` must revalidate.
+ *
+ * Returns a fresh array, like cachesToClear, so a caller cannot splice the
+ * module-level source of truth for the life of the process.
+ */
+export function pathsToRevalidate(key: SettingKey): string[] {
+  return [...PATHS_TO_REVALIDATE[key]];
 }
 
 /**

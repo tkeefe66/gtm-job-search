@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   COMP_BUCKET_TAGS,
+  bucketPasses,
   passesCompFilters,
   salaryBucketFor,
+  type CompFilters,
   type SalaryBucket,
 } from "./salary-filter";
 
@@ -168,6 +170,52 @@ describe("passesCompFilters", () => {
     const on = { ...OFF, meetsOnly: true };
     expect(passesCompFilters(job(SAMPLE.below), null, on)).toBe(true);
     expect(passesCompFilters(job(SAMPLE.meets), null, on)).toBe(true);
+  });
+});
+
+describe("bucketPasses", () => {
+  // The table bucket-izes each job once and reuses the result for the filter
+  // and the tag; passesCompFilters is the one-shot form. If the two ever
+  // disagree, the rows the table hides stop matching the rows the tested
+  // function says to hide — and only the untested one is on screen.
+  const ALL: SalaryBucket[] = ["meets", "below", "ote", "no-range", "unreadable"];
+  const COMBOS: CompFilters[] = [
+    { meetsOnly: false, hideNoRange: false },
+    { meetsOnly: true, hideNoRange: false },
+    { meetsOnly: false, hideNoRange: true },
+    { meetsOnly: true, hideNoRange: true },
+  ];
+  const SAMPLE: Record<SalaryBucket, string | null> = {
+    meets: "$180,000 - $220,000",
+    below: "$120,000 - $150,000",
+    ote: "$300,000 - $340,000 OTE",
+    "no-range": null,
+    unreadable: "Competitive DOE",
+  };
+
+  test("agrees with passesCompFilters on every bucket and toggle combination", () => {
+    let checked = 0;
+    for (const bucket of ALL) {
+      for (const filters of COMBOS) {
+        expect(bucketPasses(bucket, filters)).toBe(
+          passesCompFilters(job(SAMPLE[bucket]), 200000, filters)
+        );
+        checked++;
+      }
+    }
+    // 5 buckets x 4 combinations. Without this the loop could compare nothing.
+    expect(checked).toBe(20);
+  });
+
+  test("hides exactly the buckets each toggle names", () => {
+    // Asserted against literal values too, not only against agreement: two
+    // functions can agree and both be wrong.
+    expect(bucketPasses("below", { meetsOnly: true, hideNoRange: false })).toBe(false);
+    expect(bucketPasses("ote", { meetsOnly: true, hideNoRange: false })).toBe(true);
+    expect(bucketPasses("no-range", { meetsOnly: false, hideNoRange: true })).toBe(false);
+    expect(bucketPasses("unreadable", { meetsOnly: false, hideNoRange: true })).toBe(false);
+    expect(bucketPasses("ote", { meetsOnly: false, hideNoRange: true })).toBe(true);
+    expect(bucketPasses("meets", { meetsOnly: true, hideNoRange: true })).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@
 import { DEFAULT_CRITERIA, type Criteria } from "@/lib/search-criteria";
 import {
   SETTING_KEYS,
+  UNDESCRIBED_DB_ERROR,
   ceilingFrom,
   compFloorFrom,
   mergeSettings,
@@ -49,7 +50,10 @@ export interface SettingsViewInput {
  */
 export function settingsReadWarning(error: string): string {
   return (
-    `Could not read your saved settings — ${error}. Everything below is the ` +
+    // `|| UNDESCRIBED_DB_ERROR`: an empty message would render a dangling
+    // "settings — ." and tell the user nothing about why.
+    `Could not read your saved settings — ${error || UNDESCRIBED_DB_ERROR}. ` +
+    `Everything below is the ` +
     `shipped default, NOT what you have saved. Do not save from this page ` +
     `until it loads cleanly: saving would overwrite your stored values with ` +
     `the defaults shown here. Reload to try again.`
@@ -65,10 +69,25 @@ export function settingsReadWarning(error: string): string {
  * function exists to end.
  */
 export function buildSettingsView(input: SettingsViewInput): SettingsView {
+  // Presence, not truthiness — see UNDESCRIBED_DB_ERROR in lib/settings-store.
+  // A pg failure with no DATABASE_URL carries an EMPTY message, and `error ? …`
+  // drops the banner entirely: the page then renders the shipped defaults as
+  // the user's saved values, which is precisely the state this warning exists
+  // to prevent them from saving over.
   const problems = [
-    input.settingsError ? settingsReadWarning(input.settingsError) : undefined,
+    input.settingsError !== undefined
+      ? settingsReadWarning(input.settingsError)
+      : undefined,
+    // `countError` needs no such guard: its only producer (countScoredJobs in
+    // app/actions/settings.ts) substitutes UNDESCRIBED_DB_ERROR at the source,
+    // so a present countError is always non-empty.
     input.countError,
-  ].filter((p): p is string => !!p);
+    // `p !== undefined` rather than `!!p`. Both elements above are guaranteed
+    // non-empty-or-undefined today, so this predicate is defensive, not
+    // load-bearing — it is spelled this way so that if either producer ever
+    // stops normalizing, a failure is still reported instead of quietly
+    // filtered out.
+  ].filter((p): p is string => p !== undefined);
 
   return {
     criteria: mergeSettings(DEFAULT_CRITERIA, input.rows),

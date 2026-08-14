@@ -1,17 +1,27 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+// The one module in this file's graph that touches the network. Mocked so the
+// failure channel below can be driven directly — the whole point of that
+// channel is what happens when this call fails, which no fixture can produce.
+vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
+
 import {
   CRITERIA_CHANGED_AT_KEY,
   CRITERIA_CHANGED_AT_SQL,
   LIST_SETTING_KEYS,
   NUMBER_SETTING_KEYS,
   TEXT_SETTING_KEYS,
+  UNDESCRIBED_DB_ERROR,
   ceilingFrom,
   compFloorFrom,
   mergeSettings,
   numberFrom,
+  readAllSettings,
+  readAllSettingsResult,
   SETTING_KEYS,
 } from "./settings-store";
 import { DEFAULT_CRITERIA } from "./search-criteria";
+import { rawQuery } from "@/lib/supabase";
 
 describe("mergeSettings", () => {
   test("returns defaults when no rows are stored", () => {
@@ -207,5 +217,87 @@ describe("setting-key shape partition", () => {
 
   test("the stamp key is in no group — it is not user-editable", () => {
     expect(grouped).not.toContain(CRITERIA_CHANGED_AT_KEY);
+  });
+});
+
+describe("the app_settings read failure channel", () => {
+  const query = vi.mocked(rawQuery);
+
+  beforeEach(() => {
+    query.mockReset();
+  });
+
+  const ok = (rows: unknown[] = []) => ({ data: rows, error: null }) as never;
+  const failed = (message: string) =>
+    ({ data: [], error: { message } }) as never;
+
+  test("a successful read reports no error at all", () => {
+    query.mockResolvedValue(ok([{ key: "titles", value: ["A"] }]));
+    return readAllSettingsResult().then((res) => {
+      expect(res.error).toBeUndefined();
+      expect(res.rows).toEqual([{ key: "titles", value: ["A"] }]);
+    });
+  });
+
+  test("a failure with an EMPTY message still reports the error key", async () => {
+    // pg with no DATABASE_URL rejects with an Error whose message is "". The
+    // error must still be PRESENT: presence is the failure signal, because
+    // `if (error)` on "" is false and would report a hard read failure as a
+    // clean read of zero rows.
+    query.mockResolvedValue(failed(""));
+    const res = await readAllSettingsResult();
+    expect("error" in res).toBe(true);
+    expect(res.error).toBe("");
+
+    // …and a clean read must NOT carry the key, or "presence" means nothing.
+    query.mockResolvedValue(ok());
+    expect("error" in (await readAllSettingsResult())).toBe(false);
+  });
+
+  test("an empty-message failure is still logged and still falls back", async () => {
+    // THE test for the channel. Branching on truthiness instead of presence
+    // makes this failure produce a clean log and an empty row set that every
+    // consumer reads as "no overrides saved" — a wrong page with nothing
+    // anywhere to explain it.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      query.mockResolvedValue(failed(""));
+      const rows = await readAllSettings();
+      expect(rows).toEqual([]);
+      expect(err).toHaveBeenCalledTimes(1);
+      const line = String(err.mock.calls[0][0]);
+      expect(line).toContain("app_settings");
+      // The log must say something about WHY, not trail off into "— .".
+      expect(line).toContain(UNDESCRIBED_DB_ERROR);
+      expect(line).not.toContain("— . ");
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a described failure keeps the driver's own words", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      query.mockResolvedValue(failed("connection terminated unexpectedly"));
+      expect(await readAllSettings()).toEqual([]);
+      const line = String(err.mock.calls[0][0]);
+      expect(line).toContain("connection terminated unexpectedly");
+      // The stand-in is for the undescribed case only; substituting it here
+      // would throw away the one clue a real failure came with.
+      expect(line).not.toContain(UNDESCRIBED_DB_ERROR);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  test("a successful read logs nothing and returns the rows", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      query.mockResolvedValue(ok([{ key: "compFloor", value: 200000 }]));
+      expect(await readAllSettings()).toEqual([{ key: "compFloor", value: 200000 }]);
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
   });
 });

@@ -58,7 +58,18 @@ export function passesCompFilters(
   floor: number | null,
   filters: CompFilters
 ): boolean {
-  const bucket = salaryBucketFor(job, floor);
+  return bucketPasses(salaryBucketFor(job, floor), filters);
+}
+
+/**
+ * The same decision, for a caller that has already computed the bucket.
+ *
+ * Exists so the table can bucket each job ONCE per render and reuse it for
+ * both the filter and the row tag. Bucketing twice re-parses every salary
+ * string twice, and — because parseSalaryRange logs the unreadable case — logs
+ * each unreadable row twice on every keystroke in the search box.
+ */
+export function bucketPasses(bucket: SalaryBucket, filters: CompFilters): boolean {
   if (filters.meetsOnly && bucket === "below") return false;
   if (filters.hideNoRange && (bucket === "no-range" || bucket === "unreadable")) {
     return false;

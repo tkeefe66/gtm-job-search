@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_CRITERIA, DEFAULT_FIT_BRAIN } from "./search-criteria";
 import { buildSettingsView, settingsReadWarning } from "./settings-view";
+import { UNDESCRIBED_DB_ERROR } from "./settings-store";
 
 const CLEAN = {
   rows: [] as { key: string; value: unknown }[],
@@ -102,5 +103,32 @@ describe("settingsReadWarning", () => {
     // "What you see is not yours" and "saving destroys what is stored".
     expect(s).toMatch(/not what you have saved/i);
     expect(s).toMatch(/overwrite/i);
+  });
+
+  test("still explains itself when the driver supplied no message", () => {
+    const s = settingsReadWarning("");
+    expect(s).toContain(UNDESCRIBED_DB_ERROR);
+    expect(s).not.toContain("settings — .");
+    expect(s).toMatch(/overwrite/i);
+  });
+});
+
+describe("an undescribed read failure is still a read failure", () => {
+  // pg with no DATABASE_URL rejects with an EMPTY message, so a truthiness
+  // check drops the banner and the page renders the shipped defaults as the
+  // user's saved values — the exact state the banner exists to stop them
+  // saving over. Presence, not truthiness.
+  test("an empty settingsError still raises the banner", () => {
+    const view = buildSettingsView({ ...CLEAN, settingsError: "" });
+    expect(view.error).toBeDefined();
+    expect(view.error).toContain(UNDESCRIBED_DB_ERROR);
+    expect(view.error).toMatch(/overwrite/i);
+  });
+
+  test("a described error still raises it, and no error still does not", () => {
+    // Pins both sides of the branch, so "always raise the banner" is not a
+    // passing implementation.
+    expect(buildSettingsView({ ...CLEAN, settingsError: "boom" }).error).toContain("boom");
+    expect(buildSettingsView({ ...CLEAN }).error).toBeUndefined();
   });
 });

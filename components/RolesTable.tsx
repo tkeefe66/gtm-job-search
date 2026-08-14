@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
 import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
 import { JOB_STATUSES, ACTIVE_STATUSES, TERMINAL_STATUSES, type Job, type JobStatus } from "@/lib/types";
-import { COMP_BUCKET_TAGS, passesCompFilters, salaryBucketFor } from "@/lib/salary-filter";
+import {
+  COMP_BUCKET_TAGS,
+  bucketPasses,
+  salaryBucketFor,
+  type SalaryBucket,
+} from "@/lib/salary-filter";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -75,6 +80,24 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     return c;
   }, [jobs]);
 
+  /**
+   * Each job's compensation bucket, computed ONCE per (jobs, compFloor) pair.
+   *
+   * The filter below and the row tag both need it, and salaryBucketFor re-parses
+   * the salary string every call — which also re-logs every unreadable range,
+   * on every keystroke in the search box. Memoized here, `filtered` and CompTag
+   * share one result.
+   *
+   * compFloor is a dependency of THIS memo, which is how a floor change reaches
+   * `filtered` (which depends on `bucketOf`). The map fallback keeps a job that
+   * somehow missed the pass classified rather than silently mis-bucketed.
+   */
+  const bucketOf = useMemo(() => {
+    const byId = new Map<string, SalaryBucket>();
+    for (const j of jobs) byId.set(j.id, salaryBucketFor(j, compFloor));
+    return (j: Job): SalaryBucket => byId.get(j.id) ?? salaryBucketFor(j, compFloor);
+  }, [jobs, compFloor]);
+
   const FUNNEL = [
     { label: "New", key: "New", filter: ["New"] as JobStatus[] },
     { label: "Active", key: "Active", filter: ACTIVE_STATUSES },
@@ -98,7 +121,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       } else if (statusFilter === "Out") {
         if (!TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
       } else if (j.status !== statusFilter) return false;
-      if (!passesCompFilters(j, compFloor, { meetsOnly, hideNoRange })) return false;
+      if (!bucketPasses(bucketOf(j), { meetsOnly, hideNoRange })) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
@@ -126,9 +149,13 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     });
 
     return list;
-    // meetsOnly, hideNoRange and compFloor belong here: omitting them leaves a
-    // memo that paints correctly once and then never reacts to a toggle again.
-  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, compFloor]);
+    // meetsOnly, hideNoRange and bucketOf all belong here: omitting any of them
+    // leaves a memo that paints correctly once and then never reacts to a
+    // toggle again. compFloor reaches this list THROUGH bucketOf, which is
+    // memoized on [jobs, compFloor] — a new floor makes a new bucketOf, which
+    // invalidates this memo. Listing compFloor as well would be a dependency
+    // this callback no longer reads.
+  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf]);
 
   async function handleStatus(job: Job, status: JobStatus) {
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
@@ -325,7 +352,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink/40">
-                    <CompTag job={job} floor={compFloor} />
+                    <CompTag bucket={bucketOf(job)} />
                     {job.salary_range && <span>{job.salary_range}</span>}
                     {job.salary_range && job.location && <span>·</span>}
                     {job.location && <span>{job.location}</span>}
@@ -440,9 +467,12 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
  * Names what a row's salary figure is when it is not a comparable base range.
  * "Range unreadable" is deliberately its own label: it is the only surface
  * where a salary-parser gap becomes visible to a human.
+ *
+ * Takes the bucket rather than the job, so it reuses the one `bucketOf`
+ * already computed instead of re-parsing (and re-logging) the salary string.
  */
-function CompTag({ job, floor }: { job: Job; floor: number | null }) {
-  const tag = COMP_BUCKET_TAGS[salaryBucketFor(job, floor)];
+function CompTag({ bucket }: { bucket: SalaryBucket }) {
+  const tag = COMP_BUCKET_TAGS[bucket];
   if (!tag) return null;
   return (
     <span className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50">

@@ -179,6 +179,27 @@ export const readCompFloor = () => readNumberSetting(SETTING_KEYS.compFloor);
  * user's saved values, and the next Save overwrites their stored fit brain
  * with default-derived text. There is no history table to recover it from.
  */
+/**
+ * Stands in for a driver error that arrived with nothing to say.
+ *
+ * With DATABASE_URL unset, pg rejects with an Error whose `message` is the
+ * EMPTY STRING. An empty string is falsy, so every `if (error)` downstream —
+ * including the one in readAllSettings below, and the settings page's own
+ * banner — reads a hard read failure as success with no rows. The whole
+ * failure channel this function exists to provide silently evaporates, and a
+ * build with no database produces a clean log and a permanently wrong page.
+ *
+ * The fix has two halves, and they live in different places on purpose.
+ * DETECTION is presence: every reader branches on `error !== undefined`, never
+ * on truthiness, so an undescribed failure is still a failure. DESCRIPTION is
+ * this constant, substituted where the message is about to be shown or logged.
+ * readAllSettingsResult keeps the driver's message verbatim — including the
+ * empty one — because a transport layer that invents text makes the presence
+ * check untestable, and the presence check is the half that actually matters.
+ */
+export const UNDESCRIBED_DB_ERROR =
+  "the database driver failed without a message (typically an unset or unreachable DATABASE_URL)";
+
 export async function readAllSettingsResult(): Promise<{
   rows: SettingRow[];
   error?: string;
@@ -186,20 +207,25 @@ export async function readAllSettingsResult(): Promise<{
   const { data, error } = await rawQuery<{ key: string; value: unknown }>(
     `select key, value from app_settings`
   );
+  // The message is passed through verbatim, empty string included: the key
+  // being PRESENT is the failure signal. See UNDESCRIBED_DB_ERROR.
   if (error) return { rows: [], error: error.message };
   return { rows: data ?? [] };
 }
 
 export async function readAllSettings(): Promise<SettingRow[]> {
   const { rows, error } = await readAllSettingsResult();
-  if (error) {
+  // Presence, not truthiness — see UNDESCRIBED_DB_ERROR. `if (error)` here
+  // made the "loud in the log" promise below conditional on the driver having
+  // bothered to describe itself.
+  if (error !== undefined) {
     // Deliberately not thrown: the crawler calls this on every run, and an
     // empty title list would make it silently report "no roles" for every
     // tracked company. Falling back to shipped defaults keeps last-known-good
     // behavior. Loud in the log, invisible in behavior.
     console.error(
-      `settings-store: could not read app_settings — ${error}. ` +
-        `Falling back to shipped defaults.`
+      `settings-store: could not read app_settings — ` +
+        `${error || UNDESCRIBED_DB_ERROR}. Falling back to shipped defaults.`
     );
     return [];
   }
@@ -239,8 +265,11 @@ export async function readCriteriaChangedAt(): Promise<string | null> {
     [CRITERIA_CHANGED_AT_KEY]
   );
   if (error) {
+    // `error` is an object here, so the branch is already presence-based; only
+    // the interpolated message needs the empty-string guard.
     console.error(
-      `settings-store: could not read "${CRITERIA_CHANGED_AT_KEY}" — ${error.message}.`
+      `settings-store: could not read "${CRITERIA_CHANGED_AT_KEY}" — ` +
+        `${error.message || UNDESCRIBED_DB_ERROR}.`
     );
     return null;
   }

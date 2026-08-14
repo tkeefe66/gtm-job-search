@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
@@ -16,9 +17,10 @@ import {
   type ScoredJobRow,
 } from "@/lib/rescore-scope";
 import { loadScoringInputs } from "@/lib/search-criteria";
-import { affectsCrawl, cachesToClear } from "@/lib/settings-effects";
+import { affectsCrawl, cachesToClear, pathsToRevalidate } from "@/lib/settings-effects";
 import {
   SETTING_KEYS,
+  UNDESCRIBED_DB_ERROR,
   deleteSetting,
   type ListSettingKey,
   type TextSettingKey,
@@ -58,12 +60,18 @@ async function countScoredJobs(): Promise<{ count: number; error?: string }> {
   // the number shown to the user and the set rescoreAll walks cannot drift.
   const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_COUNT_SQL);
   if (error) {
-    console.error(`settings: could not count scored jobs — ${error.message}`);
+    // `|| UNDESCRIBED_DB_ERROR` for the same reason readAllSettings uses it: pg
+    // with no DATABASE_URL rejects with an EMPTY message, and both the log line
+    // and the user-facing string below would otherwise trail off after the dash
+    // saying nothing. Guaranteeing this is non-empty is also what lets
+    // buildSettingsView treat a present countError as a real problem.
+    const why = error.message || UNDESCRIBED_DB_ERROR;
+    console.error(`settings: could not count scored jobs — ${why}`);
     // Surfaced rather than swallowed: the count is the only thing telling the
     // user how much a rescore will cost, and a silent 0 reads as "nothing to
     // rescore" — the one answer that makes the button look pointless when it
     // is not.
-    return { count: 0, error: `Could not count scored roles — ${error.message}` };
+    return { count: 0, error: `Could not count scored roles — ${why}` };
   }
   return { count: Number(data?.[0]?.n ?? 0) };
 }
@@ -127,6 +135,13 @@ async function applySideEffects(key: SettingKey): Promise<void> {
     if (error) {
       console.error(`settings: could not stamp criteria change — ${error}`);
     }
+  }
+  // Evicts the server AND client caches for any route that renders this
+  // setting. force-dynamic alone leaves Next 14's Router Cache serving a
+  // prefetched /roles with the old floor for ~30s after a save — see
+  // PATHS_TO_REVALIDATE.
+  for (const path of pathsToRevalidate(key)) {
+    revalidatePath(path);
   }
 }
 

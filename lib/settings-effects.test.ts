@@ -2,8 +2,10 @@ import { describe, expect, test } from "vitest";
 import {
   AFFECTS_CRAWL,
   CACHES_TO_CLEAR,
+  PATHS_TO_REVALIDATE,
   affectsCrawl,
   cachesToClear,
+  pathsToRevalidate,
 } from "./settings-effects";
 import { CRITERIA_CHANGED_AT_KEY, SETTING_KEYS, type SettingKey } from "./settings-store";
 
@@ -131,6 +133,54 @@ describe("AFFECTS_CRAWL", () => {
     expect(AFFECTS_CRAWL.length).toBeGreaterThan(0);
     for (const key of AFFECTS_CRAWL) {
       expect(cachesToClear(key).length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("PATHS_TO_REVALIDATE", () => {
+  test("covers every setting key, so no save falls through to 'revalidates nothing'", () => {
+    expect(ALL_KEYS.length).toBeGreaterThan(0);
+    expect(Object.keys(PATHS_TO_REVALIDATE).sort()).toEqual([...ALL_KEYS].sort());
+  });
+
+  test("the comp floor revalidates /roles", () => {
+    // /roles is a force-dynamic server component that READS the floor. Without
+    // this, Next 14's client Router Cache keeps serving a prefetched /roles
+    // carrying the old floor for ~30s after a save — the filter appears to
+    // ignore the setting until a manual reload.
+    expect(pathsToRevalidate(SETTING_KEYS.compFloor)).toEqual(["/roles"]);
+  });
+
+  test("nothing else revalidates anything — no setting but the floor is rendered", () => {
+    // Every other page is a client component that fetches for itself, so a
+    // revalidate would be a wasted round trip on every save.
+    const others = ALL_KEYS.filter((k) => k !== SETTING_KEYS.compFloor);
+    expect(others.length).toBe(ALL_KEYS.length - 1);
+    expect(others.length).toBeGreaterThan(0);
+    for (const key of others) {
+      expect(pathsToRevalidate(key)).toEqual([]);
+    }
+  });
+
+  test("never revalidates /settings — it re-reads through its own action", () => {
+    const allPaths = ALL_KEYS.flatMap((k) => PATHS_TO_REVALIDATE[k]);
+    expect(allPaths.length).toBeGreaterThan(0);
+    expect(allPaths).not.toContain("/settings");
+  });
+
+  test("hands out a fresh array, so a caller cannot splice the source of truth", () => {
+    const first = pathsToRevalidate(SETTING_KEYS.compFloor);
+    first.push("/watchlist");
+    expect(pathsToRevalidate(SETTING_KEYS.compFloor)).toEqual(["/roles"]);
+  });
+
+  test("every path is an absolute route, not a page-file path", () => {
+    // revalidatePath("app/roles/page.tsx") silently matches nothing.
+    const allPaths = ALL_KEYS.flatMap((k) => PATHS_TO_REVALIDATE[k]);
+    expect(allPaths.length).toBeGreaterThan(0);
+    for (const p of allPaths) {
+      expect(p.startsWith("/")).toBe(true);
+      expect(p).not.toMatch(/\.tsx?$/);
     }
   });
 });
