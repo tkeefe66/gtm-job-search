@@ -122,9 +122,16 @@ function parseAshbyBoard(json: unknown): Posting[] | null {
 }
 
 /**
- * Lever answers a missing board with HTTP 200 and `{"ok":false,"error":...}`,
- * so status alone cannot be trusted — verified against a live slug that does
- * not exist. Shape is the only reliable signal: a real board is a JSON ARRAY.
+ * A real Lever board is a JSON ARRAY; a missing one is
+ * `{"ok":false,"error":"Document not found"}` alongside a 404.
+ *
+ * The shape check is not redundant with the status check above it. The status
+ * is what the transport sees; the shape is what protects against a vendor that
+ * returns an error PAYLOAD under a success status, which is not hypothetical —
+ * SmartRecruiters' postings endpoint answers 200 with an empty result envelope
+ * for companies that do not exist, and is excluded from BOARD_VENDORS for
+ * exactly that reason. Two independent gates, cheap, and either one alone has
+ * a documented way to be fooled.
  */
 function parseLeverBoard(json: unknown): Posting[] | null {
   if (!Array.isArray(json)) return null;

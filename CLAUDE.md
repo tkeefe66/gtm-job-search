@@ -123,15 +123,24 @@ re-checks every open role. It costs no Claude tokens.
 Repair resolves a company's board through the vendors' PUBLIC, unauthenticated
 board endpoints (`lib/ats-boards.ts` + `lib/resolve-job-link.ts`) — the
 deliberate, narrow exception to the rule above, permitted for link resolution
-ONLY and never for discovery. Three traps are pinned by tests because each
-silently defeats the obvious implementation: Lever answers a MISSING board with
-HTTP 200 and `{"ok":false}`, so absence is detected by SHAPE and never by
-status; `jobs.ashbyhq.com/<anything>` returns 200 because it is a client-rendered
-SPA, so HTML probing cannot test whether a board exists (a slug probe reported
-16/16 companies resolved when the truth was 4/16 — always probe a
-known-nonexistent input before trusting a hit rate); and hosts are matched on a
-dot boundary in `lib/job-link.ts`, since a substring check reads a ZipRecruiter
-link carrying `?utm_source=lever.co` as the employer's own.
+ONLY and never for discovery. **Every vendor in `BOARD_VENDORS` was
+control-tested with a nonsense slug before being added, and nothing may be
+added without that test** — two candidates failed it. `jobs.ashbyhq.com/<slug>`
+returns 200 for ANY slug because it is a client-rendered SPA (a probe reported
+16/16 companies resolved when the truth was 4/16; Ashby is in the list only
+because its API is honest even though its HTML is not). SmartRecruiters'
+postings endpoint returns 200 with an empty envelope for companies that do not
+exist, and is excluded. Absence is therefore checked TWICE, by status and again
+by response SHAPE, because each gate alone has a documented way to be fooled.
+Workday is excluded for an unrelated reason: its per-tenant site name cannot be
+derived from a company name.
+
+Two more traps are pinned by tests. An EMPTY board is not an absent role —
+Asseti keeps an empty Breezy board while hiring eight roles through Workable —
+so the search continues past one and an empty board can never close anything on
+its own. And hosts are matched on a dot boundary in `lib/job-link.ts`, since a
+substring check reads a ZipRecruiter link carrying `?utm_source=lever.co` as
+the employer's own.
 
 The pass will NOT close a role merely because the employer's board stopped
 listing it, even though that is how most of these actually die. The board is

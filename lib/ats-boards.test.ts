@@ -10,9 +10,12 @@ describe("parseBoard — absence vs emptiness", () => {
     expect(parseBoard("greenhouse", { error: "not found" })).toBeNull();
   });
 
-  test("Lever's soft 404 is caught by SHAPE, not by status", () => {
-    // Verified live: a missing Lever board answers HTTP 200 with this body.
-    // A status-only check would treat it as a real, empty board and stop.
+  test("an error PAYLOAD is not a board, whatever status carried it", () => {
+    // Lever's body for a missing board. It arrives with a 404 today, so the
+    // transport already rejects it — this pins the second gate, which is what
+    // catches a vendor that sends an error payload under a success status.
+    // SmartRecruiters does exactly that (200 + an empty envelope for companies
+    // that do not exist), which is why it is not in BOARD_VENDORS.
     expect(parseBoard("lever", { ok: false, error: "Document not found" })).toBeNull();
     expect(parseBoard("lever", [])).toEqual([]);
   });
