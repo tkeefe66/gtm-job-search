@@ -11,6 +11,7 @@ import {
   type SalaryBucket,
 } from "@/lib/salary-filter";
 import { describeWriteFailure } from "@/lib/write-failure";
+import { roleAge, type RoleAge } from "@/lib/role-age";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -30,8 +31,13 @@ const STATUS_STYLES: Record<string, string> = {
   "Posting Closed": "bg-[#F3F4F6] text-[#9CA3AF]",
 };
 
-type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category" | "arr" | "exit_signal" | "backer";
+type SortKey = "company" | "role_title" | "department" | "location" | "salary_range" | "fit_score" | "status" | "source" | "stage" | "category" | "arr" | "exit_signal" | "backer" | "created_at";
 type SortDir = "asc" | "desc";
+
+// Keys whose FIRST click should read big-to-small. Alphabetical columns want
+// A→Z, but "best fit" and "found most recently" are what you actually mean by
+// clicking Fit or Found — ascending would bury the answer at the bottom.
+const DESC_FIRST: SortKey[] = ["fit_score", "created_at"];
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
@@ -58,6 +64,11 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   // looks exactly as it did before this feature until the user opts in.
   const [meetsOnly, setMeetsOnly] = useState(false);
   const [hideNoRange, setHideNoRange] = useState(false);
+  // Frozen at mount so every row's age is measured against the same instant —
+  // a fresh `new Date()` per row would make a long list drift mid-render, and
+  // re-reading it every render would churn the labels on unrelated state
+  // changes. The page is reloaded far more often than a "3d ago" would tick.
+  const [now] = useState(() => new Date());
 
   /**
    * Refetches the table and reports its own failure. Never throws — a load
@@ -197,7 +208,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
+    else { setSortKey(key); setSortDir(DESC_FIRST.includes(key) ? "desc" : "asc"); }
   }
 
   const filtered = useMemo(() => {
@@ -389,7 +400,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           {/* Sort bar */}
           <div className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50">
             <span>Sort:</span>
-            {([["fit_score", "Fit"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
+            {([["fit_score", "Fit"], ["created_at", "Found"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => toggleSort(key)}
@@ -447,6 +458,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink/40">
+                    <AgeTag age={roleAge(job.created_at, now)} />
                     <CompTag bucket={bucketOf(job)} />
                     {job.salary_range && <span>{job.salary_range}</span>}
                     {job.salary_range && job.location && <span>·</span>}
@@ -508,6 +520,18 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     <Detail label="Fit score">
                       <FitScore score={job.fit_score} onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))} />
                     </Detail>
+                    {(() => {
+                      // Read-only: the stamp is the database's `now()` default,
+                      // not something to hand-edit like the fields above it.
+                      const age = roleAge(job.created_at, now);
+                      if (!age) return null;
+                      return (
+                        <Detail label="Found">
+                          {age.date} · {age.label}
+                          {job.applied_date && ` · applied ${job.applied_date}`}
+                        </Detail>
+                      );
+                    })()}
                     {(job.recruiter_name || job.recruiter_email || job.recruiter_company || job.recruiter_notes) && (
                       <div className="col-span-full rounded-lg border border-[#EDE9FE] bg-[#F5F3FF] p-3">
                         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#5B21B6]">Recruiter</div>
@@ -566,6 +590,21 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
  * Takes the bucket rather than the job, so it reuses the one `bucketOf`
  * already computed instead of re-parsing (and re-logging) the salary string.
  */
+// How long this role has been in the pipeline. Leads the meta line so the ages
+// line up in a column down the list — that vertical scan is the whole point,
+// and it would be lost behind a variable-width salary or location.
+function AgeTag({ age }: { age: RoleAge | null }) {
+  if (!age) return null;
+  return (
+    <span
+      title={age.title}
+      className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50"
+    >
+      {age.label}
+    </span>
+  );
+}
+
 function CompTag({ bucket }: { bucket: SalaryBucket }) {
   const tag = COMP_BUCKET_TAGS[bucket];
   if (!tag) return null;
