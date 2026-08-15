@@ -12,6 +12,7 @@ import {
 } from "@/lib/salary-filter";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { roleAge, type RoleAge } from "@/lib/role-age";
+import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/lib/bulk-status";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -69,6 +70,10 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   // re-reading it every render would churn the labels on unrelated state
   // changes. The page is reloaded far more often than a "3d ago" would tick.
   const [now] = useState(() => new Date());
+  // Ids, not rows: the rows are replaced wholesale by every load() and by every
+  // optimistic edit, so holding objects here would pin stale copies.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [applying, setApplying] = useState(false);
 
   /**
    * Refetches the table and reports its own failure. Never throws — a load
@@ -258,10 +263,78 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     // this callback no longer reads.
   }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf]);
 
+  // Counted against what is ON SCREEN, so narrowing the filter with rows ticked
+  // shrinks the count instead of promising to write rows that scrolled out of
+  // existence. The Set keeps the hidden ids, so widening it again restores them.
+  const selectedCount = selectionInView(filtered, selected).length;
+
   async function handleStatus(job: Job, status: JobStatus) {
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
     await commitWrite(`move ${job.company} to "${status}"`, () =>
       updateJob(job.id, { status })
+    );
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  /**
+   * Moves every selected row that is currently on screen to `status`.
+   *
+   * Its own path rather than a loop over commitWrite: that helper reloads the
+   * whole table and rewrites the banner per call, so N failing rows would mean
+   * N reloads and one surviving sentence out of N identical ones. Here the
+   * batch fails once, reloads once, and says once how much of it landed.
+   */
+  async function handleBulkStatus(status: JobStatus) {
+    const targets = selectionInView(filtered, selected);
+    if (targets.length === 0) return;
+    const ids = new Set(targets.map((j) => j.id));
+
+    setApplying(true);
+    setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, status } : j)));
+
+    let results: BulkWriteResult[];
+    try {
+      results = await Promise.all(
+        targets.map(async (j): Promise<BulkWriteResult> => {
+          try {
+            return { id: j.id, error: (await updateJob(j.id, { status })).error };
+          } catch (err) {
+            // Normalized into the same shape as a returned error rather than
+            // described here: a rejection carries an empty message for exactly
+            // the same reason a returned one does, and summarizeBulkStatus is
+            // the single place that decides what an empty message reads as.
+            return { id: j.id, error: err instanceof Error ? err.message : String(err) };
+          }
+        })
+      );
+    } finally {
+      setApplying(false);
+    }
+
+    const failure = summarizeBulkStatus(results, status);
+    if (failure === null) {
+      setSelected(new Set());
+      return;
+    }
+    console.error(`RolesTable: ${failure.message}`);
+    // The rows that failed stay ticked so the retry is one click, and the ones
+    // that saved drop out so a retry cannot re-write them.
+    setSelected(new Set(failure.failedIds));
+
+    const reloadFailure = await load();
+    setError(
+      reloadFailure === null
+        ? `${failure.message}. The table has been reloaded, so what you see now is what is actually stored.`
+        : `${failure.message}. Reloading the table failed too (${reloadFailure}), so the rows below ` +
+          `are NOT reliable — they may be neither what you just changed nor what is stored. ` +
+          `Reload the page once the database is reachable.`
     );
   }
 
@@ -397,18 +470,63 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
       {!loading && filtered.length > 0 && (
         <div className="rounded-lg border border-slate bg-white">
-          {/* Sort bar */}
+          {/* Sort bar — becomes the bulk bar as soon as anything is ticked, so
+              the two never compete for the same strip of screen. */}
           <div className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50">
-            <span>Sort:</span>
-            {([["fit_score", "Fit"], ["created_at", "Found"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => toggleSort(key)}
-                className={`rounded px-2 py-0.5 transition ${sortKey === key ? "bg-ink text-white" : "hover:bg-slate"}`}
-              >
-                {label} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
-              </button>
-            ))}
+            <input
+              type="checkbox"
+              checked={selectedCount > 0 && selectedCount === filtered.length}
+              onChange={() =>
+                setSelected(
+                  selectedCount === filtered.length ? new Set() : new Set(filtered.map((j) => j.id))
+                )
+              }
+              aria-label={`Select all ${filtered.length} roles shown`}
+              title={`Select all ${filtered.length} roles shown`}
+              className="mr-2 h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
+            />
+            {selectedCount === 0 ? (
+              <>
+                <span>Sort:</span>
+                {([["fit_score", "Fit"], ["created_at", "Found"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => toggleSort(key)}
+                    className={`rounded px-2 py-0.5 transition ${sortKey === key ? "bg-ink text-white" : "hover:bg-slate"}`}
+                  >
+                    {label} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-ink">{selectedCount} selected</span>
+                <select
+                  // Resets to the placeholder after every pick so choosing the
+                  // same status twice in a row still fires an onChange.
+                  value=""
+                  disabled={applying}
+                  onChange={(e) => {
+                    const next = e.target.value as JobStatus | "";
+                    e.target.value = "";
+                    if (next) void handleBulkStatus(next);
+                  }}
+                  className="ml-2 rounded border border-slate bg-white px-2 py-1 text-xs text-ink disabled:opacity-50"
+                >
+                  <option value="">Set status…</option>
+                  {JOB_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setSelected(new Set())}
+                  className="rounded px-2 py-0.5 transition hover:bg-slate"
+                >
+                  Clear
+                </button>
+                {applying && <Spinner label={`Saving ${selectedCount}…`} />}
+              </>
+            )}
           </div>
 
           {filtered.map((job, idx) => (
@@ -418,6 +536,16 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                 className={`flex cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-canvas ${expandedId === job.id ? "bg-canvas" : ""}`}
                 onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}
               >
+                {/* stopPropagation: ticking a row must not also expand it. */}
+                <input
+                  type="checkbox"
+                  checked={selected.has(job.id)}
+                  onChange={() => toggleSelected(job.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Select ${job.company} — ${job.role_title}`}
+                  className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
+                />
+
                 {/* Fit score circle */}
                 <div
                   className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
