@@ -14,6 +14,7 @@ import { describeWriteFailure } from "@/lib/write-failure";
 import { roleAge, type RoleAge } from "@/lib/role-age";
 import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/lib/bulk-status";
 import { classifyJobLink, hostOf } from "@/lib/job-link";
+import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
@@ -273,9 +274,12 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   const selectedCount = selectionInView(filtered, selected).length;
 
   async function handleStatus(job: Job, status: JobStatus) {
-    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status } : j)));
+    // appliedDatePatch, not a bare { status }: the column is rendered below and
+    // was written by nothing until this call site started sending it.
+    const patch = { status, ...appliedDatePatch(status, job.applied_date, todayStamp()) };
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, ...patch } : j)));
     await commitWrite(`move ${job.company} to "${status}"`, () =>
-      updateJob(job.id, { status })
+      updateJob(job.id, patch)
     );
   }
 
@@ -329,14 +333,22 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     const ids = new Set(targets.map((j) => j.id));
 
     setApplying(true);
-    setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, status } : j)));
+    // Per row, not once for the batch: the stamp depends on each job's existing
+    // applied_date, so a selection mixing already-applied rows with fresh ones
+    // must keep the old dates and stamp only the fresh.
+    const today = todayStamp();
+    const patchFor = (j: Job) => ({
+      status,
+      ...appliedDatePatch(status, j.applied_date, today),
+    });
+    setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patchFor(j) } : j)));
 
     let results: BulkWriteResult[];
     try {
       results = await Promise.all(
         targets.map(async (j): Promise<BulkWriteResult> => {
           try {
-            return { id: j.id, error: (await updateJob(j.id, { status })).error };
+            return { id: j.id, error: (await updateJob(j.id, patchFor(j))).error };
           } catch (err) {
             // Normalized into the same shape as a returned error rather than
             // described here: a rejection carries an empty message for exactly

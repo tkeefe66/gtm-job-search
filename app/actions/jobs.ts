@@ -32,25 +32,12 @@ export async function addJob(
   return { job: data as Job };
 }
 
-export async function updateJobStatus(
-  id: string,
-  status: JobStatus
-): Promise<{ error?: string }> {
-  const patch: Record<string, unknown> = {
-    status,
-    updated_at: new Date().toISOString(),
-  };
-  if (status === "Applied") {
-    patch.applied_date = new Date().toISOString().slice(0, 10);
-  }
-
-  const { error } = await supabase.from("jobs").update(patch).eq("id", id);
-  if (error) {
-    console.error("updateJobStatus error:", error);
-    return { error: error.message };
-  }
-  return {};
-}
+// `updateJobStatus` was deleted here. It stamped applied_date and had ZERO
+// callers — every status write goes through `updateJob` below — so the column
+// rendered blank on every row forever. The rule now lives in
+// lib/applied-date.ts, where it is pure and tested, and callers spread it into
+// their patch. It also no longer overwrites an existing date, which the dead
+// version did unconditionally.
 
 export async function updateJob(
   id: string,
