@@ -43,10 +43,20 @@ intent, but you should know what it is merging.
 
 ## In the browser (`npm run dev`)
 
-**3. Company mode still works, and still defaults to `7d`.**
+**3. ~~Company mode still works, and still defaults to `7d`.~~ SUPERSEDED 2026-08-14 —
+this check can no longer be run as written.**
 The plan text says the default becomes `6–18 mo`; that is stale — you chose to keep
-`7d`. Run a `6–18 mo` search against a cold cache and confirm the window-filter chip
-row appears with two or more real ranges. *Loud if broken.*
+`7d`. ~~Run a `6–18 mo` search against a cold cache and confirm the window-filter chip
+row appears with two or more real ranges.~~
+
+There is no longer a default at all, and `6–18 mo` is no longer fetchable. Company mode
+now shows two fixed buttons — `Discover 7 days` and `Discover 30 days` — and the chip row
+is purely a filter over already-loaded results (`FETCHABLE_RANGES` vs `PINNED_CHIPS` in
+`lib/discovery-windows.ts`, whose invariants are pinned by tests). `6m` and `6-18m` are
+legacy: their cached results stay visible and filterable, but no control can fetch them.
+
+The equivalent check, verified live at `dcc8fbe`: both buttons render, and selecting a
+chip filters the list without changing either button's label.
 
 **4. Role mode → `Titles` → Search roles — and watch the server log, not the screen.**
 Two lines matter:
