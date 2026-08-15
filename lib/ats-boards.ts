@@ -16,7 +16,28 @@ export interface Posting {
   url: string;
 }
 
-export type BoardVendor = "greenhouse" | "ashby" | "lever";
+/**
+ * Every vendor here was CONTROL-TESTED with a nonsense slug and confirmed to
+ * report absence rather than 200. Never add one without running that test:
+ * `jobs.ashbyhq.com/<anything>` returns 200 because it is a client-rendered
+ * SPA, and SmartRecruiters' postings endpoint returns 200 with an empty
+ * envelope for companies that do not exist — either would turn this into a
+ * machine that "finds" a board for every company on earth.
+ *
+ * (Ashby is present because its API is honest; only its HTML lies.
+ * SmartRecruiters is absent: its only honest endpoint is a separate
+ * company-profile call, and no company in this pipeline uses it. Workday needs
+ * a per-tenant site name that cannot be derived from the company name.)
+ */
+export type BoardVendor = "greenhouse" | "ashby" | "lever" | "workable" | "breezy";
+
+export const BOARD_VENDORS: BoardVendor[] = [
+  "greenhouse",
+  "ashby",
+  "lever",
+  "workable",
+  "breezy",
+];
 
 export function boardApiUrl(vendor: BoardVendor, slug: string): string {
   switch (vendor) {
@@ -26,6 +47,10 @@ export function boardApiUrl(vendor: BoardVendor, slug: string): string {
       return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
     case "lever":
       return `https://api.lever.co/v0/postings/${slug}?mode=json`;
+    case "workable":
+      return `https://apply.workable.com/api/v1/widget/accounts/${slug}?details=true`;
+    case "breezy":
+      return `https://${slug}.breezy.hr/json`;
   }
 }
 
@@ -38,6 +63,10 @@ export function boardPageUrl(vendor: BoardVendor, slug: string): string {
       return `https://jobs.ashbyhq.com/${slug}`;
     case "lever":
       return `https://jobs.lever.co/${slug}`;
+    case "workable":
+      return `https://apply.workable.com/${slug}/`;
+    case "breezy":
+      return `https://${slug}.breezy.hr/`;
   }
 }
 
@@ -55,7 +84,24 @@ export function parseBoard(vendor: BoardVendor, json: unknown): Posting[] | null
       return parseAshbyBoard(json);
     case "lever":
       return parseLeverBoard(json);
+    case "workable":
+      return parseWorkableBoard(json);
+    case "breezy":
+      return parseBreezyBoard(json);
   }
+}
+
+function parseWorkableBoard(json: unknown): Posting[] | null {
+  const jobs = (json as { jobs?: unknown })?.jobs;
+  if (!Array.isArray(jobs)) return null;
+  // `url` is the public posting; `shortlink` is the apply form. Either lands
+  // the user on the employer's page, but url is the one to read first.
+  return postings(jobs, (j) => [j.title, j.url ?? j.shortlink]);
+}
+
+function parseBreezyBoard(json: unknown): Posting[] | null {
+  if (!Array.isArray(json)) return null;
+  return postings(json, (j) => [j.name, j.url]);
 }
 
 function parseGreenhouseBoard(json: unknown): Posting[] | null {
@@ -108,7 +154,15 @@ function postings(
 export type PostingMatch =
   | { kind: "posting"; posting: Posting }
   | { kind: "ambiguous" }
-  | { kind: "absent" };
+  | { kind: "absent" }
+  /**
+   * A real board carrying no postings at all. NOT the same as `absent`: a
+   * company can keep a stale, empty board on one vendor while hiring through
+   * another — Asseti has an empty Breezy board AND a Workable board with eight
+   * open roles. Treating empty as absence would close live roles on the
+   * strength of an abandoned board, so the caller keeps looking instead.
+   */
+  | { kind: "empty" };
 
 /**
  * Locates a role on a board we already know exists.
@@ -120,11 +174,14 @@ export type PostingMatch =
  * cannot tell us which is meant, and sending the user to the wrong job — or
  * worse, CLOSING a live role on that basis — is the failure to avoid.
  *
- * An empty board is `absent`, not ambiguous: the company has no open roles at
- * all, so this one is definitively not among them (the Invoca case — its board
- * held nothing but a "join our talent community" placeholder).
+ * An empty board is its own outcome — see `empty` above. A board with even one
+ * posting on it is live enough to trust, which is what makes the Invoca case
+ * `absent`: its board carried a "join our talent community" entry and nothing
+ * else, so the role really is gone.
  */
 export function findPosting(postings: Posting[], roleTitle: string): PostingMatch {
+  if (postings.length === 0) return { kind: "empty" };
+
   const want = normalizeTitle(roleTitle);
   // No title to match on is a question we cannot answer, and answering
   // "absent" would close the role.

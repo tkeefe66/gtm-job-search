@@ -59,6 +59,32 @@ describe("parseBoard — vendor shapes", () => {
     ).toEqual([{ title: "RevOps Lead", url: "https://jobs.lever.co/atlan/1" }]);
   });
 
+  test("workable uses title + url, falling back to shortlink", () => {
+    expect(
+      parseBoard("workable", {
+        name: "Actionstep",
+        jobs: [
+          { title: "Account Executive", url: "https://apply.workable.com/j/70F75EA6A8" },
+          { title: "Finance Manager", shortlink: "https://apply.workable.com/j/AF7E2AAF6C" },
+        ],
+      })
+    ).toEqual([
+      { title: "Account Executive", url: "https://apply.workable.com/j/70F75EA6A8" },
+      { title: "Finance Manager", url: "https://apply.workable.com/j/AF7E2AAF6C" },
+    ]);
+  });
+
+  test("breezy is a bare array using name + url", () => {
+    expect(
+      parseBoard("breezy", [
+        { name: "Business Development Representative", url: "https://assignar.breezy.hr/p/7ff0" },
+      ])
+    ).toEqual([
+      { title: "Business Development Representative", url: "https://assignar.breezy.hr/p/7ff0" },
+    ]);
+    expect(parseBoard("breezy", { jobs: [] })).toBeNull();
+  });
+
   test("entries missing a title or a URL are skipped, not half-built", () => {
     expect(
       parseBoard("greenhouse", {
@@ -124,10 +150,18 @@ describe("findPosting", () => {
     expect(findPosting(board, "Chief Financial Officer")).toEqual({ kind: "absent" });
   });
 
-  test("a board with no postings at all is absent, not ambiguous", () => {
-    // The live Invoca case: its board held nothing but a talent-community
-    // placeholder, which is a definitive answer that this role is gone.
-    expect(findPosting([], "Head of Revenue Operations")).toEqual({ kind: "absent" });
+  test("a board with no postings at all is EMPTY, never absent", () => {
+    // Asseti keeps an empty Breezy board while hiring eight roles through
+    // Workable. Calling this absent would close live roles on the strength of
+    // an abandoned board, so the caller keeps probing other vendors instead.
+    expect(findPosting([], "Head of Revenue Operations")).toEqual({ kind: "empty" });
+  });
+
+  test("one posting is enough to make the board trustworthy", () => {
+    // The live Invoca case: its board carried a lone "join our talent
+    // community" entry and nothing else, which IS a definitive answer.
+    const placeholder = [{ title: "Join Our Talent Community", url: "https://x.com/tc" }];
+    expect(findPosting(placeholder, "Sr. GTM AI Architect")).toEqual({ kind: "absent" });
   });
 
   test("an empty title is ambiguous, never absent", () => {

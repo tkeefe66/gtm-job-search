@@ -1,10 +1,5 @@
-import {
-  boardApiUrl,
-  boardPageUrl,
-  findPosting,
-  parseBoard,
-  type BoardVendor,
-} from "./ats-boards";
+import { BOARD_VENDORS, boardApiUrl, boardPageUrl, findPosting, parseBoard } from "./ats-boards";
+import type { BoardVendor } from "./ats-boards";
 import { companySlugs } from "./job-link";
 
 /**
@@ -22,7 +17,6 @@ import { companySlugs } from "./job-link";
  */
 
 const TIMEOUT_MS = 8000;
-const VENDORS: BoardVendor[] = ["greenhouse", "ashby", "lever"];
 
 export interface ResolvedLink {
   url: string;
@@ -46,20 +40,30 @@ export async function resolveEmployerLink(
   company: string,
   roleTitle: string
 ): Promise<ResolvedLink | null> {
+  // An empty board found early must not end the search: a company can leave a
+  // stale, empty board on one vendor while hiring through another (Asseti has
+  // an empty Breezy board and eight open roles on Workable). Held aside, used
+  // only if nothing better turns up, and downgraded to `ambiguous` so it can
+  // never close a role on its own.
+  let emptyBoard: ResolvedLink | null = null;
+
   for (const slug of companySlugs(company)) {
-    for (const vendor of VENDORS) {
+    for (const vendor of BOARD_VENDORS) {
       const postings = await fetchBoard(vendor, slug);
-      // null means "no such board" — keep probing. [] means a real board with
-      // nothing on it, which is an answer: stop and report board-level.
+      // null means "no such board" — keep probing.
       if (postings === null) continue;
 
       const match = findPosting(postings, roleTitle);
+      if (match.kind === "empty") {
+        emptyBoard ??= { url: boardPageUrl(vendor, slug), vendor, slug, precision: "ambiguous" };
+        continue;
+      }
       return match.kind === "posting"
         ? { url: match.posting.url, vendor, slug, precision: "posting" }
         : { url: boardPageUrl(vendor, slug), vendor, slug, precision: match.kind };
     }
   }
-  return null;
+  return emptyBoard;
 }
 
 async function fetchBoard(vendor: BoardVendor, slug: string) {
