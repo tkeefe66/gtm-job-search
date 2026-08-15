@@ -104,8 +104,41 @@ from the stripped text with a non-search Claude call; if `lib/page-extract.ts`
 detects a JS-rendered ATS shell it falls back to the `web_search` path. The tier
 that worked is remembered in `crawl_method`. `app/api/cron/crawl/route.ts` — the
 app's only API route, guarded by `CRON_SECRET` — crawls up to 10 due companies
-per call and is invoked daily by the Railway `crawler` cron service. ATS vendor
-APIs and job aggregator APIs are deliberately not used.
+per call and is invoked daily by the Railway `crawler` cron service. **Roles are
+never DISCOVERED through ATS vendor or job-aggregator APIs** — the HTML path
+works on any careers page, including custom ones and vendors nobody integrated,
+and that generality is the point. Link REPAIR is the one narrow exception; see
+below.
+
+**Job links rot, and half of them were second-hand.** `checkJobUrl`
+(`lib/verify-url.ts`) ran once at ingest and nothing looked again, so closed
+postings sat in the table reading "New" indefinitely. Separately, the extraction
+schema asked only for `job_url` with no preference, so the model returned
+whatever the search engine ranked — 29 of 61 rows were ZipRecruiter/Built
+In/Lensa links, which outlive the posting they copy. Both are now addressed:
+`roleExtractionSchema()` asks for the employer's own application URL, and
+`repairJobLinks()` (`app/actions/link-health.ts`, the "Check links" button)
+re-checks every open role. It costs no Claude tokens.
+
+Repair resolves a company's board through the vendors' PUBLIC, unauthenticated
+board endpoints (`lib/ats-boards.ts` + `lib/resolve-job-link.ts`) — the
+deliberate, narrow exception to the rule above, permitted for link resolution
+ONLY and never for discovery. Three traps are pinned by tests because each
+silently defeats the obvious implementation: Lever answers a MISSING board with
+HTTP 200 and `{"ok":false}`, so absence is detected by SHAPE and never by
+status; `jobs.ashbyhq.com/<anything>` returns 200 because it is a client-rendered
+SPA, so HTML probing cannot test whether a board exists (a slug probe reported
+16/16 companies resolved when the truth was 4/16 — always probe a
+known-nonexistent input before trusting a hit rate); and hosts are matched on a
+dot boundary in `lib/job-link.ts`, since a substring check reads a ZipRecruiter
+link carrying `?utm_source=lever.co` as the employer's own.
+
+The pass will NOT close a role merely because the employer's board stopped
+listing it, even though that is how most of these actually die. The board is
+found by GUESSING a slug from the company name, so a collision would close a
+live role against a stranger's board. Those rows are reported and handed to the
+bulk status control for the user to decide. Only a definitive 404/410 closes
+anything, unchanged.
 
 ## History caveat
 
