@@ -6,6 +6,7 @@ const daysAgo = (n: number, hours = 0) =>
   new Date(NOW.getTime() - n * 86_400_000 - hours * 3_600_000).toISOString();
 
 const label = (iso: string | null | undefined) => roleAge(iso, NOW)?.label;
+const age = (iso: string | null | undefined) => roleAge(iso, NOW)?.age;
 
 describe("roleAge label", () => {
   test("same day reads as today", () => {
@@ -45,6 +46,32 @@ describe("roleAge label", () => {
   });
 });
 
+describe("roleAge compact age", () => {
+  test("drops the 'ago' and spells yesterday as a day, for the row pill", () => {
+    expect(age(daysAgo(0))).toBe("today");
+    expect(age(daysAgo(1))).toBe("1d");
+    expect(age(daysAgo(30))).toBe("4w");
+    expect(age(daysAgo(200))).toBe("6mo");
+    expect(age(daysAgo(400))).toBe("1y");
+  });
+});
+
+describe("roleAge date", () => {
+  test("omits the year within the current year", () => {
+    // Every row would otherwise repeat ", 2026" down the whole list.
+    expect(roleAge("2026-08-03T15:00:00Z", NOW)?.date).toBe("Aug 3");
+  });
+
+  test("keeps the year once it differs from now", () => {
+    expect(roleAge("2025-12-04T15:00:00Z", NOW)?.date).toBe("Dec 4, 2025");
+  });
+
+  test("full always carries the year, whatever date does", () => {
+    expect(roleAge("2026-08-03T15:00:00Z", NOW)?.full).toBe("Aug 3, 2026");
+    expect(roleAge("2025-12-04T15:00:00Z", NOW)?.full).toBe("Dec 4, 2025");
+  });
+});
+
 describe("roleAge absence", () => {
   test("a missing stamp renders nothing", () => {
     expect(roleAge(null, NOW)).toBeNull();
@@ -58,9 +85,7 @@ describe("roleAge absence", () => {
 });
 
 describe("roleAge tooltip", () => {
-  test("carries the absolute date, bare and prefixed", () => {
-    const age = roleAge("2026-08-03T15:00:00Z", NOW);
-    expect(age?.date).toBe("Aug 3, 2026");
-    expect(age?.title).toBe("Found Aug 3, 2026");
+  test("spells out the full date even when the pill abbreviates it", () => {
+    expect(roleAge("2026-08-03T15:00:00Z", NOW)?.title).toBe("Found Aug 3, 2026");
   });
 });

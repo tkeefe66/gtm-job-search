@@ -527,7 +527,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                       if (!age) return null;
                       return (
                         <Detail label="Found">
-                          {age.date} · {age.label}
+                          {age.full} · {age.label}
                           {job.applied_date && ` · applied ${job.applied_date}`}
                         </Detail>
                       );
@@ -590,17 +590,22 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
  * Takes the bucket rather than the job, so it reuses the one `bucketOf`
  * already computed instead of re-parsing (and re-logging) the salary string.
  */
-// How long this role has been in the pipeline. Leads the meta line so the ages
-// line up in a column down the list — that vertical scan is the whole point,
-// and it would be lost behind a variable-width salary or location.
+// When this role was found. Carries BOTH the calendar date and the age: the
+// date is the fact ("was this before or after I talked to them?"), the age is
+// the judgement ("is this stale?"), and neither substitutes for the other at a
+// glance. Leads the meta line so both line up in a column down the list — that
+// vertical scan is the whole point, and it would be lost behind a
+// variable-width salary or location.
 function AgeTag({ age }: { age: RoleAge | null }) {
   if (!age) return null;
   return (
     <span
       title={age.title}
-      className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50"
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50"
     >
-      {age.label}
+      <span className="text-ink/70">{age.date}</span>
+      <span className="text-ink/30">·</span>
+      <span>{age.age}</span>
     </span>
   );
 }

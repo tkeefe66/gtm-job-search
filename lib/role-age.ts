@@ -11,11 +11,20 @@
  * path that somehow skipped the default, simply show no age.
  */
 export interface RoleAge {
-  /** Short relative label, e.g. "today", "3d ago", "2mo ago". */
-  label: string;
-  /** Absolute date on its own, e.g. "Aug 3, 2026". */
+  /**
+   * The calendar date, e.g. "Aug 3". The year is appended ("Dec 4, 2025") ONLY
+   * when it differs from `now`'s — on a list that is mostly weeks old, a
+   * repeated ", 2026" is noise, but an undated December row is genuinely
+   * ambiguous.
+   */
   date: string;
-  /** Absolute date for the tooltip, e.g. "Found Aug 3, 2026". */
+  /** Compact age to sit beside the date in a row, e.g. "today", "3d", "2mo". */
+  age: string;
+  /** Prose relative label for detail views, e.g. "yesterday", "3d ago". */
+  label: string;
+  /** The date with its year always present, e.g. "Aug 3, 2026". */
+  full: string;
+  /** Tooltip text: the unambiguous full date, e.g. "Found Aug 3, 2026". */
   title: string;
   /** Whole days between the stamp and `now`, floored at 0. */
   days: number;
@@ -31,21 +40,37 @@ export function roleAge(createdAt: string | null | undefined, now: Date): RoleAg
 
   // A stamp in the future (clock skew) reads as "today", never "-2d ago".
   const days = Math.max(0, Math.floor((now.getTime() - ms) / DAY_MS));
+  const sameYear = found.getFullYear() === now.getFullYear();
+  const full = fullDate(found);
 
-  const date = absoluteDate(found);
-  return { label: ageLabel(days), date, title: `Found ${date}`, days };
+  return {
+    date: sameYear ? monthDay(found) : full,
+    age: compactAge(days),
+    label: proseAge(days),
+    full,
+    title: `Found ${full}`,
+    days,
+  };
 }
 
-function ageLabel(days: number): string {
+function compactAge(days: number): string {
+  if (days === 0) return "today";
+  if (days < 14) return `${days}d`;
+  if (days < 60) return `${Math.floor(days / 7)}w`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
+}
+
+function proseAge(days: number): string {
   if (days === 0) return "today";
   if (days === 1) return "yesterday";
-  if (days < 14) return `${days}d ago`;
-  if (days < 60) return `${Math.floor(days / 7)}w ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  const years = Math.floor(days / 365);
-  return `${years}y ago`;
+  return `${compactAge(days)} ago`;
 }
 
-function absoluteDate(d: Date): string {
+function monthDay(d: Date): string {
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function fullDate(d: Date): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
