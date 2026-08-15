@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { boardApiUrl, boardPageUrl, matchPosting, parseBoard } from "./ats-boards";
+import { boardApiUrl, boardPageUrl, findPosting, parseBoard } from "./ats-boards";
 
 describe("parseBoard — absence vs emptiness", () => {
   test("a real board with no roles is [], an absent board is null", () => {
@@ -74,43 +74,66 @@ describe("parseBoard — vendor shapes", () => {
   });
 });
 
-describe("matchPosting", () => {
+describe("findPosting", () => {
   const board = [
     { title: "Head of Revenue Operations", url: "https://x.com/1" },
     { title: "GTM Engineer", url: "https://x.com/2" },
     { title: "GTM Engineering Manager", url: "https://x.com/3" },
   ];
+  const url = (t: string, b = board) => {
+    const m = findPosting(b, t);
+    return m.kind === "posting" ? m.posting.url : m.kind;
+  };
 
   test("matches on the title, ignoring case and punctuation", () => {
-    expect(matchPosting(board, "head of revenue operations")?.url).toBe("https://x.com/1");
-    expect(matchPosting(board, "Head of Revenue Operations!")?.url).toBe("https://x.com/1");
+    expect(url("head of revenue operations")).toBe("https://x.com/1");
+    expect(url("Head of Revenue Operations!")).toBe("https://x.com/1");
   });
 
   test("an exact match wins even when others contain the title", () => {
     // "GTM Engineer" is a substring of "GTM Engineering Manager"; the exact
     // hit must not be lost to the ambiguity rule below.
-    expect(matchPosting(board, "GTM Engineer")?.url).toBe("https://x.com/2");
+    expect(url("GTM Engineer")).toBe("https://x.com/2");
   });
 
   test("a longer posting title still matches a shorter stored one", () => {
     const regional = [{ title: "Head of Revenue Operations, EMEA", url: "https://x.com/9" }];
-    expect(matchPosting(regional, "Head of Revenue Operations")?.url).toBe("https://x.com/9");
+    expect(url("Head of Revenue Operations", regional)).toBe("https://x.com/9");
   });
 
-  test("an ambiguous near-match returns nothing rather than guessing", () => {
-    // Two plausible postings: sending the user to the wrong job is worse than
-    // sending them to the board to look.
-    const ambiguous = [
+  test("several candidates are AMBIGUOUS, which never closes a role", () => {
+    // The distinction that matters: ambiguous means "the role may well be
+    // live, we just can't tell which posting it is". Reporting absent here
+    // would close a live role over a wording difference.
+    const many = [
       { title: "GTM Engineer, Platform", url: "https://x.com/4" },
       { title: "GTM Engineer, Growth", url: "https://x.com/5" },
     ];
-    expect(matchPosting(ambiguous, "GTM Engineer")).toBeNull();
+    expect(findPosting(many, "GTM Engineer")).toEqual({ kind: "ambiguous" });
   });
 
-  test("no match at all is null", () => {
-    expect(matchPosting(board, "Chief Financial Officer")).toBeNull();
-    expect(matchPosting([], "Head of Revenue Operations")).toBeNull();
-    expect(matchPosting(board, "  ")).toBeNull();
+  test("duplicate exact titles are ambiguous too", () => {
+    const dupes = [
+      { title: "RevOps Lead", url: "https://x.com/6" },
+      { title: "RevOps Lead", url: "https://x.com/7" },
+    ];
+    expect(findPosting(dupes, "RevOps Lead")).toEqual({ kind: "ambiguous" });
+  });
+
+  test("nothing resembling the title is ABSENT — the only closable outcome", () => {
+    expect(findPosting(board, "Chief Financial Officer")).toEqual({ kind: "absent" });
+  });
+
+  test("a board with no postings at all is absent, not ambiguous", () => {
+    // The live Invoca case: its board held nothing but a talent-community
+    // placeholder, which is a definitive answer that this role is gone.
+    expect(findPosting([], "Head of Revenue Operations")).toEqual({ kind: "absent" });
+  });
+
+  test("an empty title is ambiguous, never absent", () => {
+    // We cannot answer the question, and answering "absent" would close the
+    // role on the strength of having nothing to compare.
+    expect(findPosting(board, "  ")).toEqual({ kind: "ambiguous" });
   });
 });
 

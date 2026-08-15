@@ -117,6 +117,12 @@ export interface Job {
   exit_signal: string | null;
   backer: string | null;
   ic_flag: boolean | null;
+  /**
+   * Where the role was found, when that differs from where it now links.
+   * Set only when job_url is REPLACED with the employer's own posting, so a
+   * relink can always be traced back or undone.
+   */
+  source_url: string | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;

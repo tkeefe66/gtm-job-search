@@ -294,7 +294,8 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         checked: 0,
         relinked: 0,
         closed: 0,
-        probablyClosed: [],
+        closedUnlisted: 0,
+        unclear: [],
         unresolved: 0,
         error: describeWriteFailure(
           err instanceof Error ? err.message : String(err),
@@ -448,11 +449,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     ` Relinked ${linkReport.relinked} to the employer's own posting.`}
                   {linkReport.closed > 0 &&
                     ` Closed ${linkReport.closed} whose posting returned a 404.`}
+                  {linkReport.closedUnlisted > 0 &&
+                    ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
                   {linkReport.unresolved > 0 &&
                     ` ${linkReport.unresolved} still point at a job board we can't see past.`}
                   {linkReport.relinked === 0 &&
                     linkReport.closed === 0 &&
-                    linkReport.probablyClosed.length === 0 &&
+                    linkReport.closedUnlisted === 0 &&
+                    linkReport.unclear.length === 0 &&
                     " Everything checked out."}
                 </>
               )}
@@ -465,29 +469,29 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
             </button>
           </div>
 
-          {linkReport.probablyClosed.length > 0 && (
+          {linkReport.unclear.length > 0 && (
             <div className="mt-3 border-t border-slate pt-3">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <span className="text-ink">
-                  {linkReport.probablyClosed.length} no longer listed on the employer&apos;s own job
-                  board — probably closed.
+                  {linkReport.unclear.length} could be more than one posting on the employer&apos;s
+                  board — check before closing.
                 </span>
-                {/* Not closed automatically: the board is found by guessing a
-                    slug from the company name, so this is evidence, not proof.
-                    Handing the selection to the bulk control keeps the decision
-                    with the user and makes acting on it one click. */}
+                {/* Deliberately not auto-closed: several postings matched the
+                    title, so closing would be a guess at a live role. Handing
+                    the selection to the bulk control keeps the decision with
+                    the user and still makes acting on it one click. */}
                 <button
                   onClick={() => {
-                    setSelected(new Set(linkReport.probablyClosed.map((r) => r.id)));
+                    setSelected(new Set(linkReport.unclear.map((r) => r.id)));
                     setStatusFilter("Open");
                   }}
                   className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
                 >
-                  Select all {linkReport.probablyClosed.length}
+                  Select all {linkReport.unclear.length}
                 </button>
               </div>
               <ul className="space-y-0.5 text-xs text-ink/60">
-                {linkReport.probablyClosed.map((r) => (
+                {linkReport.unclear.map((r) => (
                   <li key={r.id}>
                     {r.company} · {r.role_title} —{" "}
                     <a

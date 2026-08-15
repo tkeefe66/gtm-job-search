@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { crawlCompany, loadRunContext, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
 import { getDueCompanies } from "@/app/actions/watchlist";
+import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
 // typo in the cron command) selects every due company and crawls them all
@@ -104,6 +105,25 @@ export async function GET(req: Request) {
     }
   }
 
+  // Link rot is a daily problem, not a per-crawl one: a posting closes without
+  // anything about its company being due, so this runs on every tick rather
+  // than only when `due` was non-empty. It spends no Claude credits — HTTP
+  // plus the vendors' public board endpoints — which is why it can sit in a
+  // route whose whole design is about rationing paid calls. A dry run skips it
+  // because it writes.
+  let links: LinkRepairReport | null = null;
+  if (!dryRun) {
+    try {
+      links = await repairJobLinks();
+    } catch (err) {
+      // Never aborts the batch: the crawl above is the expensive part and its
+      // results must still be reported.
+      console.error(
+        `cron/crawl: link repair threw — ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   const totals = {
     newRoles: results.reduce((n, r) => n + r.newRoles, 0),
     // needs_url counts as failed too — a batch where every company failed to
@@ -117,7 +137,11 @@ export async function GET(req: Request) {
   // redirected. This is the only durable record of a successful run in the
   // logs a human actually checks.
   console.log(
-    `cron/crawl: dryRun=${dryRun} crawled=${results.length} newRoles=${totals.newRoles} failed=${totals.failed}`
+    `cron/crawl: dryRun=${dryRun} crawled=${results.length} newRoles=${totals.newRoles} failed=${totals.failed}` +
+      (links
+        ? ` links=${links.checked} relinked=${links.relinked} ` +
+          `closed=${links.closed + links.closedUnlisted} unclear=${links.unclear.length}`
+        : "")
   );
 
   return NextResponse.json({
@@ -125,5 +149,6 @@ export async function GET(req: Request) {
     crawled: results.length,
     totals,
     results,
+    links,
   });
 }

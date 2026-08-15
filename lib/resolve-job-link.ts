@@ -1,7 +1,7 @@
 import {
   boardApiUrl,
   boardPageUrl,
-  matchPosting,
+  findPosting,
   parseBoard,
   type BoardVendor,
 } from "./ats-boards";
@@ -29,11 +29,17 @@ export interface ResolvedLink {
   vendor: BoardVendor;
   slug: string;
   /**
-   * `posting` — the exact req, matched by title.
-   * `board` — the company's board exists but this role is not on it, which is
-   * itself a finding: the posting is very likely closed.
+   * `posting` — the exact req, matched by title. `url` is that posting.
+   * `absent` — the board exists and nothing on it resembles this title, so the
+   *   posting is gone. The only outcome a caller may close a role on.
+   * `ambiguous` — the board exists and more than one posting could be this
+   *   role. Reported, never acted on: closing here would kill a live role over
+   *   a wording difference.
+   *
+   * For both non-posting outcomes `url` is the company's board page, which is
+   * still a better destination than a reseller's expired copy.
    */
-  precision: "posting" | "board";
+  precision: "posting" | "absent" | "ambiguous";
 }
 
 export async function resolveEmployerLink(
@@ -47,10 +53,10 @@ export async function resolveEmployerLink(
       // nothing on it, which is an answer: stop and report board-level.
       if (postings === null) continue;
 
-      const hit = matchPosting(postings, roleTitle);
-      return hit
-        ? { url: hit.url, vendor, slug, precision: "posting" }
-        : { url: boardPageUrl(vendor, slug), vendor, slug, precision: "board" };
+      const match = findPosting(postings, roleTitle);
+      return match.kind === "posting"
+        ? { url: match.posting.url, vendor, slug, precision: "posting" }
+        : { url: boardPageUrl(vendor, slug), vendor, slug, precision: match.kind };
     }
   }
   return null;

@@ -101,27 +101,45 @@ function postings(
 }
 
 /**
- * The posting on this board that IS the role we already have, or null.
- *
- * Exact normalized title first. Failing that, a containment match is accepted
- * ONLY when exactly one posting contains the title (or is contained by it) —
- * a board listing both "GTM Engineer" and "GTM Engineering Manager" is
- * ambiguous, and guessing wrong sends the user to the wrong job, which is a
- * worse outcome than sending them to the board and letting them look.
+ * `absent` is the load-bearing one: it is the ONLY outcome that lets a caller
+ * close a role, so it must mean "nothing on this board even resembles the
+ * title", never merely "I couldn't pick between two".
  */
-export function matchPosting(postings: Posting[], roleTitle: string): Posting | null {
+export type PostingMatch =
+  | { kind: "posting"; posting: Posting }
+  | { kind: "ambiguous" }
+  | { kind: "absent" };
+
+/**
+ * Locates a role on a board we already know exists.
+ *
+ * Exact normalized title first, then containment in either direction — a board
+ * saying "Head of Revenue Operations, EMEA" is the same req as a stored "Head
+ * of Revenue Operations". More than one candidate is `ambiguous` rather than a
+ * guess: a board listing both "GTM Engineer" and "GTM Engineering Manager"
+ * cannot tell us which is meant, and sending the user to the wrong job — or
+ * worse, CLOSING a live role on that basis — is the failure to avoid.
+ *
+ * An empty board is `absent`, not ambiguous: the company has no open roles at
+ * all, so this one is definitively not among them (the Invoca case — its board
+ * held nothing but a "join our talent community" placeholder).
+ */
+export function findPosting(postings: Posting[], roleTitle: string): PostingMatch {
   const want = normalizeTitle(roleTitle);
-  if (!want) return null;
+  // No title to match on is a question we cannot answer, and answering
+  // "absent" would close the role.
+  if (!want) return { kind: "ambiguous" };
 
   const exact = postings.filter((p) => normalizeTitle(p.title) === want);
-  if (exact.length === 1) return exact[0];
-  if (exact.length > 1) return null;
+  if (exact.length === 1) return { kind: "posting", posting: exact[0] };
+  if (exact.length > 1) return { kind: "ambiguous" };
 
   const near = postings.filter((p) => {
     const got = normalizeTitle(p.title);
     return got.includes(want) || want.includes(got);
   });
-  return near.length === 1 ? near[0] : null;
+  if (near.length === 1) return { kind: "posting", posting: near[0] };
+  return near.length === 0 ? { kind: "absent" } : { kind: "ambiguous" };
 }
 
 function normalizeTitle(title: string): string {

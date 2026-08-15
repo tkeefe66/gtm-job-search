@@ -19,12 +19,15 @@ import { TERMINAL_STATUSES, type Job } from "@/lib/types";
  * Costs no Claude tokens: HTTP HEADs and the vendors' public board endpoints
  * only. Safe to re-run.
  *
- * What it deliberately does NOT do: close a role because the employer's board
- * no longer lists it. That is strong evidence of closure — and it is how most
- * of the aggregator rows in this pipeline actually died — but the board is
- * found by GUESSING a slug from the company name, so a name collision would
- * close a live role against a stranger's board. Those rows are REPORTED for
- * the user to triage with the bulk status control instead.
+ * A role is closed on either of two definitive signals: its URL returns
+ * 404/410, or the employer's own board lists NOTHING resembling the title.
+ * The second is what actually catches reseller links, which answer 403 rather
+ * than 404 when the posting behind them is gone.
+ *
+ * An AMBIGUOUS board match — several postings could be this role — is reported
+ * and never acted on. Closing a live role over a wording difference is a worse
+ * failure than leaving a dead one open, so the ambiguous case keeps a human in
+ * the loop and the report hands the selection to the bulk status control.
  */
 
 const BATCH = 5;
@@ -42,8 +45,10 @@ export interface LinkRepairReport {
   relinked: number;
   /** Rows whose URL returned a definitive 404/410 and are now closed. */
   closed: number;
-  /** Employer board found, role absent — probably closed, needs a human. */
-  probablyClosed: LinkRepairRow[];
+  /** Rows the employer's own board no longer lists, and are now closed. */
+  closedUnlisted: number;
+  /** Board found but the match was ambiguous — reported, never auto-closed. */
+  unclear: LinkRepairRow[];
   /** Aggregator links we could not improve at all. */
   unresolved: number;
   error?: string;
@@ -54,7 +59,8 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     checked: 0,
     relinked: 0,
     closed: 0,
-    probablyClosed: [],
+    closedUnlisted: 0,
+    unclear: [],
     unresolved: 0,
   };
 
@@ -79,39 +85,44 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       report.checked++;
       if (r.relinked) report.relinked++;
       if (r.closed) report.closed++;
+      if (r.closedUnlisted) report.closedUnlisted++;
       if (r.unresolved) report.unresolved++;
-      if (r.probablyClosed) report.probablyClosed.push(r.probablyClosed);
+      if (r.unclear) report.unclear.push(r.unclear);
     }
   }
 
   console.log(
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
-      `closed ${report.closed}, probably closed ${report.probablyClosed.length}, ` +
-      `unresolved ${report.unresolved}`
+      `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted), ` +
+      `unclear ${report.unclear.length}, unresolved ${report.unresolved}`
   );
   return report;
 }
 
-async function repairOne(job: Job): Promise<{
+interface RepairOutcome {
   relinked?: boolean;
   closed?: boolean;
+  closedUnlisted?: boolean;
   unresolved?: boolean;
-  probablyClosed?: LinkRepairRow;
-}> {
+  unclear?: LinkRepairRow;
+}
+
+async function repairOne(job: Job): Promise<RepairOutcome> {
   const url = job.job_url as string;
-  const out: {
-    relinked?: boolean;
-    closed?: boolean;
-    unresolved?: boolean;
-    probablyClosed?: LinkRepairRow;
-  } = {};
+  const out: RepairOutcome = {};
   let liveUrl = url;
 
   if (classifyJobLink(url) === "aggregator") {
     const resolved = await resolveEmployerLink(job.company, job.role_title);
     if (resolved?.precision === "posting") {
       const failure = describeWriteFailure(
-        (await updateJob(job.id, { job_url: resolved.url })).error,
+        // source_url keeps the link we are about to overwrite, so a relink is
+        // never lossy — the slug is a GUESS, and a wrong one would otherwise
+        // destroy the only URL this role ever had. Written only on the first
+        // relink; a re-run must not overwrite the original with the previous
+        // resolution.
+        (await updateJob(job.id, { job_url: resolved.url, source_url: job.source_url ?? url }))
+          .error,
         `relink ${job.company} / ${job.role_title}`
       );
       if (failure === undefined) {
@@ -120,8 +131,20 @@ async function repairOne(job: Job): Promise<{
       } else {
         console.error(`repairJobLinks: ${failure}`);
       }
+    } else if (resolved?.precision === "absent") {
+      // The employer's own board lists nothing resembling this title. Same
+      // rule the ingest path uses, so a role cannot pass at the door and then
+      // be judged differently a day later.
+      const failure = describeWriteFailure(
+        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        `close ${job.company} / ${job.role_title}`
+      );
+      if (failure === undefined) out.closedUnlisted = true;
+      else console.error(`repairJobLinks: ${failure}`);
     } else if (resolved) {
-      out.probablyClosed = {
+      // `ambiguous`: the board has near-matches and we cannot tell which is
+      // this role. Reported for the user, never closed automatically.
+      out.unclear = {
         id: job.id,
         company: job.company,
         role_title: job.role_title,

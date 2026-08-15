@@ -3,6 +3,8 @@ import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
+import { classifyJobLink } from "@/lib/job-link";
+import { resolveEmployerLink } from "@/lib/resolve-job-link";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -106,10 +108,19 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
     else fresh.push(role);
   }
 
-  const urlStatuses = await Promise.all(fresh.map((r) => checkJobUrl(r.job_url)));
+  // Second-hand links are upgraded BEFORE they are checked, because the check
+  // cannot see past them: a reseller answers 403 to anything that looks like a
+  // bot, so an expired copy of a posting passes as live and the role lands as
+  // "New". Asking the employer's own board instead answers both questions at
+  // once — where the real posting is, and whether it still exists.
+  const links = await Promise.all(fresh.map((r) => upgradeLink(company, r)));
+  const urlStatuses = await Promise.all(links.map((l) => checkJobUrl(l.url)));
+  const unlisted = links.filter((l) => l.unlisted).length;
   console.log(
     `ingestRoles(${company}): ${roles.length} found, ${fresh.length} new, ` +
-      `${urlStatuses.filter((s) => s === "dead").length} dead URLs, source=${source}`
+      `${urlStatuses.filter((s) => s === "dead").length} dead URLs, ` +
+      `${links.filter((l) => l.sourceUrl).length} relinked to the employer, ` +
+      `${unlisted} not on the employer's board, source=${source}`
   );
 
   if (dryRun) {
@@ -120,7 +131,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
 
   await Promise.all(
     fresh.map(async (role, i) => {
-      const isDead = urlStatuses[i] === "dead";
+      // Two independent ways to already be closed: the link 404s, or the
+      // employer's own board does not list the role. The second is what
+      // actually catches reseller links, which rarely 404.
+      const isDead = urlStatuses[i] === "dead" || links[i].unlisted;
 
       const jobRes = await addJob({
         company,
@@ -128,7 +142,8 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         status: isDead ? "Posting Closed" : "New",
         seniority: role.seniority || null,
         location: role.location || null,
-        job_url: role.job_url || null,
+        job_url: links[i].url || null,
+        source_url: links[i].sourceUrl,
         careers_url: ctx.careers_url || null,
         category: ctx.category || null,
         raised: ctx.raised || null,
@@ -182,4 +197,40 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   );
 
   return { added, skipped, seenTitles };
+}
+
+interface UpgradedLink {
+  /** What the role should link to. */
+  url: string;
+  /** The reseller link we replaced, or null when nothing was replaced. */
+  sourceUrl: string | null;
+  /** The employer's board exists and does not list this role. */
+  unlisted: boolean;
+}
+
+/**
+ * Swaps a reseller link for the employer's own posting where one can be found.
+ *
+ * Only aggregator links are looked up — an ATS link or a company domain is
+ * already the employer, and probing boards for those would spend requests to
+ * confirm what we have. Costs no Claude tokens.
+ *
+ * `unlisted` is set only on `absent` (nothing on the board resembles the
+ * title), never on `ambiguous`: closing a live role because two postings had
+ * similar names would be a worse bug than the one this fixes.
+ */
+async function upgradeLink(company: string, role: Role): Promise<UpgradedLink> {
+  const url = role.job_url || "";
+  const plain: UpgradedLink = { url, sourceUrl: null, unlisted: false };
+  if (classifyJobLink(url) !== "aggregator") return plain;
+
+  const resolved = await resolveEmployerLink(company, role.role_title);
+  if (!resolved) return plain;
+  if (resolved.precision === "posting") {
+    return { url: resolved.url, sourceUrl: url, unlisted: false };
+  }
+  // Board-level outcomes keep the original link: the board page is a fine
+  // destination but it is not this role, and overwriting the only record of
+  // where the role was found to point at a directory helps nobody.
+  return { url, sourceUrl: null, unlisted: resolved.precision === "absent" };
 }

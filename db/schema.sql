@@ -85,6 +85,11 @@ create table if not exists insights_cache (
   fetched_at timestamptz default now()
 );
 
+-- Where a role was originally found, kept when job_url is replaced with the
+-- employer's own posting. Without it, relinking is lossy: a wrong slug guess
+-- would overwrite the only link we ever had with no way back.
+alter table jobs add column if not exists source_url text;
+
 -- Tracking: watchlist rows are crawled on a recurring schedule until the user
 -- stops tracking them. Untracking sets tracking_enabled = false rather than
 -- deleting, so crawl history survives and the company does not resurface in
