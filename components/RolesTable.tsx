@@ -453,10 +453,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
                   {linkReport.unresolved > 0 &&
                     ` ${linkReport.unresolved} still point at a job board we can't see past.`}
+                  {/* "Everything checked out" has to mean EVERYTHING, so
+                      unresolved counts too — it sat next to "7 still point at a
+                      job board we can't see past" and contradicted it. */}
                   {linkReport.relinked === 0 &&
                     linkReport.closed === 0 &&
                     linkReport.closedUnlisted === 0 &&
                     linkReport.unclear.length === 0 &&
+                    linkReport.unresolved === 0 &&
                     " Everything checked out."}
                 </>
               )}
