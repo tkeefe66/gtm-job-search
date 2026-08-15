@@ -729,11 +729,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                       {job.category}
                     </span>
                   )}
-                  {job.source === "Recruiter" && (
-                    <span className="inline-flex items-center rounded-full bg-[#EDE9FE] px-2 py-0.5 text-xs font-medium text-[#5B21B6]">
-                      Recruiter
-                    </span>
-                  )}
+                  <ProvenanceBadge source={job.source} />
                   <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
                 </div>
               </div>
@@ -888,6 +884,66 @@ function CompTag({ bucket }: { bucket: SalaryBucket }) {
   return (
     <span className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/50">
       {tag}
+    </span>
+  );
+}
+
+/**
+ * How this role reached the table — NOT where its link points.
+ *
+ * `jobs.source` is stamped once at insert by whichever path found the role and
+ * is never rewritten, so it answers "which feature produced this row". That is
+ * a different question from SourceTag above, which reads the URL host and means
+ * "this link is second-hand". A row can be found by the crawler and still carry
+ * an aggregator link; both chips are then correct and say different things.
+ *
+ * Recruiter keeps a filled badge because a human sent it and that changes how
+ * you treat the row. The machine sources are quiet outlines — they are every
+ * other row, so shouting them would just add noise.
+ */
+const PROVENANCE: Record<string, { label: string; cls: string; title: string }> = {
+  Discover: {
+    label: "Discover",
+    cls: "border-slate bg-canvas text-ink/55",
+    title: "Found by Discover → by company, from funding news.",
+  },
+  "Role Search": {
+    label: "Role search",
+    cls: "border-slate bg-canvas text-ink/55",
+    title: "Found by Discover → by role, searching titles and GTM stack terms.",
+  },
+  Crawl: {
+    label: "Crawl",
+    cls: "border-slate bg-canvas text-ink/55",
+    title: "Found by the watchlist crawler reading the company's careers page.",
+  },
+  Manual: {
+    label: "Manual",
+    cls: "border-slate bg-canvas text-ink/55",
+    title: "You added this role by hand.",
+  },
+  Recruiter: {
+    label: "Recruiter",
+    cls: "border-transparent bg-[#EDE9FE] text-[#5B21B6] font-medium",
+    title: "Came from a recruiter, not from a search.",
+  },
+};
+
+function ProvenanceBadge({ source }: { source: string | null }) {
+  if (!source) return null;
+  // An unrecognised value is shown verbatim rather than swallowed — a new insert
+  // path that forgets to match these strings should be visible, not invisible.
+  const chip = PROVENANCE[source] ?? {
+    label: source,
+    cls: "border-slate bg-canvas text-ink/55",
+    title: `Unrecognised source "${source}".`,
+  };
+  return (
+    <span
+      title={chip.title}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${chip.cls}`}
+    >
+      {chip.label}
     </span>
   );
 }
