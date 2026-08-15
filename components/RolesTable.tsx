@@ -13,6 +13,8 @@ import {
 import { describeWriteFailure } from "@/lib/write-failure";
 import { roleAge, type RoleAge } from "@/lib/role-age";
 import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/lib/bulk-status";
+import { classifyJobLink, hostOf } from "@/lib/job-link";
+import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { Spinner } from "./ui";
 import RecruiterPanel from "./RecruiterPanel";
 
@@ -74,6 +76,8 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   // optimistic edit, so holding objects here would pin stale copies.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
+  const [checkingLinks, setCheckingLinks] = useState(false);
+  const [linkReport, setLinkReport] = useState<LinkRepairReport | null>(null);
 
   /**
    * Refetches the table and reports its own failure. Never throws — a load
@@ -275,6 +279,33 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     );
   }
 
+  async function handleCheckLinks() {
+    setCheckingLinks(true);
+    setLinkReport(null);
+    try {
+      const report = await repairJobLinks();
+      setLinkReport(report);
+      // Reload regardless of what changed: the pass may have relinked or closed
+      // rows, and the table would otherwise keep showing the links it just
+      // replaced.
+      if (report.error === undefined) await load();
+    } catch (err) {
+      setLinkReport({
+        checked: 0,
+        relinked: 0,
+        closed: 0,
+        probablyClosed: [],
+        unresolved: 0,
+        error: describeWriteFailure(
+          err instanceof Error ? err.message : String(err),
+          "check your role links"
+        ),
+      });
+    } finally {
+      setCheckingLinks(false);
+    }
+  }
+
   function toggleSelected(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -376,6 +407,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         </div>
         <div className="flex gap-2">
           <button
+            onClick={() => void handleCheckLinks()}
+            disabled={checkingLinks}
+            title="Re-check every open role's link, replace reseller links with the employer's own, and close postings that are gone"
+            className="rounded-md border border-slate px-4 py-2 text-sm font-medium text-ink/70 transition hover:border-ink hover:text-ink disabled:opacity-50"
+          >
+            {checkingLinks ? "Checking links…" : "Check links"}
+          </button>
+          <button
             onClick={() => setShowRecruiter(true)}
             className="rounded-md border border-ink px-4 py-2 text-sm font-medium transition hover:bg-ink hover:text-white"
           >
@@ -389,6 +428,83 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           </button>
         </div>
       </div>
+
+      {linkReport && (
+        <div
+          className={`mb-6 rounded-lg border p-4 text-sm ${
+            linkReport.error
+              ? "border-[#FECACA] bg-[#FEF2F2] text-[#991B1B]"
+              : "border-slate bg-canvas text-ink/70"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              {linkReport.error ? (
+                linkReport.error
+              ) : (
+                <>
+                  Checked {linkReport.checked} open {linkReport.checked === 1 ? "role" : "roles"}.
+                  {linkReport.relinked > 0 &&
+                    ` Relinked ${linkReport.relinked} to the employer's own posting.`}
+                  {linkReport.closed > 0 &&
+                    ` Closed ${linkReport.closed} whose posting returned a 404.`}
+                  {linkReport.unresolved > 0 &&
+                    ` ${linkReport.unresolved} still point at a job board we can't see past.`}
+                  {linkReport.relinked === 0 &&
+                    linkReport.closed === 0 &&
+                    linkReport.probablyClosed.length === 0 &&
+                    " Everything checked out."}
+                </>
+              )}
+            </div>
+            <button
+              onClick={() => setLinkReport(null)}
+              className="shrink-0 rounded px-2 py-0.5 text-xs text-ink/40 transition hover:bg-slate hover:text-ink"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {linkReport.probablyClosed.length > 0 && (
+            <div className="mt-3 border-t border-slate pt-3">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-ink">
+                  {linkReport.probablyClosed.length} no longer listed on the employer&apos;s own job
+                  board — probably closed.
+                </span>
+                {/* Not closed automatically: the board is found by guessing a
+                    slug from the company name, so this is evidence, not proof.
+                    Handing the selection to the bulk control keeps the decision
+                    with the user and makes acting on it one click. */}
+                <button
+                  onClick={() => {
+                    setSelected(new Set(linkReport.probablyClosed.map((r) => r.id)));
+                    setStatusFilter("Open");
+                  }}
+                  className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
+                >
+                  Select all {linkReport.probablyClosed.length}
+                </button>
+              </div>
+              <ul className="space-y-0.5 text-xs text-ink/60">
+                {linkReport.probablyClosed.map((r) => (
+                  <li key={r.id}>
+                    {r.company} · {r.role_title} —{" "}
+                    <a
+                      href={r.boardUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-ink"
+                    >
+                      their board
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Funnel summary */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -588,6 +704,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink/40">
                     <AgeTag age={roleAge(job.created_at, now)} />
                     <CompTag bucket={bucketOf(job)} />
+                    <SourceTag url={job.job_url} />
                     {job.salary_range && <span>{job.salary_range}</span>}
                     {job.salary_range && job.location && <span>·</span>}
                     {job.location && <span>{job.location}</span>}
@@ -734,6 +851,25 @@ function AgeTag({ age }: { age: RoleAge | null }) {
       <span className="text-ink/70">{age.date}</span>
       <span className="text-ink/30">·</span>
       <span>{age.age}</span>
+    </span>
+  );
+}
+
+/**
+ * Marks a link that goes through a reseller rather than to the employer.
+ *
+ * Only aggregators are called out. An ATS link and a company's own domain are
+ * both the employer speaking, so badging them would put a chip on nearly every
+ * row and say nothing. Silence means "this link is fine".
+ */
+function SourceTag({ url }: { url: string | null }) {
+  if (classifyJobLink(url) !== "aggregator") return null;
+  return (
+    <span
+      title="Goes through a job board, not the employer. These often outlive the posting — run Check links."
+      className="inline-flex items-center rounded-full bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-medium text-[#92400E]"
+    >
+      via {hostOf(url)}
     </span>
   );
 }

@@ -77,7 +77,15 @@ export function roleExtractionSchema(): string {
   return [
     "Return a JSON array where each object has these exact fields:",
     "role_title (string)",
-    "job_url (string or empty)",
+    // Unqualified, this field came back as whatever the search engine ranked
+    // first, which is usually a reseller. Nearly half the pipeline ended up on
+    // ZipRecruiter/BuiltIn/Lensa links, and those outlive the posting they
+    // copy — the employer's own board 404s honestly when a req closes, so a
+    // direct link is both more useful and more checkable.
+    "job_url (string or empty — the EMPLOYER's own application URL, e.g. their " +
+      "Greenhouse/Ashby/Lever/Workday board or their own careers site. Use a job " +
+      "aggregator link (LinkedIn, Indeed, ZipRecruiter, Built In, Glassdoor, Lensa) " +
+      "ONLY when no direct posting exists)",
     "location (string, list all locations from the posting)",
     'seniority (string, one of: "VP/Head", "Director", "Senior Manager", "Manager/IC")',
     'salary_range (string, exact salary or range from the posting — e.g. "$160,000 - $210,000" — or empty string if not listed)',
