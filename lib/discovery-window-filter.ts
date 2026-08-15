@@ -1,16 +1,20 @@
 import type { DateRange } from "@/app/actions/discover";
 
-// Pure logic behind the Discover tab's single window selector.
+// Pure logic behind the Discover tab's window filter chips.
 //
-// This was originally two controls — a "search window" that set what a NEW
-// search asked for, and a separate filter over already-cached results. Two
-// rows of near-identical chips read as redundant, so they are merged: one
-// chip both slices the view and names what Discover will fetch next.
-// Selecting a chip still never fetches; the Discover button does that.
+// A chip does ONE thing: slice the already-loaded list. It does not choose
+// what a new search asks for, and selecting one never fetches. What is
+// fetchable is a fixed pair of buttons — see FETCHABLE_RANGES in
+// lib/discovery-windows.ts.
 //
-// The two concepts do not overlap perfectly, which is what the "legacy"
-// handling below is for: a window can hold cached results while no longer
-// being offered as a search target (6m and 6-18m were retired once the user
+// These were briefly fused: one chip row both filtered the view and named the
+// Discover button's target, so the primary CTA changed under you as you
+// filtered. Splitting them back apart is why `pinned` below no longer means
+// "searchable" — a pinned chip is charted whether or not any button can fill
+// it. 3m is exactly that case: charted at zero, deliberately unfetchable.
+//
+// `legacy` is the other asymmetry: a window can hold cached results while no
+// longer being offered anywhere (6m and 6-18m were retired once the user
 // decided they would never look that far back). Those results stay visible
 // and filterable — they were paid for — they just cannot be re-fetched.
 
@@ -23,14 +27,14 @@ export interface WindowFilterOption {
 }
 
 // Builds the chip list: "All" first (count = every item), then one chip per
-// searchable window — shown even at zero, because the chip is how you choose
-// what to search, so hiding an empty one would make an un-run window
-// unreachable — then one chip per retired window that still holds cached
-// results. A retired window with no data gets no chip: it is neither
-// searchable nor viewable, so it would be a dead control.
+// PINNED window — shown even at zero, so the row's shape stays stable as
+// results come and go rather than reflowing under the cursor — then one chip
+// per retired window that still holds cached results. A retired window with
+// no data gets no chip: nothing can fill it and nothing is in it, so it would
+// be a control that does nothing at all.
 export function buildWindowFilterOptions(
   ranges: DateRange[],
-  searchable: { value: DateRange; label: string }[],
+  pinned: { value: DateRange; label: string }[],
   legacy: { value: DateRange; label: string }[] = []
 ): WindowFilterOption[] {
   const counts = new Map<DateRange, number>();
@@ -39,7 +43,7 @@ export function buildWindowFilterOptions(
   const options: WindowFilterOption[] = [
     { value: "all", label: "All", count: ranges.length },
   ];
-  for (const { value, label } of searchable) {
+  for (const { value, label } of pinned) {
     options.push({ value, label, count: counts.get(value) ?? 0 });
   }
   for (const { value, label } of legacy) {
@@ -47,21 +51,6 @@ export function buildWindowFilterOptions(
     if (count > 0) options.push({ value, label, count });
   }
   return options;
-}
-
-// Which window the Discover button will actually fetch, given what is
-// selected. "All" has no window of its own, and a retired window cannot be
-// re-fetched, so both fall back to the default. Returned rather than inferred
-// at the call site so the button can label itself honestly — a button that
-// says "Discover" while silently fetching a different window than the one
-// highlighted is the kind of quiet mismatch this app has been bitten by.
-export function fetchTargetFor(
-  selected: WindowFilter,
-  searchable: { value: DateRange }[],
-  fallback: DateRange
-): DateRange {
-  if (selected === "all") return fallback;
-  return searchable.some((s) => s.value === selected) ? selected : fallback;
 }
 
 // Filters range-tagged items down to the selected window. "all" (the

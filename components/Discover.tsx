@@ -12,41 +12,24 @@ import { findAndSaveRoles } from "@/app/actions/roles";
 import { addToWatchlist, setTracking, getWatchedCompanyKeys } from "@/app/actions/watchlist";
 import {
   buildWindowFilterOptions,
-  fetchTargetFor,
   filterByWindow,
   type WindowFilter,
 } from "@/lib/discovery-window-filter";
+import {
+  FETCHABLE_RANGES,
+  PINNED_CHIPS,
+  LEGACY_RANGES,
+  labelForRange,
+} from "@/lib/discovery-windows";
 import { normalizeCompanyName } from "@/lib/role-key";
 import { isCompanyWatched } from "@/lib/watched-companies";
 import RoleSearchPanel from "./RoleSearchPanel";
 import { Spinner, Tag } from "./ui";
 
-// One selector, two jobs: it slices the cached list AND names what the
-// Discover button will fetch. These were two separate chip rows until
-// 2026-08-13; side by side they read as redundant, so they were merged.
-const SEARCHABLE_RANGES: { value: DateRange; label: string }[] = [
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "3m", label: "3 months" },
-];
-
-// Retired as search targets — the user does not look this far back — but
-// results already paid for stay visible and filterable. A chip appears only
-// while cached data for the window exists, and Discover falls back to
-// DEFAULT_RANGE if one is selected. Removing these from DateRange itself
-// would invalidate the discovered_startups rows that still carry them.
-const LEGACY_RANGES: { value: DateRange; label: string }[] = [
-  { value: "6m", label: "6 months" },
-  { value: "6-18m", label: "6–18 mo" },
-];
-
-const DEFAULT_RANGE: DateRange = "7d";
-
-function labelForRange(range: DateRange): string {
-  return (
-    [...SEARCHABLE_RANGES, ...LEGACY_RANGES].find((o) => o.value === range)?.label ?? range
-  );
-}
+// The window lists and the invariants between them live in
+// lib/discovery-windows.ts so they can be tested — this component has no test
+// harness (vitest is environment: "node", no jsdom). The buttons say what is
+// fetchable; the chips say what is charted; neither reads the other.
 
 export default function Discover() {
   const router = useRouter();
@@ -62,10 +45,14 @@ export default function Discover() {
   // never compared against a differently-cased key.
   const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
-  // The single window selector: slices the already-loaded list AND names what
-  // Discover will fetch next. Selecting never fetches; the button does.
-  // Defaults to "all" so the initial view shows every cached window.
+  // Purely a view filter over what is already loaded. It does NOT decide what
+  // a search fetches — the Discover buttons each carry their own window and
+  // are unaffected by this. Defaults to "all" so the initial view shows every
+  // cached window.
   const [windowFilter, setWindowFilter] = useState<WindowFilter>("all");
+  // Which window is mid-flight, so only the button that was clicked shows a
+  // spinner while both disable. A bare boolean could not tell them apart.
+  const [runningRange, setRunningRange] = useState<DateRange | null>(null);
   // Which of the two discovery approaches is shown — mutually exclusive with
   // the company-mode body below. Role mode is a fully separate component
   // (RoleSearchPanel) so this file doesn't have to grow to hold both.
@@ -101,14 +88,19 @@ export default function Discover() {
     return () => { cancelled = true; };
   }, []);
 
-  async function run() {
+  // Takes its window as an argument rather than reading a selection: which
+  // window a click bills is now fixed by the button itself, so filtering the
+  // view can never change what the next search costs.
+  async function run(range: DateRange) {
     setLoading(true);
+    setRunningRange(range);
     setError(null);
-    const res = await discoverStartups(undefined, fetchTarget);
+    const res = await discoverStartups(undefined, range);
     if (res.error) setError(res.error);
     const all = await getAllDiscoveredStartups();
     setStartups(all.startups);
     setFetchedAt(new Date().toISOString());
+    setRunningRange(null);
     setLoading(false);
   }
 
@@ -188,13 +180,9 @@ export default function Discover() {
   // pick between — a single-option toggle would just be noise.
   const windowFilterOptions = buildWindowFilterOptions(
     startups.map((s) => s.discovered_range),
-    SEARCHABLE_RANGES,
+    PINNED_CHIPS,
     LEGACY_RANGES
   );
-  // What the Discover button will actually fetch given the current selection.
-  // "All" and retired windows have no fetchable target, so both fall back —
-  // and the button says so rather than silently fetching something else.
-  const fetchTarget = fetchTargetFor(windowFilter, SEARCHABLE_RANGES, DEFAULT_RANGE);
   const displayed = filterByWindow(startups, windowFilter);
   const hiddenByFilter = startups.length > 0 && displayed.length === 0;
 
@@ -248,13 +236,22 @@ export default function Discover() {
                 )}
               </p>
             </div>
-            <button
-              onClick={run}
-              disabled={busy}
-              className="shrink-0 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
-            >
-              {loading ? "Discovering…" : `Discover ${labelForRange(fetchTarget)}`}
-            </button>
+            {/* One button per fetchable window, always both shown. Only the
+                one in flight says "Discovering…"; both disable, because a
+                second search while one is running would race the cache read
+                that follows it. */}
+            <div className="flex shrink-0 gap-2">
+              {FETCHABLE_RANGES.map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => run(value)}
+                  disabled={busy}
+                  className="shrink-0 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+                >
+                  {runningRange === value ? "Discovering…" : `Discover ${label}`}
+                </button>
+              ))}
+            </div>
           </div>
 
           {!busy && (
