@@ -1,0 +1,380 @@
+# Multi-tenant auth and tenancy — design, revision 2
+
+Date: 2026-08-16
+Supersedes: `2026-08-15-multi-tenant-auth-design.md` (branch `multi-tenant-auth`,
+commit `4462ce3`), which went to four independent adversarial reviews and did not
+survive them. That document is kept as the record of what was proposed and why it
+was wrong.
+
+**Status: not cleared for implementation.** One question is still open and it
+gates sub-projects C–F. See "The open question" below.
+
+## What revision 1 got wrong
+
+Recorded first, because two of these are the reason this document exists.
+
+**The load-bearing error: "world data is shared."** Revision 1 classified
+`discovered_roles`, `role_searches` and crawl results as global caches every
+tenant could read, and built the cost model on that sharing. All four reviewers
+found this independently. It is wrong because those caches are **criteria-derived**,
+not world data:
+
+- `role_searches` is written with `search_term: ""` on its only write path
+  (`app/actions/role-search.ts:180`), so there are exactly two rows platform-wide,
+  and their contents are the caching tenant's titles × locations.
+- `discovered_roles` is keyed on `company` alone while its prompt embeds
+  `titleListForPrompt(criteria)` and `criteria.locationRule` (`app/actions/roles.ts`).
+- The crawler is the same: `buildExtractionPrompt` interpolates the tenant's title
+  list, so "one crawl, N pipelines" has no answer for *whose* titles ran.
+
+Sharing them serves tenant B results computed from tenant A's criteria, leaks A's
+private settings into B's screen, and — because per-tenant `scoreFit` runs on top —
+produces output that *looks* personalised. Worse, `applySideEffects`
+(`app/actions/settings.ts:135`) runs an unqualified `` rawQuery(`delete from ${table}`) ``
+over exactly those tables, so any tenant editing a setting would wipe the platform
+cache and force everyone else to re-bill.
+
+**The second error: designing against the database, not the runtime.** Revision 1
+specified RLS with `SET LOCAL` over a data layer that has no transactions, no client
+checkout, and a `rawQuery` escape hatch carrying the entire `app_settings` path.
+`app_settings` — the fit brain, the criteria, the comp floor — has **zero**
+`supabase.from()` call sites; it is 100% `rawQuery`. So the proposed
+"query-builder registry" would have protected everything except the most
+tenant-sensitive table in the schema.
+
+## What changed in the world since revision 1
+
+- **The app is no longer open.** A shared-password gate (`middleware.ts`,
+  `app/gate/`) ships and is live. Throwaway; delete when real auth lands.
+- **Backups exist in code** (`db/backup.mjs`, `lib/backup-guard.mjs`), guard tested
+  and verified against production. Still needs R2 credentials and a cron service.
+- **The deploy topology is fixed.** Production was building from a stale second
+  repo and every `railway up` was reverted by the next variable change. Now on
+  `tkeefe66/gtm-job-search`, auto-deploying on push.
+- **There was never a credential leak.** The committed `.env.production` is a
+  `vercel env pull` scaffold with empty values and one expired token belonging to
+  the previous owner. Revision 1's "rotate, can never be public" framing was based
+  on a filename, not on measurement.
+- **`DEFAULT_BATCH_LIMIT` is 3, not 10.** Revision 1 built a 10-company free-tier
+  quota on a number CLAUDE.md had wrong. Real platform capacity is ~21
+  company-crawls per week, sequential, 60–120s each.
+- **The fit rubric no longer names one person** (`a3ac356`). Seniority is judged
+  relative to what the candidate states they want.
+
+## The open question, which gates everything
+
+**Does this app produce useful scores for someone who is not Tom?**
+
+Measured on 2026-08-16 with a Marketing Ops IC persona over 10 production roles,
+before and after the de-Tom edit:
+
+| | avg | 4s+5s |
+|---|---|---|
+| stored brain | 3.10 | 4/10 |
+| near neighbour | 2.30–2.50 | **0/10** |
+
+The de-Tom edit removed the seniority bias — the "IC, not head-level" deduction is
+gone from every rationale — and did **not** move her ceiling.
+
+**The probe cannot answer the question, and this is the important part.** Eight of
+those ten roles are RevOps jobs the persona explicitly ruled out, so her low scores
+are *correct*. The corpus is one user's search results; scoring a second person
+against it measures the corpus, not the rubric.
+
+**Answering it properly costs ~$1.20**: run one By Role search under the near
+neighbour's criteria and score the roles it actually returns. Until that runs,
+C–F rest on an assumption.
+
+One known residual bias, visible in the post-edit rationales: the FINANCIAL SIGNALS
+block (ARR, PE exits, top-tier backers) is an investment thesis, and it penalised a
+well-matched role for "opacity on company stage, backer, ARR." That is a second
+de-Tom edit, smaller than the first.
+
+## Decisions carried forward from revision 1
+
+Unchanged and still correct: one user = one tenant; Google OAuth only; waitlist with
+in-app approval by `tkeefe66@gmail.com`; platform key with a per-tenant ceiling, plus
+bring-your-own-key; full act-as impersonation with an audit trail; isolation enforced
+in both Postgres and the application.
+
+**Reversed:** world-data sharing. See below.
+
+---
+
+## A. Backups — mostly done
+
+`db/backup.mjs` + `lib/backup-guard.mjs`, committed and verified: guard passes
+against production (8 tables, 39KB dump), refuses `PGDATABASE=postgres` with exit 1.
+Checks **tables, not rows**, so a legitimately empty install still backs up while a
+wrong database is refused. Keys are date-stamped so a bad run cannot overwrite a
+good backup. Database name logged every run.
+
+**Remaining:** R2 credentials, a Railway cron service (never on `web` — the dump
+credential reads every row), retention (30 daily / 12 monthly), and **a tested
+restore**. An untested backup is a hypothesis.
+
+**One hard dependency on C**, which revision 1 missed: `pg_dump` sets
+`row_security = off` and ERRORS when policies apply to the dumping role. `FORCE ROW
+LEVEL SECURITY` applies policies to the table owner. So the day C ships, this job
+starts failing unless the backup role has `BYPASSRLS`. Give it a dedicated role that
+exists only on the backup service, and document it as tier-0.
+
+## B. Real auth — bigger than revision 1 budgeted
+
+**Auth.js v5 has no stable release** (`latest: 4.24.15`, `beta: 5.0.0-beta.32`).
+Pin exact versions of `next-auth` and `@auth/pg-adapter` together — they pin
+`@auth/core` exactly, and a mismatch surfaces as an `Adapter` type error in the
+build gate.
+
+**The middleware path does not exist on Next 14.2.** `@auth/pg-adapter` needs
+`net`/`dns`/`tls`; middleware runs on Edge; Node-runtime middleware is Next 15.2+.
+So the gate cannot be one matcher. It becomes `requireActor()` as the first
+statement of **all 39 exported server actions** plus every page, with a test that
+enumerates `app/actions/*.ts` exports and asserts each refuses without a session.
+Server Actions are RPC endpoints addressed by an ID that ships in the client bundle;
+a page-level check does not cover them.
+
+(The stopgap gate works precisely because a cookie-vs-env-var comparison needs no
+database and therefore runs fine on Edge.)
+
+**Identity is `(provider, sub)`, never email.** Google email is mutable and
+reassignable. A Workspace address handed to a new hire would match an approved
+waitlist row and inherit the previous person's pipeline, fit brain, and stored API
+key. A login whose `sub` does not match the stored `sub` for that email is a NEW
+pending user. Reject `email_verified !== true`. The admin seed is claimed once, by
+`sub`, behind a one-time flag.
+
+**The pending row must be written deliberately.** Returning `false` from the
+`signIn` callback aborts before `createUser`, so no row exists for the admin to
+approve. Either insert the pending row inside `signIn` before returning a redirect,
+or let the user be created and gate session *issuance*. Choose explicitly.
+
+**Session policy.** Database sessions, plus an absolute lifetime cap Auth.js does
+not provide — it rolls `expires` forward, so an actively-used stolen cookie never
+dies. The cap belongs in a wrapper around the adapter's `getSessionAndUser`, which
+is where every read funnels; a `session`-callback check cannot deny (its return type
+has no `null`). Sliding 7 days, absolute 30. Real logout deletes the row. Suspension
+must delete session rows, or it takes up to 7 days to bite.
+
+**`AUTH_SECRET`** is missing from revision 1 entirely. It signs the session cookie
+and encrypts the OAuth `state`, and it is the emergency log-everyone-out lever.
+
+## C. Multi-tenancy — the rewrite
+
+### Caches are tenant-scoped, not global
+
+Reversing revision 1. `discovered_roles`, `role_searches` and `insights_cache` all
+gain `tenant_id`. The cost saving revision 1 claimed was never real: sharing a cache
+whose key omits the criteria that produced it does not save money, it serves wrong
+answers.
+
+`discovered_startups` is the one genuine world cache (funding news, with only a soft
+ranking hint from criteria) and MAY stay global — decide with a criteria hash in the
+key rather than by assertion.
+
+**Consequence for the crawler:** crawling is per-(company, tenant), or extraction
+becomes genuinely criteria-free (return every open role on the page) with per-tenant
+filtering afterwards. The second is the only version that preserves any sharing, and
+it changes `buildExtractionPrompt`, `roleExtractionSchema()`, token budgets, and
+`crawl_runs.role_titles` semantics. Revision 1's `watchlist` three-way split
+presumed the sharing that is now reversed; **defer it** — add `tenant_id` to
+`watchlist` and keep one table until the crawl model is settled.
+
+### The data layer is rewritten, not extended
+
+This is C's real cost and revision 1 hid it.
+
+- **`rawQuery` gets a mandatory tenant parameter or is deleted.** It carries 14
+  non-test call sites including the whole `app_settings` path, and a registry inside
+  `QueryBuilder` cannot see into a SQL string. Add a grep guard for `getPool()` used
+  outside the wrapper.
+- **`SET LOCAL` requires a held client and a transaction.** Neither exists;
+  `pool.query()` checks a connection out per statement. Use
+  `select set_config('app.tenant_id', $1, true)` — `SET` takes no bind parameters,
+  and the naive fix string-interpolates the tenant id into the one statement that
+  decides isolation.
+- **Scope transactions to a unit of work, never a request.** A request-scoped
+  transaction over `max: 5` caps the app at five concurrent users, serialises the
+  `Promise.all` fan-outs in `lib/ingest-roles.ts`, and holds a connection
+  `idle in transaction` across 60–120s Claude calls. It also converts this
+  codebase's log-and-continue error model into `25P02` cascades. **No transaction
+  may be open across an external API call.**
+- **Assert the GUC reads back, and throw if it does not.** Three lines, and the
+  highest-value item in C. This repo's entire error doctrine detects *reported*
+  failures; an RLS denial reports nothing — the query succeeds with zero rows.
+  `getJobs()` returns `{ jobs: [] }`, cron logs a clean `crawled=0`, all plausible
+  for a new tenant. The assertion converts the silent-empty class into the
+  loud-error class the codebase already handles.
+
+### RLS
+
+`ENABLE` **plus `FORCE`** on every tenant table — plain `ENABLE` exempts the owner,
+which is the role most likely to be compromised in a migration path. Policies use
+`nullif(current_setting('app.tenant_id', true), '')::uuid`: after a `SET LOCAL`
+commits on a pooled connection the GUC reads back as `''`, and `''::uuid` raises, so
+the unqualified form fails differently depending on whether that connection has
+served a tenant yet.
+
+`app_rw` is `LOGIN NOSUPERUSER NOBYPASSRLS` with no ownership. Note honestly what
+that buys: it removes host- and cluster-level powers, not schema-level ones, because
+Postgres DDL is ownership-based.
+
+**A platform execution context must be defined**, or the crawler silently reads zero
+rows: the cron route has no session, and `getDueCompanies` is inherently
+cross-tenant. Define a documented `app.context = 'platform'` policy branch with an
+enumerated table list. Left implicit, the implementer reaches for `BYPASSRLS` and
+deletes the isolation model in one line.
+
+### Uniqueness that breaks
+
+`app_settings.key` (primary key) → `(tenant_id, key)`; `watchlist.company` →
+`(tenant_id, company)`. **Both break `onConflict` strings at runtime, invisibly to
+`npm run build`** — `lib/settings-store.ts:332` and `app/actions/watchlist.ts:219,350`.
+Enumerate every `on conflict` as a migration checklist item. `insights_cache` needs
+`unique (tenant_id)` so its delete-then-insert becomes an upsert.
+
+Company identity should move to a unique index on the **normalized** expression
+(`lib/role-key.ts` already has it), or `"Clay"` and `"clay"` become two rows per
+tenant.
+
+### Migration mechanics
+
+**`db/apply-schema.mjs` cannot express this migration.** It sends `schema.sql` as one
+query built from `create table if not exists`. There is no `CREATE POLICY IF NOT
+EXISTS` in any Postgres version, no `ADD PRIMARY KEY IF NOT EXISTS`, no idempotent
+`CREATE ROLE`, and a backfill that reads columns the same file later drops cannot be
+both. C introduces a versioned runner with a `schema_migrations` ledger; `schema.sql`
+becomes a fresh-install bootstrap.
+
+**Ordering is a hard requirement**, or the migration silently writes nothing: add
+column nullable → backfill → assert zero nulls → `SET NOT NULL` → enable RLS →
+`FORCE` last. With `FORCE` on before the backfill, the migration role is subject to
+its own policy, the GUC is unset, and `UPDATE` matches zero rows and reports success.
+
+### Security findings revision 1 missed entirely
+
+- **SSRF.** Under revision 1 any tenant could write a URL into a global careers-URL
+  table, and `lib/crawler.ts` fetches with `redirect: "follow"`, no scheme check, no
+  host validation. Requires https-only, public-IP-only after DNS resolution,
+  re-checked per redirect hop, bounded hops.
+- **Stored XSS → admin takeover.** Components render untrusted URLs directly into
+  `href`; React only warns on `javascript:`. Under full act-as, an admin clicking a
+  tenant's link executes with the credential that approves users and sets budgets.
+  Validate scheme at write and at render.
+- **`audit_log` must not be tenant-scoped.** Under impersonation the GUC is the
+  target, so the audited party sits inside the policy scope of their own audit rows,
+  and "purge on request" destroys the record of the admin's actions. Append-only,
+  platform-owned, `REVOKE UPDATE, DELETE`, written *before* the action.
+- **Tenant API keys** need a `key_id` (rotation is otherwise a flag day), AEAD with
+  `tenant_id` as additional authenticated data (or ciphertext can be copied between
+  rows to bill another tenant), and a per-nonce uniqueness rule. And "the admin
+  cannot read a tenant key" is a product-surface control, not a security property —
+  say so, and tell the tenant.
+
+## D. Budgets — the ceiling revision 1 specified does not hold
+
+`lib/anthropic.ts` states it outright: *"web_search server-tool calls are billed per
+search and are not part of the usage token counts, so they stay untracked."*
+`report()` only ever sees `message.usage`. Searches are $0.01 each and `maxSearches`
+is deliberately omitted by the discover, roles and crawler callers, so the dominant
+cost is invisible to metering. A pre-call reservation reconciled against tokens books
+a fraction of reality.
+
+**Therefore:** `max_uses` becomes **mandatory** for metered tenants, derived from
+remaining budget. The ceiling is enforced *inside* the call, not before it. Two
+rules, not one: no new call may start, and no single call may be allowed to exceed
+the remaining budget.
+
+`estimateRunCost` prices one of five billable paths and its own header disclaims it
+("deliberately approximate… not precise billing"). It cannot price Find Roles,
+Discover, Insights, or a crawl.
+
+The reservation must be **atomic with the ceiling in the statement**, so there is no
+release path to strand:
+
+```sql
+INSERT INTO usage_counters (tenant_id, period, spent_cents)
+VALUES ($1, $2, $3)
+ON CONFLICT (tenant_id, period) DO UPDATE
+   SET spent_cents = usage_counters.spent_cents + $3
+ WHERE usage_counters.spent_cents + $3 <= $4
+RETURNING spent_cents;
+```
+
+Zero rows returned means refused and nothing was reserved. Revision 1's
+reserve-then-release could strand a reservation on a crash between the two statements.
+Note the race is interleaved `await`s, not a threadpool — revision 1 said "threadpool",
+which is a Python framing and would produce a test that proves nothing. The test needs
+real Postgres and N genuine connections.
+
+**Unresolved and required before D**: who pays for a shared crawl, and does
+background spend debit a tenant who took no action? Revision 1 picked neither.
+
+**Crawl quota must be rebuilt on the real number.** 3/day sequential is ~21/week
+platform-wide. A 10-company quota is unfulfillable at three tenants. Either state
+that free-tier crawling is best-effort with visible staleness, or build a queue.
+
+## E. Admin console — shrink it
+
+Ship the server-side `role === 'admin'` check in B, and a single `/admin` page
+listing pending users with approve/deny. Add impersonation the first time you
+actually cannot debug someone's problem — it carries the audit log, the banner, the
+BYO-key billing block, and the XSS exposure above, and none of that is worth building
+for a waitlist that is currently empty.
+
+Impersonation, when built, is a separate short-TTL grant row started by fresh
+re-auth — not a mutable flag on a 30-day session, which would make a stolen admin
+cookie a master key to every tenant. The BYO billing block belongs in `resolveApiKey`
+as deny-by-default, not a hand-curated list of blocked actions.
+
+## F. Onboarding — cut the voice half
+
+Resume paste plus four text questions is a form and one Claude call. Voice adds a new
+vendor, a new credential, the first non-Anthropic dependency, and audio-retention
+questions, to replace a textarea. Revisit if someone asks.
+
+Run onboarding **after** approval. Revision 1 put it before, and then proposed a
+per-account lifetime allowance as the abuse control — which is exactly what a signup
+loop defeats, since Gmail aliases are free.
+
+And the review screen is backwards: nobody can evaluate a scoring rubric in the
+abstract, and everybody can evaluate "this 5 should have been a 2." Show scores
+first, let the user correct three, revise the brain from that.
+
+## Sequencing
+
+```
+A. Backups (finish: R2 + cron + tested restore)   — no deps, do now
+   |
+   +-- the $1.20 corpus experiment                — decides whether C-F happen
+         |
+B. Real auth (39 action checks, sub-based identity)
+         |
+C. Tenancy (data-layer rewrite + migration runner)
+         |
+   +-----+-----+
+   D. Budgets  E. Admin (minimal)  F. Onboarding (text only)
+```
+
+## Testing
+
+The four load-bearing tests **cannot run today**: `vitest.config.ts` is
+`environment: "node"` with no database, no jsdom, and every existing test is pure.
+C must ship an integration tier — ephemeral Postgres, migrations applied,
+`fileParallelism: false`, a configurable pool factory so a test can force `max: 1`.
+Until then, the isolation controls are unverified by construction.
+
+| Test | Pins |
+|---|---|
+| Two tenants, one pooled connection, `max: 1`, asserting `pg_backend_pid()` | `SET LOCAL` discipline |
+| GUC-readback assertion throws when unset | The silent-empty class |
+| Every exported server action refuses without a session | B's actual deliverable |
+| Parallel budget exhaustion, real connections | The reservation race |
+| Backup guard refuses a database with no app tables | Already green |
+| Exception containing an API key | The redaction boundary |
+| Session past its absolute cap | Auth.js will not do this |
+
+## Deferred deliberately
+
+Organizations; paid tiers; the `watchlist` three-way split; per-tenant careers-URL
+overrides; voice onboarding; rewriting git history (unnecessary — there is no leak).
