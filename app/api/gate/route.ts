@@ -25,6 +25,27 @@ function digest(s: string): Buffer {
   return createHash("sha256").update(s).digest();
 }
 
+/**
+ * A RELATIVE redirect, deliberately — `NextResponse.redirect(new URL(path,
+ * req.url))` is wrong here and shipped wrong once.
+ *
+ * Railway terminates TLS at its proxy and forwards to the container on PORT,
+ * so inside a route handler `req.url` is the BOUND address, not the address the
+ * user typed. In production that made every unlock 303 to
+ * `https://localhost:8080/` — the cookie was set correctly and the browser then
+ * landed on a dead host, which reads as "the password didn't work".
+ *
+ * The documented alternative is rebuilding the absolute URL from
+ * `x-forwarded-host`. That header is client-controlled, and a redirect TARGET
+ * built from a client-controlled value is an open redirect. A relative Location
+ * needs no host at all: the browser resolves it against the origin it actually
+ * requested, which is correct in production, in local dev, and behind any
+ * proxy, with nothing to trust.
+ */
+function redirectTo(path: string): NextResponse {
+  return new NextResponse(null, { status: 303, headers: { Location: path } });
+}
+
 export async function POST(req: Request) {
   const token = process.env.GATE_TOKEN;
   // Fails closed, matching the middleware: with no secret configured there is
@@ -50,13 +71,13 @@ export async function POST(req: Request) {
   // `authorized()`.
   if (!timingSafeEqual(digest(submitted), digest(token))) {
     console.warn("gate: failed unlock attempt");
-    return NextResponse.redirect(new URL("/gate?e=1", req.url), { status: 303 });
+    return redirectTo("/gate?e=1");
   }
 
   // The cookie carries the DERIVED value, never the password itself, so a
   // cookie read off a device does not hand over the shared secret that the
   // owner may have reused elsewhere.
-  const res = NextResponse.redirect(new URL("/", req.url), { status: 303 });
+  const res = redirectTo("/");
   res.cookies.set(COOKIE, digest(token).toString("hex"), {
     httpOnly: true,
     sameSite: "lax",
