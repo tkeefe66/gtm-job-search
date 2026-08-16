@@ -166,14 +166,20 @@ SCORING GUIDE:
 1 = Poor fit — wrong industry, no relevant overlap, or clearly too junior/unrelated
 2 = Weak fit — some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope
 3 = Moderate fit — relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside
-4 = Strong fit — clear domain alignment AND (broad ownership across the GTM/RevOps stack, lead/principal/head-level scope, hands-on GTM systems + AI/agentic building, or explicit cross-functional leadership even without a VP title)
-5 = Exceptional fit — almost tailor-made: Head/VP/Director-level GTM Systems / RevOps / Marketing Ops / GTM-AI title at a B2B SaaS company where the domain is a direct match, OR a GTM Engineer / AI-Ops builder role with broad mandate at a strong company${compScoringClause(inputs.compFloor)}
+4 = Strong fit — clear domain alignment AND scope at or near the level the candidate says they are targeting (broad ownership of their stated stack, hands-on systems + AI/agentic building, or explicit cross-functional leadership even without the matching title)
+5 = Exceptional fit — almost tailor-made: the function, the level, and the company type the candidate states they are targeting, all at once${compScoringClause(inputs.compFloor)}
+
+SENIORITY IS RELATIVE TO THE CANDIDATE, NEVER ABSOLUTE: judge level against what
+the candidate says they want, not against a fixed ladder. A hands-on IC role is a
+5 for someone who states they want to stay hands-on, and a 2 for someone
+targeting a VP seat. Do NOT deduct for a role being "only" IC or manager level
+unless the candidate asked for something more senior.
 
 TITLE SCOPE SIGNALS (use these to adjust score):
 - "Head of", "VP", "Director" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches
-- "GTM Engineer", "GTM Systems", "AI Operations", "AI Ops", "Revenue Systems", "Marketing Ops Architect", "Agentic / Automation" in the title = direct match to Tom's practitioner-builder positioning; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point
+- "GTM Engineer", "GTM Systems", "AI Operations", "AI Ops", "Revenue Systems", "Marketing Ops Architect", "Agentic / Automation" in the title = a direct match IF that is the positioning the candidate describes; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point
 - IC / practitioner builder roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) or hyper-growth B2B SaaS (Series B+) where hands-on GTM systems + agentic AI is the mandate = eligible for 4-5 regardless of title — the building, equity, learning, and impact outweigh the title
-- "Marketing Operations Manager" / "RevOps Analyst" at a generic small company with no AI angle and narrow scope = cap at 2-3
+- A narrowly-scoped role at a generic small company with no building mandate = cap at 2-3, UNLESS narrow-and-hands-on is what the candidate says they want
 - Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower
 
 FINANCIAL SIGNALS (use these to adjust score up or down):
@@ -186,9 +192,9 @@ FINANCIAL SIGNALS (use these to adjust score up or down):
 AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):
 1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)
 2. The role is explicitly framed as leading an AI transformation of GTM, RevOps, or Marketing Operations — building AI/agentic workflows into the revenue engine, not just "uses AI"
-3. The domain is within 1 degree of Tom's background (B2B SaaS, ABM/ABX, RevTech/MarTech, GTM tooling, data platforms, or any software vertical where his GTM-systems leadership transfers)
-→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the practitioner-builder + systems-architect role Tom is targeting.
-→ If the domain requires deep vertical expertise Tom lacks (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — he'd spend year 1 learning the domain rather than building.${aiGtmCompCarveOut(inputs.compFloor)}
+3. The domain is within 1 degree of THE CANDIDATE's background as stated above (adjacent industry, adjacent function, or any vertical where the experience they describe transfers)
+→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the kind of mandate the candidate describes wanting.
+→ If the domain requires deep vertical expertise the candidate does not claim (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — they would spend year 1 learning the domain rather than building.${aiGtmCompCarveOut(inputs.compFloor)}
 
 Return a JSON object with:
 - score (integer 1-5)
