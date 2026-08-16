@@ -1091,6 +1091,13 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
       }),
       addJob({
         company: form.company, role_title: form.role_title, status: form.status,
+        // An INSERT can start life at "Applied" — the panel offers the whole
+        // dropdown — so it needs the stamp as much as the update paths do.
+        // Without it this creates the exact row the rule exists to prevent, and
+        // "first answer wins" then makes it unrepairable: the only fix surface
+        // is a <select>, which fires no onChange when you re-pick the value it
+        // is already showing.
+        ...appliedDatePatch(form.status, null, todayStamp()),
         location: form.location || null, salary_range: form.salary_range || null,
         department: form.department || null, job_url: form.job_url || null,
         company_url: form.company_url || null, company_description: form.company_description || null,

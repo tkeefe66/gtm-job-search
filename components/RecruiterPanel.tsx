@@ -4,6 +4,7 @@ import { useState } from "react";
 import { parseRecruiterText, scoreFit } from "@/app/actions/parse-role";
 import { addJob } from "@/app/actions/jobs";
 import { JOB_STATUSES, type JobStatus } from "@/lib/types";
+import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 
@@ -98,6 +99,10 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
         company: form.company,
         role_title: form.role_title,
         status: form.status,
+        // Same reason as AddPanel in RolesTable.tsx: pasting a recruiter email
+        // for a role you already applied to, and picking "Applied" here, must
+        // stamp the date. It is an insert, so there is never an existing one.
+        ...appliedDatePatch(form.status, null, todayStamp()),
         location: form.location || null,
         salary_range: form.salary_range || null,
         department: form.department || null,
