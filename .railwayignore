@@ -1,0 +1,22 @@
+# What `railway up` must NOT upload.
+#
+# `railway up` sends the working directory as the build context, which is not
+# the same set of files git tracks. Without this, `.env.production` (a
+# Vercel-era leftover that is gitignored but still on disk) and any `.env.local`
+# you create are uploaded into a build image — putting live credentials
+# somewhere they were never meant to be. Railway injects real values as service
+# variables at runtime; no env file ever needs to ship.
+.env
+.env.*
+
+# Rebuilt by Railway. Uploading them is slow and can mask a broken build by
+# shipping a stale local artifact.
+node_modules
+.next
+*.tsbuildinfo
+
+# Not needed at runtime.
+.git
+docs
+.claude
+supabase
