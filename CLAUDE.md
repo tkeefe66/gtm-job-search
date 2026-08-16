@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile. Next.js 14 (App Router) + TypeScript + Tailwind + Postgres + Anthropic API. No auth on the app itself — most backend logic is React Server Actions in `app/actions/`; the one exception is the secret-guarded cron route below.
+Single-user, AI-powered GTM/RevOps job search tool tuned to Tom Keefe's profile. Next.js 14 (App Router) + TypeScript + Tailwind + Postgres + Anthropic API. Most backend logic is React Server Actions in `app/actions/`; the one exception is the secret-guarded cron route below.
+
+**The whole app sits behind a shared-password gate** (`middleware.ts` + `app/gate/`), added because it was publicly reachable at `jobs.tomkeefe.ai` with no auth at all and its buttons spend Anthropic credits. `GATE_TOKEN` on the `web` service is the password; it **fails closed**, so an unset value blocks every route rather than opening them. Middleware is what makes it cover Server Actions — those are RPC endpoints addressed by an ID that ships in the client bundle, so a page-level check would leave all of them reachable. It is DELIBERATELY THROWAWAY: delete it when Google login lands (`docs/superpowers/specs/2026-08-15-multi-tenant-auth-design.md`). Note that middleware runs on the Edge runtime and cannot reach Postgres, which is exactly why real database-backed sessions can't live there on Next 14.
 
 ## Commands
 
 ```bash
-npm run dev        # local dev server (needs DATABASE_URL + ANTHROPIC_API_KEY in .env.local)
+npm run dev        # local dev server (needs DATABASE_URL + ANTHROPIC_API_KEY + GATE_TOKEN in .env.local)
 npm run build      # includes typecheck — the verification gate for changes
 npm test           # vitest — pure logic in the crawl path
 DATABASE_URL=postgres://... node db/apply-schema.mjs   # apply schema (idempotent)
@@ -29,7 +31,17 @@ Railway only: project `gtm-job-search`, service `web` (+ Postgres service). Depl
 railway up --service web --detach
 ```
 
-The service is also GitHub-connected (`tkeefe66/chad-job-search`), but repo-triggered deployments sit "Awaiting approval" in the dashboard — `railway up` is the flow actually used. Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`), `ANTHROPIC_API_KEY`, and `CRON_SECRET` (the bearer token `app/api/cron/crawl` requires — auth fails closed, so a deploy missing this value makes every cron run 401 silently, with no log line to point at why). The `crawler` cron service needs the same `CRON_SECRET` value plus `WEB_URL` (the `web` service's public domain).
+**The `web` service deploys from GitHub — `tkeefe66/gtm-job-search`, branch `main`, automatically on push.** There is no "Awaiting approval" step; a push ships. `railway up` still works and uploads the working directory, but prefer pushing, because of the trap below.
+
+**A Railway variable change rebuilds from the connected GitHub repo, discarding whatever `railway up` uploaded.** This silently held production 108 commits behind for days: the service was wired to `tkeefe66/chad-job-search` (the previous owner's repo, frozen at an Aug 11 commit), so every `railway up` was reverted by the next variable edit. The symptoms were a `/settings` page that did not exist in production and a cron route returning 404 to the crawler every night. Fixed by pointing the service at `gtm-job-search`, whose `main` is current — so the rebuild-on-variable-change now produces the right code. **Keep `origin/main` current, or that trap comes straight back.**
+
+Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`), `ANTHROPIC_API_KEY`, `GATE_TOKEN` (the app password, fails closed), and `CRON_SECRET` (the bearer token `app/api/cron/crawl` requires — auth fails closed, so a deploy missing this value makes every cron run 401 silently, with no log line to point at why). The `crawler` cron service needs the same `CRON_SECRET` value plus `WEB_URL` (the `web` service's public domain).
+
+**Verify against the deployed commit, not the local one.** `railway deployment list --service web --limit 1 --json` carries `meta.commitHash`; compare it to `git rev-parse main` AND `origin/main` before believing any check you run against the live site. A rotation of `CRON_SECRET` was once reported as verified when the route it guarded did not exist in the running build.
+
+**Redirects built from `req.url` in a route handler point at `localhost:8080`.** Railway terminates TLS and forwards to the container on `PORT`, so a route handler's `req.url` is the bound address, not the public host. Use a relative `Location` (see `app/api/gate/route.ts`) rather than rebuilding an absolute URL from `x-forwarded-host`, which is client-controlled and would make the redirect target attacker-influenced. Middleware is unaffected — `NextRequest` resolves the forwarded host correctly.
+
+**`.railwayignore` is load-bearing.** `railway up` uploads the working DIRECTORY, not what git tracks, so without it the gitignored `.env.production` and any `.env.local` are shipped into build images.
 
 ## Architecture
 
@@ -102,9 +114,15 @@ crawled on a recurring schedule (`crawl_interval_days`, default 7).
 `lib/crawler.ts` tries a plain HTTP fetch of `careers_url` and extracts roles
 from the stripped text with a non-search Claude call; if `lib/page-extract.ts`
 detects a JS-rendered ATS shell it falls back to the `web_search` path. The tier
-that worked is remembered in `crawl_method`. `app/api/cron/crawl/route.ts` — the
-app's only API route, guarded by `CRON_SECRET` — crawls up to 10 due companies
-per call and is invoked daily by the Railway `crawler` cron service. **Roles are
+that worked is remembered in `crawl_method`. `app/api/cron/crawl/route.ts` —
+guarded by `CRON_SECRET` — crawls up to **`DEFAULT_BATCH_LIMIT` (3)** due
+companies per call and is invoked daily by the Railway `crawler` cron service.
+Read the number from `lib/crawl-schedule.ts`, never from memory: this file said
+10 for weeks while the code said 3, and a plan was written on top of the wrong
+figure. Three per day is ~21 company-crawls a week, which is the real ceiling on
+how many companies can be tracked at a 7-day interval — the loop is sequential
+and a search-tier crawl takes 60–120s, so raising it needs a queue, not a bigger
+constant. **Roles are
 never DISCOVERED through ATS vendor or job-aggregator APIs** — the HTML path
 works on any careers page, including custom ones and vendors nobody integrated,
 and that generality is the point. Link REPAIR is the one narrow exception; see
@@ -152,3 +170,5 @@ anything, unchanged.
 ## History caveat
 
 The repo was inherited from a previous owner (git history before `d2bed2d` contains his `.claude/skills/` job-search workflow and an accidentally committed `.env.production`). Don't resurrect anything from that era; this app is solely the GTM/RevOps tool described above.
+
+**That `.env.production` is NOT a credential leak, and the history is safe to push or open-source.** Audited 2026-08-15: it is a `vercel env pull` scaffold, added in `a304725` and deleted in `165b2c0`, and its sensitive values are EMPTY — `ANTHROPIC_API_KEY` and the Supabase keys are zero-length, and `DATABASE_URL` and `CRON_SECRET` were never in it at all. Its one real value is a `VERCEL_OIDC_TOKEN` belonging to `chadholdorfs-projects` (the previous owner, not this one) that expired 2026-06-29. **Measure values before calling something a leak** — this file's alarming name alone drove a rotation and a "can never be public" claim that were both unnecessary, and the wrong conclusion was repeated across a whole session before anyone ran `git show`.
