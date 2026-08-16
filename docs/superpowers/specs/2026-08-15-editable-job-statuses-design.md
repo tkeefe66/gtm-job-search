@@ -1,334 +1,418 @@
 # User-editable job statuses — design
 
-**Status:** revision 2, 2026-08-15. Approved in chat; not yet implemented.
-Revision 1 was reviewed against the code and 14 findings came back — every
-file:line citation held, but two existing tests failed against the design, one
-of the four "load-bearing" statuses rested on dead code, and several UI
-consequences were unaddressed. This revision incorporates all of them; the
-Review corrections section at the end records what changed and why, so the
-reasoning is not lost.
+**Status:** revision 3, 2026-08-15. Not yet implemented. Not yet approved —
+revision 3 changes visible UI (the tile row) and needs a decision on that.
+
+Revision 2 went to three independent adversarial reviews and did not survive
+them. Four findings were structural rather than cosmetic, and one was
+embarrassing: revision 2's marquee correction was *"revision 1 cited a dead write
+site,"* and revision 2 cited a different dead write site in the same table. Its
+line numbers were also stale throughout, computed against code that `5502b41` had
+already moved — while its own preamble asserted every citation held.
+
+**Every `file:line` in revision 3 was re-derived against `HEAD` after `5425bb7`.**
 
 ## Problem
 
-The status dropdown on `/roles` ships thirteen values and none of them can be
-changed. A user whose process has no "Exec Presentation" step looks at it on
-every row forever; a user who wants "Take-home" has nowhere to put it.
+The status dropdown on `/roles` ships thirteen values and none can be changed. A
+user whose process has no "Exec Presentation" step sees it on every row forever.
 
-The list is a TypeScript union in `lib/types.ts:1-14`, mirrored into three
-arrays (`JOB_STATUSES`, `ACTIVE_STATUSES`, `TERMINAL_STATUSES`) that drive the
-dropdown, the filter chips, the count buckets, and — less obviously — which
-roles the link-health pass re-verifies.
+The list is a TypeScript union at `lib/types.ts:1-14`, mirrored into three arrays
+(`JOB_STATUSES` `:16`, `ACTIVE_STATUSES` `:32`, `TERMINAL_STATUSES` `:42`) that
+drive the dropdown, the filter chips, the count tiles, and — less obviously —
+which roles the link-health pass re-verifies.
 
-**Scale check, from production on 2026-08-15:** 73 rows, three distinct
-statuses in use — `Posting Closed` 29, `New` 23, `Not Interested` 21. Ten of
-the thirteen built-ins have never been used. The clutter this feature removes
-is real, but the add/rename half is being built ahead of demand. Accepted
-deliberately after the numbers were shown.
+**Scale check, production 2026-08-15:** 73 rows. `Posting Closed` 29, `New` 23,
+`Not Interested` 21. That sums to 73, so **every other status has zero rows —
+including `Applied`**. The entire application-pipeline half of this app has never
+been used.
+
+Two reviewers argued from that number that the honest feature is deleting the ten
+unused statuses — one line, no new files — and that add/rename/delete is
+machinery for a pipeline with no observed use. **That argument is recorded and
+was overruled deliberately:** the feature is wanted, and a prune cannot add
+"Take-home". But it sets the bar for complexity. Revision 3 removes every
+mechanism that is not load-bearing, and the reviewers' count of incidental
+machinery is why.
 
 ## What the user asked for
 
-Confirmed in chat, all four: reorder, rename, hide, add, delete. Plus an
-editable active/terminal classification, and the load-bearing statuses
-renamable but not deletable.
+Reorder, rename, hide, add, delete. Plus an editable active/terminal
+classification, and load-bearing statuses renamable but not deletable.
 
 ## The constraint that shapes everything: some statuses are load-bearing
 
-These are written or read by code, not merely displayed. Letting the user
-delete them breaks a path with no error anywhere.
+Written or read by code, not merely displayed. Deleting them breaks a path with
+no error anywhere.
 
 | Key | Touched at | Consequence if it stops existing |
 |---|---|---|
-| `New` | Written: `lib/ingest-roles.ts:142`, `RolesTable.tsx:1021,1030`, `RecruiterPanel.tsx:36`. **Read in raw SQL**: `lib/crawler.ts:427` (`STALE_POSTING_CANDIDATES_SQL`), `lib/removed-titles.ts:68` (`CRAWL_TITLE_MATCH_SQL`). **Column default**: `db/schema.sql:14` | Ingest has nowhere to put a role; stale-posting closure stops matching |
+| `New` | Written: `lib/ingest-roles.ts:142`, `components/RolesTable.tsx:1044` (`EMPTY_ADD`), `components/RecruiterPanel.tsx:37`. **Read in raw SQL**: `lib/crawler.ts:427` (`STALE_POSTING_CANDIDATES_SQL`), `lib/removed-titles.ts:68` (`CRAWL_TITLE_MATCH_SQL`). **Column default**: `db/schema.sql:14` | Ingest has nowhere to put a role; stale-posting closure stops matching |
 | `Posting Closed` | `lib/ingest-roles.ts:142`, `app/actions/link-health.ts:139,163`, `lib/crawler.ts:490` | Link repair and the crawler write a phantom status |
-| `Applied` | `lib/applied-date.ts` via `RolesTable.tsx` `handleStatus` / `handleBulkStatus` | `applied_date` stops being stamped |
-| `Offer` | `RolesTable.tsx:187,214` — its own count bucket and chip | The Offer chip counts zero forever |
+| `Applied` | `lib/applied-date.ts` via `handleStatus`, `handleBulkStatus`, `AddPanel`, and `RecruiterPanel` — **four** paths as of `5425bb7`, not two | `applied_date` stops being stamped |
 
-The two SQL literals and the column default are why immutable keys are not
-merely convenient: they are unreachable from `/settings` by construction.
+**`Offer` is no longer on this list.** Revision 2 protected it because
+`RolesTable` hardcodes an Offer count tile. That is circular — a status made
+undeletable because the UI hardcoded a tile for it. Revision 3 makes the tile row
+config-driven, and `Offer` becomes an ordinary deletable status.
+
+`SYSTEM_STATUS_KEYS` is therefore exactly **three**: `New`, `Posting Closed`,
+`Applied`. Revision 2 said "all five system rows" above a four-row table; the set
+is now enumerated and its size stated once.
 
 `ACTIVE_STATUSES` / `TERMINAL_STATUSES` are not cosmetic groupings:
 
 - `app/actions/link-health.ts:78` skips terminal roles, so the terminal set
   decides **which roles cost a liveness check**.
-- `RolesTable.tsx:228` — the default `"Open"` filter hides terminal rows, so
-  the terminal set decides **what you see when the page loads**.
+- `components/RolesTable.tsx:228` — the default `"Open"` filter hides terminal
+  rows, so the terminal set decides **what you see on load**.
 
 ## Storage is already free-form
 
-`db/schema.sql:14` is `status text not null default 'New'` — no CHECK
-constraint, no enum. `Job.status` (`lib/types.ts:94`) is already
-`JobStatus | string`. Confirmed against production: all 73 rows hold one of the
-shipped thirteen, so **no data migration is required**.
+`db/schema.sql:14` is `status text not null default 'New'` — no CHECK, no enum.
+`Job.status` (`lib/types.ts:94`) is already `JobStatus | string`. All 73 rows hold
+one of the shipped thirteen, so **no data migration is required**.
 
 ## Design
 
-### Keys are immutable; labels are presentation
+### Two buckets, not three
 
 ```ts
-export type StatusBucket = "active" | "terminal" | "neutral";
+export type StatusBucket = "active" | "terminal";
 
 export type JobStatusDef = {
-  key: string;          // immutable; this is what jobs.status stores
-  label: string;        // displayed; freely editable
+  key: string;        // immutable; what jobs.status stores
+  label: string;      // displayed; freely editable
   bucket: StatusBucket;
-  hidden: boolean;      // absent from the dropdown; see "Hiding" below
+  hidden: boolean;
   system?: SystemStatusKey;
 };
 ```
 
-Built-in keys are exactly today's stored strings. Custom statuses get a slug
-key derived from their label at creation, immutable afterward.
+Revision 2 had a third `neutral` bucket, and it seeded most of the spec's
+incidental complexity — it forced an `Other` chip, which forced an invariant
+test, which **failed against the shipped default config**: `New` and `Offer` are
+in neither `ACTIVE_STATUSES` (`lib/types.ts:32-40`) nor `TERMINAL_STATUSES`
+(`:42-47`), so both would default to `neutral` and count twice, once in their own
+tile and once in Other. The spec's proudest invariant was red before any user
+edit.
 
-**Reserved keys.** `slugify` must reject or suffix collisions with the filter
-sentinels and count-bucket keys as well as existing statuses:
-`All`, `Open`, `Active`, `Out`, `Other` (`RolesTable.tsx:58`, `:183`). A custom
-status keyed `Open` would otherwise shadow the default filter.
+Two buckets, with defaults read off today's behavior rather than invented:
+**`active` is everything the `"Open"` filter shows and link-health checks** — the
+seven in `ACTIVE_STATUSES`, plus `New` and `Offer`. **`terminal` is the four in
+`TERMINAL_STATUSES`.** That is exactly what the app does today, so the default
+config is a no-op by construction, and a test pins it against `lib/types.ts`
+rather than a hand-copied list.
+
+### The tile row becomes config-driven — a visible change needing approval
+
+`RolesTable.tsx:183-210` counts into four hardcoded buckets and `:212-217` renders
+four tiles with hardcoded labels, comparing status by **string literal**:
+
+```ts
+if (j.status === "New") c.New++;
+else if (ACTIVE_STATUSES.includes(...)) c.Active++;
+else if (j.status === "Offer") c.Offer++;
+```
+
+Rename `New` to `Fresh` and the row above the table still reads "New", counting
+on a literal the user can no longer see. Revision 2 never touched this, so rename
+would have shipped visibly half-done.
+
+**Proposed:** two tiles — **Open** (bucket `active`) and **Out** (bucket
+`terminal`) — plus the per-status chip row that already exists at
+`RolesTable.tsx:552-567` and is config-driven by construction. Every job lands in
+exactly one tile, so the sum invariant is true by definition rather than by test,
+and the `Other` chip, the hardcoded literals, and the branch-order hazard all
+disappear together.
+
+**This changes what you see.** New/Active/Offer/Out becomes Open/Out. Flagged
+rather than assumed — if four tiles are wanted, the alternative is a
+`pinned: boolean` on `JobStatusDef` with `New` and `Offer` pinned by default,
+which keeps four tiles at the cost of one more field and its ordering rules.
+
+### Keys are immutable; labels are presentation
+
+Built-in keys are exactly today's stored strings. Custom statuses get a slug key
+derived from their label at creation, immutable afterward.
 
 **Rejected alternative:** store the label and `UPDATE` all rows on rename. It
-cannot rename the system statuses — their literals live in code and in SQL
-that `/settings` cannot edit.
+cannot rename the system statuses — their literals are in `lib/crawler.ts:427`,
+`lib/removed-titles.ts:68`, and `db/schema.sql:14`, none reachable from
+`/settings`.
+
+**No reserved-key list.** Revision 2 needed `slugify` to blacklist `All`, `Open`,
+`Active`, `Out`, `Other` because `statusFilter` is
+`useState<JobStatus | "All" | "Active" | "Out" | "Open">` (`RolesTable.tsx:59`) —
+sentinels and status keys sharing one string namespace. Fix the state instead:
+`{ kind: "sentinel" | "status"; key: string }`. Collisions become impossible, the
+blacklist disappears, and filter reconciliation reduces to
+`kind === "status" && !byKey.has(key)`. Smaller than the rule it replaces.
+
+### The module splits in two
+
+Revision 2 specified `lib/job-statuses.ts` as both *pure and testable* and *the
+module that reads the `app_settings` row*. Those are incompatible: reading the row
+imports `lib/settings-store.ts`, which imports `@/lib/supabase`, which imports
+`pg` — into a module both client components would import. This repo documents that
+hazard twice, at `components/Settings.tsx:35-39` and `lib/bulk-status.ts:1-6`.
+
+- **`lib/job-statuses.ts`** — pure, no supabase import, safe in the client bundle.
+  Exports `JobStatusDef`, `StatusBucket`, `SystemStatusKey`, `SYSTEM_STATUS_KEYS`,
+  `DEFAULT_STATUSES`, `STATUS_STYLES`, `resolveStatuses`, `slugify`, `labelFor`,
+  `activeKeys`, `terminalKeys`, **`optionsFor`**, **`tileCounts`**,
+  **`compareByConfig`**.
+- **The read** lives in `lib/settings-store.ts`, which already imports supabase,
+  and returns the raw jsonb value. `resolveStatuses` validates it.
+
+The last three exports are new and exist so the tests below can be written in
+`environment: "node"` — see Testing.
 
 ### Where it is stored
 
-One `app_settings` row under `jobStatuses`, value = the full `JobStatusDef[]`.
-Absent → `DEFAULT_STATUSES`. A saved value replaces the default wholesale, so
-deletions need no tombstones.
+One `app_settings` row under a **standalone `JOB_STATUSES_KEY` constant**, not a
+member of `SETTING_KEYS`.
 
-This does **not** go through `Criteria`/`mergeSettings`, for one structural
-reason: `SettingKeysAreFullyClassified` (`lib/settings-store.ts:54-57`) asserts
-at compile time that every setting key is in `LIST_`, `TEXT_`, or
-`NUMBER_SETTING_KEYS`. An array of objects is none of the three. So:
+Revision 2 added a fourth shape group, `JSON_SETTING_KEYS`, and consequently had
+to edit two green tests. Its stated reason was that `SettingKeysAreFullyClassified`
+(`lib/settings-store.ts:55-57`) rejects an array-of-objects — but that assertion
+only constrains keys that are *in* `SETTING_KEYS`, so the compile error was a
+consequence of revision 2's own choice, not a reason for it. The repo already has
+the right precedent: `CRITERIA_CHANGED_AT_KEY` and `COMP_SCORING_RESCORED_AT_KEY`
+live outside `SETTING_KEYS` precisely because they do not go through
+`mergeSettings`. Neither does this.
 
-- add `JSON_SETTING_KEYS` with `jobStatuses` as its first member;
-- add a `saveJobStatuses()` action alongside the existing save actions;
-- **update `lib/settings-store.test.ts:289`** — `grouped` sums only three
-  groups today and its `toEqual(Object.values(SETTING_KEYS))` assertion fails
-  the moment a fourth exists. The shape-vs-default test at `:305-315` needs a
-  `JSON_SETTING_KEYS` clause too.
+Consequences: no fourth group, and **no edits to `lib/settings-store.test.ts`** —
+revision 2's claim that the shape test at `:301-315` fails was also wrong; it
+iterates only the three existing groups and never touches a fourth.
 
-`mergeSettings` is not used for this key; `lib/job-statuses.ts` reads the raw
-row and validates it itself.
+`getSettings()` still returns the statuses off its existing single
+`select key, value from app_settings`, preserving the one-snapshot guarantee.
 
 ### Side effects on save
 
-`CACHES_TO_CLEAR[jobStatuses] = []` and `AFFECTS_CRAWL` excludes it: statuses
-change nothing about what is searched or how roles are scored.
+`CACHES_TO_CLEAR[jobStatuses] = []`, `AFFECTS_CRAWL` excludes it,
+`PATHS_TO_REVALIDATE[jobStatuses] = []`.
 
-`PATHS_TO_REVALIDATE[jobStatuses] = []`, **not** `["/roles"]`. `/roles` is a
-client component that fetches for itself, which is exactly the rule
-`lib/settings-effects.test.ts:157-165` pins ("nothing else revalidates
-anything — no setting but the floor is rendered"). Revalidating would both
-break that test and be a wasted round trip. `RolesTable` picks up new statuses
-through its own fetch, below.
+The empty revalidation list is correct, but **not for the reason revision 2
+gave**. It claimed "/roles is a client component that fetches for itself";
+`app/roles/page.tsx` is an `async` server component with `force-dynamic` that
+calls `readCompFloor()` and passes it as a prop — per `lib/settings-effects.ts` it
+is the *only* route that renders a setting. The real reason is narrower: statuses
+are fetched client-side by `RolesTable`, so there is nothing server-rendered to
+revalidate. Pinned by `lib/settings-effects.test.ts:154-163` and `:165-169`.
 
-### How the config reaches the components
+### Deleting a status
 
-Both consumers read it client-side, in the same fetch they already make. No
-server props.
+Blocked while rows hold it, with the count shown and a reassign picker.
 
-- **`/settings`**: statuses ride inside `SettingsView` (`lib/settings-view.ts:21`)
-  alongside `compFloor` and `ceiling`, returned by the existing `getSettings()`.
-  `app/settings/page.tsx` is a synchronous server component that renders
-  `<Settings />` with no props, and `Settings.tsx` re-reads through
-  `getSettings()` after every save — a server-rendered prop would go stale
-  immediately and could not be refreshed, since
-  `lib/settings-effects.test.ts:170` pins that `/settings` never revalidates.
-  Riding in `SettingsView` also keeps the **single snapshot** guarantee:
-  `getSettings()` takes one read of `app_settings`, and a separate
-  `loadJobStatuses()` call would be a second snapshot a concurrent save can
-  split.
-- **`/roles`**: a `getJobStatuses()` action called alongside the existing
-  `getJobs()` at `RolesTable.tsx:95`.
+**Reassignment targets are guarded.** Revision 2 guarded `New → terminal` and
+`Posting Closed → active` as "silent footguns" and left a strictly larger one
+open: **reassigning rows *into* `New` hands them back to the automation.**
+`lib/crawler.ts:414-427` is explicit that a row the user moved out of `New` is
+theirs and no automated process may touch it; `STALE_POSTING_CANDIDATES_SQL`
+(`:427`) and `CRAWL_TITLE_MATCH_SQL` (`lib/removed-titles.ts:68`) both key on
+`status = 'New'`. Reassigning 21 `Not Interested` rows into `New` re-arms
+stale-posting closure against them. Reassigning any terminal status into an active
+one also re-arms the liveness billing at `app/actions/link-health.ts:78`.
 
-### Deleting a status that jobs hold
+Rule: **`New` is never a reassignment target**, and terminal → active warns inline
+with the row count and the billing consequence.
 
-Blocked, with the count shown and a "reassign to…" picker.
-
-**Order matters and is part of the contract:** reassign first
-(`UPDATE jobs SET status = <new key> WHERE status = <old key>`), then save the
-config with the status removed. In that order a failure between the two steps
-is harmless — rows have moved to a key that is still in the list, and the user
-can retry. The reverse order can leave rows on a key no longer in the config,
-which is precisely the orphan state this design rejects. The two writes are not
-atomic and are not made so; the ordering is what makes that acceptable.
+**Ordering:** reassign first, then save the config. A failure between leaves rows
+on a key still in the list. Stated plainly, because revision 2 called this
+"harmless" and it is only *consistent*: the `UPDATE` lands, the save fails, the UI
+says "save failed", and the user reads that as *nothing happened* while N rows of
+hand-entered triage have been relabeled with no undo and — per the sibling
+multi-tenant spec — no backups. The status column is the only user-authored data
+in this app. **Therefore: the confirm dialog states the row count and that the
+move is not reversible, and the reassign result reports how many rows moved.**
 
 ### Error contract
 
-Per `.claude/skills/swallowed-string-errors` and CLAUDE.md, all three new
-actions return `{ error?: string }` with the driver's message **verbatim,
-empty string included**, and every caller branches on presence
-(`describeWriteFailure(...) !== undefined`), never truthiness:
+Per `.claude/skills/swallowed-string-errors`, all four actions return
+`{ error?: string }` with the driver's message verbatim, empty string included,
+and every caller branches on presence via
+`describeWriteFailure(...) !== undefined`.
 
 - `saveJobStatuses(defs)` — write.
 - `reassignStatus(fromKey, toKey)` — write; returns rows affected.
-- `countJobsByStatus()` — read. **Must carry an error channel.** A failed count
-  that reads as `0` would silently unlock the delete guard, which is the exact
-  class of bug the skill exists for. On error the delete button stays disabled
-  and the reason is shown.
+- `countJobsByStatus()` — read. **Must carry an error channel**: a failed count
+  reading as `0` silently unlocks the delete guard.
+- `getJobStatuses()` — read. **Also carries an error channel**, which revision 2
+  omitted while spending a whole section forbidding exactly that.
+  `loadJobStatuses()` returning `DEFAULT_STATUSES` on failure means a transient
+  read error silently restores hidden statuses, reverts renames, and lets the user
+  write a status not in their config. `RolesTable` must distinguish "your config"
+  from "the database is unreachable" — the same argument `RolesTable.tsx:104`
+  already applies to `getJobs()`.
 
-**Concurrency:** `jobStatuses` is a whole-array replace, so two tabs are
-last-write-wins. Accepted for a single-user app; noted so it is a decision
-rather than an oversight.
+**Tenant safety, now rather than later.** The sibling spec
+`2026-08-15-multi-tenant-auth-design.md` adds `tenant_id` to `jobs`.
+`reassignStatus` as specified is `UPDATE jobs SET status = ... WHERE status = ...`
+with no row-owner predicate — it would rewrite **every tenant's** rows, the same
+defect class as `applySideEffects`'s unqualified
+`` rawQuery(`delete from ${table}`) `` at `app/actions/settings.ts:135`, which four
+reviews flagged. `countJobsByStatus()` would count the platform. Neither goes
+through `QueryBuilder`, so a tenant-table registry would not see them. Write both
+with an explicit owner predicate from the start: a no-op filter today, the
+difference between a scoped update and a platform-wide one later.
+
+**Concurrency:** whole-array replace, last-write-wins across tabs. Accepted.
 
 ### Hiding
 
-A hidden status is removed from the dropdown's options **but the currently
-selected value is always injected as an option**. `StatusSelect`
-(`RolesTable.tsx:966-976`) is the row renderer as well as the editor: it is a
-`<select value={value}>` over the status list, and a `value` with no matching
-`<option>` makes React render the *first* option instead. Without the
-injection, hiding `Not Interested` would make all 21 rows holding it silently
-display "New" while the database says otherwise. Same at
-`RecruiterPanel.tsx:257-262` and the edit panel at `RolesTable.tsx:1186`.
-Pinned by a test.
+A hidden status leaves the dropdown, **but the currently selected value is always
+injected as an option**. `StatusSelect` (`RolesTable.tsx:978-989`) is the row
+renderer as well as the editor — a `<select value={v}>` whose `value` matches no
+`<option>` renders the *first* option instead, so hiding `Not Interested` would
+make all 21 rows holding it display something else while the database disagrees.
+Same at `RecruiterPanel.tsx:266` and the add form at `RolesTable.tsx:1198`.
 
-### Buckets, counts, and the filter row
+**System statuses cannot be hidden.** Revision 2 guarded their *buckets* and left
+hiding open, which is worse: `db/schema.sql:14` still defaults to `New`,
+`lib/ingest-roles.ts:142` still writes it, and the two form defaults
+(`RolesTable.tsx:1044`, `RecruiterPanel.tsx:37`) still seed `"New"` in state. The
+form would *display* the first visible option while `form.status` stayed `"New"`,
+saving a status the user never selected. The injection rule covers row rendering;
+it does not cover a form default that was never a selection.
 
-`RolesTable.tsx:183-190` buckets every job into `New | Active | Offer | Out`,
-and today all thirteen statuses land somewhere. A `neutral` status lands in
-none, so the tiles would stop summing to the row count while `"Open"` still
-shows those rows.
+### Bucket guards
 
-Resolution: add an **`Other`** chip that collects `neutral` statuses, rendered
-only when non-zero. Invariant test: the chip counts always sum to the total row
-count, for any config.
-
-**Filter reconciliation.** `statusFilter` is `useState` in a client component.
-If the selected filter names a status that has since been deleted or hidden,
-the table shows zero rows with no chip highlighted and no way back. On load and
-on config change, a `statusFilter` that no longer resolves resets to `"Open"`.
-
-**Sorting.** `SortKey` includes `"status"` (`RolesTable.tsx:36`) and the
-comparator is a generic `(a[sortKey] ?? "").toLowerCase()` (`:254-258`), which
-after this change sorts by the invisible key and ignores the user's drag order.
-Status sorting must use the config's index.
-
-### System statuses: renamable, not deletable, buckets guarded
-
-Labels and order are freely editable for all five system rows. Buckets are
-**not** freely editable, because two moves are silent footguns:
-
-- `New` → `terminal` hides every freshly ingested role behind the default
-  `"Open"` filter; the pipeline appears to stop finding roles.
-- `Posting Closed` → `active` puts all 29 dead rows back into the link-health
-  pass, re-billing a liveness check on every one.
-
-`New` may not be terminal and `Posting Closed` may not be active — enforced in
-`resolveStatuses` and pinned by tests. Other system bucket changes warn inline
-but are allowed.
+`New` may not be terminal; `Posting Closed` may not be active. Enforced in
+`resolveStatuses`, pinned by tests. Other bucket changes warn inline and are
+allowed.
 
 ### Resolution and failure behavior
 
-`loadJobStatuses()` mirrors `loadCriteria()`: never throws; a failed or
-malformed read logs loudly and returns `DEFAULT_STATUSES`. Validation repairs
-rather than rejects, in order:
-
-1. Any missing system key is re-appended with its default label and bucket.
-2. Duplicate keys — first wins, rest dropped.
-3. Unknown `bucket` → `"neutral"`.
-4. Empty label → falls back to the key.
-5. `New`/`Posting Closed` bucket violations reset to their defaults.
-
-A repaired config is used but not written back.
+`resolveStatuses` repairs rather than rejects, in order: missing system key
+re-appended with its default; duplicate keys — first wins; unknown bucket →
+`active`; empty label → the key; system bucket violations reset; `hidden` forced
+false on system keys. A repaired config is used, not written back.
 
 ## Components
 
 | File | Change |
 |---|---|
-| `lib/job-statuses.ts` | NEW. `DEFAULT_STATUSES`, `JobStatusDef`, `SYSTEM_STATUS_KEYS`, `RESERVED_KEYS`, `resolveStatuses`, `activeKeys`, `terminalKeys`, `labelFor`, `slugify` |
-| `lib/job-statuses.test.ts` | NEW. Invariants below |
-| `lib/types.ts` | `JobStatus` narrows to the system keys as `SystemStatusKey`; the three arrays deleted |
-| `lib/settings-store.ts` | `jobStatuses` key; new `JSON_SETTING_KEYS` group |
-| `lib/settings-store.test.ts` | **UPDATE** `grouped` at `:289` and the shape test at `:305-315` |
-| `lib/settings-effects.ts` | `CACHES_TO_CLEAR` and `PATHS_TO_REVALIDATE` entries, both `[]` |
-| `lib/settings-view.ts` | `statuses` added to `SettingsView` |
-| `app/actions/settings.ts` | `saveJobStatuses`, `countJobsByStatus`, `reassignStatus`; `getSettings` returns statuses off its existing single read |
-| `app/actions/jobs.ts` | `getJobStatuses()` for the client fetch |
-| `components/Settings.tsx` | New "Pipeline statuses" section |
-| `components/RolesTable.tsx` | Fetches statuses; drops the constant imports; `Other` chip; filter reconciliation; status sort by config index; injected current option |
-| `components/RecruiterPanel.tsx` | Same fetch; injected current option |
-| `components/ui.tsx` | **Resolve the divergence** — see below |
-| `lib/bulk-status.ts` | Takes the label, not the key: `summarizeBulkStatus` interpolates the status into user copy at `:64-65` and would otherwise print the key after a rename |
+| `lib/job-statuses.ts` | NEW, pure. Exports listed above |
+| `lib/job-statuses.test.ts` | NEW |
+| `lib/types.ts` | `JobStatus` narrows to `SystemStatusKey`; the three arrays deleted after `DEFAULT_STATUSES` is derived from them |
+| `lib/settings-store.ts` | Standalone `JOB_STATUSES_KEY`; raw read |
+| `lib/settings-effects.ts` | Two `[]` entries |
+| `lib/settings-view.ts` | `statuses` added to `SettingsView` (`:21`) |
+| `app/actions/settings.ts` | `saveJobStatuses`, `countJobsByStatus`, `reassignStatus` |
+| `app/actions/jobs.ts` | `getJobStatuses()` with an error channel; also drop the unused `JobStatus` import at `:4` |
+| `components/Settings.tsx` | New editor — see below |
+| `components/RolesTable.tsx` | Fetch; tagged filter state; config-driven tiles; sort by config index; injected option; **delete dead `EMPTY_FORM` at `:1032`**; label in the `handleStatus` banner at `:281` |
+| `components/RecruiterPanel.tsx` | Fetch; injected option |
+| `components/ui.tsx` | Delete `StatusBadge` + its map — and `SeniorityBadge` (`:26`) and `Stars` (`:52`), also unimported |
+| `lib/bulk-status.ts` | **No change.** `summarizeBulkStatus(results, status: string)` is already `string`; the label belongs at the two call sites |
 | `app/actions/link-health.ts` | Terminal set from config |
-| `lib/crawler.ts`, `lib/ingest-roles.ts` | No change — they write and read system keys, stable by construction |
+| `lib/crawler.ts`, `lib/ingest-roles.ts` | No change — they write system keys |
 
-### `components/ui.tsx` is an unresolved merge, not a duplicate
+### `components/Settings.tsx` has no slot for this
 
-`ui.tsx:5` has six entries; `RolesTable.tsx:21` has thirteen, and they
-**disagree** — `New` is blue in one and grey in the other, `Applied` purple vs
-blue. `ui.tsx` also carries `Reviewing`, which is not a `JobStatus` at all. Its
-only consumer, `StatusBadge`, is imported nowhere (every importer of `./ui`
-takes only `Spinner`/`Tag`).
+Revision 2 said "new 'Pipeline statuses' section" and estimated ~15 files.
+`Settings.tsx` is **842 lines** built on a section-keyed model — `Section` union,
+`LABELS`, `Draft`, `EMPTY_DRAFT`, `draftFrom`, and `syncSection`'s exhaustive
+switch with no `default`, so a new member is a compile error. `Draft` is all
+`string`/`boolean`; a `JobStatusDef[]` does not fit it.
 
-Resolution: **delete `StatusBadge` and its map**; `RolesTable`'s thirteen-entry
-map is the surviving source of truth, moved into `lib/job-statuses.ts` beside
-the defaults. Custom statuses take the existing neutral grey fallback.
+The statuses editor is therefore **its own component with its own local state**,
+rendered inside `Settings.tsx` but outside the `Draft` machinery, saving through
+`saveJobStatuses` directly. And `package.json` has **no drag-and-drop
+dependency**, so reorder is up/down buttons — not drag — unless one is added.
+
+### `JobStatus` narrowing is a type break, not a soft loss
+
+Revision 2 framed it as losing exhaustiveness. `RolesTable.tsx` annotates
+`JobStatus` at `:59, :213, :215, :276, :330, :646, :745, :978, :983, :1033, :1042`
+— including `handleStatus(job, status: JobStatus)` and `StatusSelect`'s props,
+both of which must accept arbitrary config keys afterward. Each needs retyping to
+`string`. Note `lib/applied-date.ts` deliberately went the *other* way in
+`5425bb7`, typing `status: JobStatus` so a rename is a compile error; it stays
+`SystemStatusKey`-typed, which is correct and unaffected.
 
 ## Testing
 
-`lib/job-statuses.ts` is pure and tests like `lib/discovery-windows.test.ts`.
-Written failing-first:
+`vitest.config.ts` is `environment: "node"` and includes only `lib/**/*.test.ts`
+and `app/**/*.test.ts` — no `.tsx`, no jsdom, no testing-library, and no
+`.test.tsx` file exists. **Four of revision 2's ten tests could not have been
+written**, because they targeted JSX behavior with no pure function to bind to.
+That is why `optionsFor`, `tileCounts`, and `compareByConfig` are now exports.
 
-1. Every system key survives an arbitrary saved config, including one that
-   omits or deletes it.
-2. `New` always resolves — ingest has nowhere else to put a role.
-3. No key is in both the active and terminal sets.
-4. Duplicate keys collapse to one.
-5. A hidden status still resolves a label, and the current value is present in
-   the options list even when hidden.
-6. A malformed or absent row yields exactly `DEFAULT_STATUSES`.
-7. `slugify` never emits a key colliding with an existing key or a reserved
-   word.
-8. Reordering changes dropdown order and the status sort, but no key.
-9. Chip counts sum to the total row count for any config, including one with
-   neutral statuses.
-10. `New` cannot be terminal; `Posting Closed` cannot be active.
+1. Every system key survives an arbitrary saved config, including one omitting it.
+2. `New` always resolves.
+3. Duplicate keys collapse to one.
+4. A malformed or absent row yields exactly `DEFAULT_STATUSES`.
+5. `slugify` never collides with an existing key.
+6. `New` cannot be terminal; `Posting Closed` cannot be active; system keys cannot
+   be hidden.
+7. **`DEFAULT_STATUSES` buckets match `ACTIVE_STATUSES` / `TERMINAL_STATUSES` plus
+   `New`/`Offer` as active** — pinned against `lib/types.ts`, not a copy.
+8. `optionsFor(config, current)` contains `current` even when hidden.
+9. `tileCounts` — every job lands in exactly one tile, for any config.
+10. `compareByConfig` orders by config index, not by label or key.
 
-`npm run build && npm test` is the gate, per CLAUDE.md.
+Dropped as unwritable without a DOM stack, and stated rather than silently
+omitted: direct assertions on the three `<select>` render sites, covered
+indirectly by test 8.
+
+Two of revision 2's tests were also vacuous and are gone: "no key is in both the
+active and terminal sets" cannot be violated when `bucket` is a single field, and
+"reordering changes order but no key" tested that array order is array order.
+
+`npm run build && npm test` is the gate.
 
 ## Consequences worth accepting
 
-**The compiler's status guard weakens, though less than revision 1 claimed.**
-`Job.status` is already `JobStatus | string` and `updateJob(id, patch:
-Partial<Job>)` is how every status write actually happens — so
-`updateJob(id, { status: "Aplied" })` compiles *today*, and
-`RecruiterPanel.tsx:258` passes `e.target.value` untyped. What is genuinely
-lost is exhaustiveness on the narrower set of sites that do use `JobStatus`
-directly. The invariant tests replace it for the cases that matter.
-
-**~15 files**, up from the 12 estimated in revision 1.
-
-**CLAUDE.md needs updating.** Its "Status/filter machinery is constant-driven"
-paragraph describes the design this replaces, and its "to add a status: extend
-the union + arrays" instruction becomes wrong.
+- The compiler's status guard weakens at the 11 annotations listed above.
+  `Job.status` is already `JobStatus | string` and
+  `updateJob(id, patch: Partial<Job>)` already accepts a typo today, so the loss
+  is narrower than revision 1 claimed — but it is a real break, not a soft one.
+- **CLAUDE.md's "Status/filter machinery is constant-driven" paragraph becomes
+  wrong**, including its "to add a status: extend the union + arrays" instruction.
+- The tile row changes shape, pending the decision above.
 
 ## Out of scope
 
 - Per-status colors for custom statuses (neutral grey fallback).
-- Reordering the chip row independently of the dropdown.
-- `PipelineStatus` (`lib/types.ts:50`), the legacy Tracker funnel vocabulary.
-- Making the two config writes atomic; ordering covers it.
+- `PipelineStatus` (`lib/types.ts:50`) — verified **zero** consumers repo-wide.
+- Making the two config writes atomic; ordering plus an explicit warning covers it.
+- Drag-to-reorder.
 
-## Review corrections (revision 1 → 2)
+## Review corrections (revision 2 → 3)
 
-Recorded so the reasoning survives, not as changelog ceremony.
-
-1. **`Applied` was not load-bearing.** Revision 1 cited
-   `app/actions/jobs.ts:43`, inside `updateJobStatus` — which had zero callers,
-   so `applied_date` was rendered and never written. Fixed separately in
-   `5502b41` before this revision; `Applied` is now genuinely load-bearing via
-   `lib/applied-date.ts`, and the table above cites the live path.
-2. **Two existing tests failed against revision 1** — the settings-key shape
-   partition and the revalidation rule. Both now addressed explicitly.
-3. **`Criteria` reasoning corrected.** Revision 1 claimed `SETTING_KEYS` values
-   must equal `Criteria` field names. The pinned test is one-directional, and
-   `searchCeiling`/`compFloor` are already non-`Criteria` keys. The
-   compile-time shape partition alone carries the conclusion.
-4. **`/settings` could not have read its own write** through the server prop
-   revision 1 described.
-5. Added: reserved keys, the hidden-option injection, the `Other` chip, filter
-   reconciliation, status sort order, bucket guards on `New`/`Posting Closed`,
-   the reassign ordering rule, the error contract, the `ui.tsx` merge, and
-   `bulk-status.ts`'s label.
-6. **Scale was not stated.** Three of thirteen statuses are in use; that number
-   belongs in the spec so the cost is weighed against it.
+1. **The chip invariant failed on the default config.** `New` and `Offer` are in
+   neither status array, so `neutral` double-counted them. `neutral` is gone; two
+   buckets, defaults derived from `lib/types.ts`.
+2. **`lib/job-statuses.ts` was specified as pure *and* as the row reader** — it
+   would have dragged `pg` into the client bundle. Split.
+3. **Four of ten tests were unwritable** in a node-only vitest setup. Three pure
+   functions extracted; the unwritable ones named as dropped; two vacuous ones
+   removed.
+4. **`getJobStatuses()` had no error channel** while the spec forbade exactly that
+   for `countJobsByStatus()`.
+5. **Every line number was stale** by ~12 lines. All re-derived at `HEAD` after
+   `5425bb7`.
+6. **`EMPTY_FORM` (`RolesTable.tsx:1032`) is dead** — one reference, its own
+   definition. Revision 2 cited it as a `New` write site, repeating the exact error
+   its own correction #1 claimed to have fixed. Now deleted instead.
+7. **`Offer` was protected circularly** — undeletable because a tile hardcoded it.
+   Tile row is config-driven; `Offer` is ordinary.
+8. **"All five system rows" sat above a four-row table.** The set is three.
+9. **Hiding was unguarded for system statuses**, worse than the bucket moves that
+   were guarded, because the two form defaults seed `"New"` in state.
+10. **Reassignment targets were unguarded** — reassigning into `New` hands rows
+    back to stale-posting closure and re-arms liveness billing.
+11. **`bulk-status.ts` needed no change**; its parameter is already `string`. The
+    twin at `RolesTable.tsx:281` was missed.
+12. **The `mergeSettings` reasoning was a non-sequitur**, and the second claimed
+    test failure did not exist. Standalone key; zero test edits.
+13. **"/roles is a client component" is false** — it is an async server component
+    with `force-dynamic`. Conclusion unchanged, reason corrected.
+14. **`Settings.tsx`'s `Draft` model cannot hold this**, and there is no DnD
+    dependency. Both now stated.
+15. **Tenant-unsafe writes** flagged, per the sibling spec's review.
+16. **Scope objection recorded and overruled**, with the zero-`Applied`-rows number
+    stated so the decision is visible rather than implied.
