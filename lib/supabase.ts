@@ -62,6 +62,19 @@ const connectionString =
 // Reuse a single pool across hot reloads / lambda invocations.
 const globalForPg = globalThis as unknown as { __pgPool?: Pool };
 
+/**
+ * The pool itself, for Auth.js's Postgres adapter.
+ *
+ * The adapter takes a `pg.Pool` and issues its own SQL directly — it cannot be
+ * routed through the query builder below. Handing it THIS pool rather than a
+ * second one keeps every connection this process opens under one `max`, so auth
+ * traffic and app traffic contend for a bounded set instead of two independent
+ * ones that together exceed what the database allows.
+ */
+export function authPool(): Pool {
+  return getPool();
+}
+
 function getPool(): Pool {
   if (!globalForPg.__pgPool) {
     globalForPg.__pgPool = new Pool({

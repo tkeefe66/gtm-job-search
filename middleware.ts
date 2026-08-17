@@ -94,6 +94,13 @@ export const config = {
      * Everything except:
      *   gate            — the unlock page itself, or there is no way in
      *   api/gate        — the unlock handler, same reason
+     *   api/auth        — Auth.js's OAuth handshake. Google redirects the
+     *                     browser back to /api/auth/callback/google with no
+     *                     gate cookie in play; gating it makes sign-in
+     *                     impossible to complete, and the failure looks like a
+     *                     broken Google app rather than a local redirect.
+     *   signin          — the sign-in / waitlist page, reachable before a user
+     *                     has any session at all.
      *   api/cron/crawl  — carries its own bearer secret (CRON_SECRET) and is
      *                     called by the Railway cron service, which has no
      *                     cookie and no browser. Gating it would break the
@@ -101,7 +108,12 @@ export const config = {
      *                     would report success while crawling nothing.
      *   _next/*, favicon, static assets — no secrets, and gating them breaks
      *                     the gate page's own styling.
+     *
+     * NOTE the gate is still an OUTER layer over the app while Google sign-in
+     * is being proven. Both are active: the password gets you past the door,
+     * the session decides who you are. Delete this file once sign-in is
+     * enforced on every server action.
      */
-    "/((?!gate|api/gate|api/cron/crawl|_next/static|_next/image|favicon.ico).*)",
+    "/((?!gate|api/gate|api/auth|signin|api/cron/crawl|_next/static|_next/image|favicon.ico).*)",
   ],
 };
