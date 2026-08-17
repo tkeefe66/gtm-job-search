@@ -139,6 +139,31 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   events: {
     /**
+     * The admin is designated by CONFIG, not by a pre-seeded row.
+     *
+     * Seeding a `users` row ahead of first sign-in deadlocks the whole flow:
+     * Auth.js refuses to attach a Google account to an existing user matched only
+     * by email — `OAuthAccountNotLinked` — which is the same protection the `sub`
+     * identity rule exists to provide, and it fires on a row created with no
+     * `accounts` row beside it. The obvious escape,
+     * `allowDangerousEmailAccountLinking: true`, reopens exactly the takeover
+     * this design is built to prevent.
+     *
+     * So the row is created by the normal signup path and promoted here, at the
+     * one moment the user demonstrably controls the address: Google has just
+     * verified it. Everyone else is created `pending` and waits for approval.
+     */
+    async createUser({ user }) {
+      const admin = process.env.ADMIN_EMAIL;
+      if (!admin || !user.email || user.email.toLowerCase() !== admin.toLowerCase()) return;
+      await authPool().query(
+        `update users set status = 'active', role = 'admin', approved_at = now() where id = $1`,
+        [user.id]
+      );
+      console.log("auth: promoted the configured admin on first sign-in");
+    },
+
+    /**
      * `accounts.providerAccountId` IS the Google `sub`, but identity checks read
      * `users.google_sub`, so it is recorded here — the first moment both the user
      * row and the provider account exist. Written only when absent, so a claimed
