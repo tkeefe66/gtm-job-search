@@ -123,22 +123,42 @@ export const CANDIDATE_PERSONA =
 
 /**
  * What "the kind of work this person wants to be hands-on building" means,
- * for `ic_flag`'s field description. Verbatim today's text.
+ * for `ic_flag`'s field description — the positive gerund-phrase form
+ * ("centers on building GTM systems and agentic AI workflows"). Verbatim
+ * today's text.
  *
- * The source description uses this concept twice: once naming it directly
- * ("centers on building GTM systems and agentic AI workflows") and once in
- * the compressed negative case ("no systems/AI-building upside"). Both are
- * driven off this single constant rather than a second one, because a
- * second constant naming the same concept under a different string is
- * exactly the kind of two-places-that-must-not-drift trap this codebase has
- * been bitten by before (see the compensation boundary rule in CLAUDE.md).
- * The negative clause is reworded ("no upside from ${buildingConcept}")
- * rather than reusing the literal source fragment, so the same value reads
- * grammatically in both places for any persona, not just this one.
+ * The source description uses the same underlying idea a second time, in a
+ * different grammatical form: the compressed negative compound adjective
+ * "no systems/AI-building upside". That second form is NOT reconstructable
+ * from this constant by substitution — see `BUILDING_UPSIDE` below, which
+ * holds it as its own constant rather than being derived from this one.
+ * (An earlier revision of this file drove both fragments off this single
+ * constant with reworded connective text around the second occurrence; the
+ * rendered sentence was no longer byte-identical to the source, which is
+ * exactly the failure this task exists to prevent. Splitting per
+ * grammatical form is the same pattern `SEARCH_SUBJECT_SLASHED` and
+ * `QUERY_SUBJECT` use elsewhere in this file's design for `SEARCH_SUBJECT`.)
  */
 export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
 
-export function roleExtractionSchema(persona: string, buildingConcept: string): string {
+/**
+ * The same concept as `BUILDING_CONCEPT`, in the compressed negative
+ * compound-adjective form `ic_flag` uses for its false case: "no
+ * systems/AI-building upside". Verbatim today's text, including the trailing
+ * "upside" — the template below splices this in directly with no connective
+ * word of its own, so the constant carries the whole noun phrase rather than
+ * the template reconstructing it. Kept as its own constant — not derived
+ * from `BUILDING_CONCEPT` — because the two grammatical forms cannot be
+ * produced from one string without changing the rendered wording; see the
+ * note on `BUILDING_CONCEPT`.
+ */
+export const BUILDING_UPSIDE = "systems/AI-building upside";
+
+export function roleExtractionSchema(
+  persona: string,
+  buildingConcept: string,
+  buildingUpside: string
+): string {
   return [
     "Return a JSON array where each object has these exact fields:",
     "role_title (string)",
@@ -156,7 +176,7 @@ export function roleExtractionSchema(persona: string, buildingConcept: string): 
     'salary_range (string, exact salary or range from the posting — e.g. "$160,000 - $210,000" — or empty string if not listed)',
     "description_summary (string, 1-2 sentences about the role)",
     `fit_signal (string, 1 sentence on why a ${persona} might fit)`,
-    `ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on ${buildingConcept}, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no upside from ${buildingConcept})`,
+    `ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on ${buildingConcept}, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no ${buildingUpside})`,
   ].join("\n- ");
 }
 

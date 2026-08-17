@@ -343,8 +343,20 @@ The highest-stakes task: `fit_signal` becomes `fit_summary` (`lib/ingest-roles.t
 export const CANDIDATE_PERSONA =
   "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder";
 
-/** What "the kind of work this person wants" means, for ic_flag. */
+/** What "the kind of work this person wants" means, for ic_flag's positive clause. */
 export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
+
+/**
+ * The SAME idea in ic_flag's negative clause, which words it differently:
+ * "…mature orgs with no systems/AI-building upside". A compound adjective, not
+ * a gerund phrase, so one constant cannot serve both positions without
+ * rewording the prompt — and rewording is the no-op broken.
+ *
+ * Two constants for one idea is the pattern this project already settled on
+ * with SEARCH_SUBJECT / SEARCH_SUBJECT_SLASHED / QUERY_SUBJECT. Assuming one
+ * value fits several grammatical slots is what broke revision 1 of the spec.
+ */
+export const BUILDING_UPSIDE = "systems/AI-building upside";
 
 export function roleExtractionSchema(persona: string, buildingConcept: string): string {
 ```

@@ -7,6 +7,7 @@ import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import {
   BUILDING_CONCEPT,
+  BUILDING_UPSIDE,
   CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
@@ -72,7 +73,8 @@ export function buildExtractionPrompt(
   page: ExtractedPage,
   criteria: Criteria,
   persona: string,
-  buildingConcept: string
+  buildingConcept: string,
+  buildingUpside: string
 ): string {
   const links = page.links
     .map((l) => `${l.text || "(no text)"} -> ${l.href}`)
@@ -84,7 +86,7 @@ Identify every open role matching any of these titles or close variants: ${title
 
 ${criteria.locationRule}
 
-${roleExtractionSchema(persona, buildingConcept)}
+${roleExtractionSchema(persona, buildingConcept, buildingUpside)}
 
 Use the link list to fill job_url — resolve relative URLs against the careers page where you can, otherwise return the relative path as-is. If no role on the page qualifies, return exactly [] and nothing else. Return ONLY the JSON array.
 
@@ -339,7 +341,8 @@ async function extractViaFetch(
       classification.page,
       criteria,
       CANDIDATE_PERSONA,
-      BUILDING_CONCEPT
+      BUILDING_CONCEPT,
+      BUILDING_UPSIDE
     ),
     maxTokens: 4000,
   });
@@ -356,7 +359,7 @@ async function extractViaSearch(
     system: roleSearchSystem(SEARCH_SUBJECT),
     prompt: `Search for open ${SEARCH_SUBJECT} roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
-${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT)}
+${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE)}
 
 If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`,
     // Search narration counts against the budget; 2000 has truncated the

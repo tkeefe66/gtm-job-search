@@ -11,6 +11,7 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
   BUILDING_CONCEPT,
+  BUILDING_UPSIDE,
   CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   STACK_FAMILY_INTRO,
@@ -60,7 +61,7 @@ ${queries.map((q) => `- ${q}`).join("\n")}
 
 Run as many of these searches as you can and combine the results. ${dateContextLine()} Prioritize postings from the last 60 days. ${criteria.locationRule}
 
-${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT)}
+${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE)}
 - company (string, the hiring company name — REQUIRED, never empty)
 
 Return up to 25 roles. Deduplicate identical postings. Return ONLY the JSON array.`;

@@ -29,6 +29,7 @@ import {
 import { stripHtml } from "./page-extract";
 import {
   BUILDING_CONCEPT,
+  BUILDING_UPSIDE,
   CANDIDATE_PERSONA,
   DEFAULT_CRITERIA,
   type Criteria,
@@ -62,7 +63,14 @@ describe("buildExtractionPrompt", () => {
 
   test("names the company", () => {
     expect(
-      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+      buildExtractionPrompt(
+        "Clay",
+        page,
+        DEFAULT_CRITERIA,
+        CANDIDATE_PERSONA,
+        BUILDING_CONCEPT,
+        BUILDING_UPSIDE
+      )
     ).toContain("Clay");
   });
 
@@ -70,7 +78,14 @@ describe("buildExtractionPrompt", () => {
     // "Denver" reaches the prompt only through criteria.locationRule — it
     // appears nowhere else in the template. Keep this assertion as-is.
     expect(
-      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+      buildExtractionPrompt(
+        "Clay",
+        page,
+        DEFAULT_CRITERIA,
+        CANDIDATE_PERSONA,
+        BUILDING_CONCEPT,
+        BUILDING_UPSIDE
+      )
     ).toContain("Denver");
   });
 
@@ -80,7 +95,8 @@ describe("buildExtractionPrompt", () => {
       page,
       DEFAULT_CRITERIA,
       CANDIDATE_PERSONA,
-      BUILDING_CONCEPT
+      BUILDING_CONCEPT,
+      BUILDING_UPSIDE
     );
     expect(prompt).toContain("Open roles");
     expect(prompt).toContain("/careers/revops");
@@ -88,7 +104,14 @@ describe("buildExtractionPrompt", () => {
 
   test("asks for an empty array rather than prose when nothing matches", () => {
     expect(
-      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+      buildExtractionPrompt(
+        "Clay",
+        page,
+        DEFAULT_CRITERIA,
+        CANDIDATE_PERSONA,
+        BUILDING_CONCEPT,
+        BUILDING_UPSIDE
+      )
     ).toContain("[]");
   });
 
@@ -109,7 +132,8 @@ describe("buildExtractionPrompt", () => {
       page,
       edited,
       CANDIDATE_PERSONA,
-      BUILDING_CONCEPT
+      BUILDING_CONCEPT,
+      BUILDING_UPSIDE
     );
     expect(prompt).toContain("Chief Waffle Officer");
     expect(prompt).toContain("Reykjavik only.");

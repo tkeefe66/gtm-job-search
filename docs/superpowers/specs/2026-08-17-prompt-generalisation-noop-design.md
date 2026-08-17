@@ -117,7 +117,8 @@ constant carrying its exact current text:
 | `SEARCH_SUBJECT` | `go-to-market and revenue operations` | `lib/search-criteria.ts:59-60` (`ROLE_SEARCH_SYSTEM`, **split across a concatenation** — see below), `app/actions/roles.ts:108`, `lib/crawler.ts:346` |
 | `STACK_FAMILY_INTRO` | the **whole** `FAMILY_INTRO.stack` string | `app/actions/role-search.ts:38-39` — see below |
 | `CANDIDATE_PERSONA` | `GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder` | `lib/search-criteria.ts:93` (`fit_signal`) |
-| `BUILDING_CONCEPT` | `building GTM systems and agentic AI workflows` (and `no systems/AI-building upside`) | `lib/search-criteria.ts:94` (`ic_flag`) |
+| `BUILDING_CONCEPT` | `building GTM systems and agentic AI workflows` | `lib/search-criteria.ts:94` (`ic_flag`, positive clause) |
+| `BUILDING_UPSIDE` | `systems/AI-building upside` | `lib/search-criteria.ts:94` (`ic_flag`, negative clause — a compound adjective, so it CANNOT share the constant above) |
 | `QUERY_SUBJECT` | `revenue operations` | `lib/search-criteria.ts:139` (`stackQueries`) |
 
 Five constants, not one. Phase 2 decides whether generation emits five values or
