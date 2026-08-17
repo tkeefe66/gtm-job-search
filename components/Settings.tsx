@@ -777,6 +777,15 @@ export default function Settings() {
           resetLabel="Turn off"
         />
       </SectionCard>
+
+      {/*
+        ONE panel for the whole tenant. It was previously mounted inside
+        SectionActions, which renders once per settings section — so the page
+        showed a key field under every card. tenant_api_keys is keyed by
+        tenant_id, so there was only ever one key; the duplication was purely a
+        rendering mistake.
+      */}
+      <ApiKeyPanel />
     </div>
   );
 }
@@ -838,7 +847,6 @@ function SectionActions({
       >
         {resetLabel}
       </button>
-      <ApiKeyPanel />
 </div>
   );
 }
