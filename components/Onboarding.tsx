@@ -408,28 +408,45 @@ export default function Onboarding() {
 
   // ---- rendering ----
 
-  if (step === "loading") {
-    return (
-      <div className="mx-auto max-w-2xl py-16">
-        <Spinner label="Loading" />
-      </div>
-    );
-  }
-
+  // MUST come before the `step === "loading"` check below. On a failed load
+  // (either the `state.error !== undefined` branch or the `catch` block in
+  // the mount effect), `step` is never advanced off its initial "loading"
+  // value — nothing in either failure path calls setStep. An error check
+  // placed AFTER the loading guard is therefore unreachable: the spinner
+  // returns first and never yields to it. (This was exactly wrong in an
+  // earlier revision of this file — the loading guard came first, and the
+  // error screen below it was genuinely dead code. Checked by re-reading this
+  // exact sequence, not by re-asserting the fix works.)
+  //
   // BLOCKS the whole wizard (Finding 1) rather than warning and continuing.
   // `answers` in this state is still DEFAULT_PROFILE's empty defaults — the
   // mount effect deliberately returns before applying the real read — so
   // there is nothing safe to show or edit, and no path from here reaches
-  // saveProfile.
-  if (loadError) {
+  // saveProfile. States both facts settingsReadWarning states for the
+  // equivalent /settings case: what is on screen is NOT the tenant's saved
+  // data, and reload is the way out.
+  // Presence (`!== null`), not truthiness — both producers (describeWriteFailure
+  // in the state.error branch, the "Could not load onboarding — " template in
+  // the catch block) are guaranteed non-empty today, but this is the same
+  // presence-vs-truthiness doctrine every other check in this file follows,
+  // and there is no reason for this one string to be the exception.
+  if (loadError !== null) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="font-heading text-2xl font-semibold text-ink">Welcome</h1>
         <div className="mt-4 rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-3 text-sm text-[#92400E]">
-          Could not load your saved answers — {loadError}. Continuing would risk overwriting
-          anything you already saved, so this page is not shown until it can read them.
-          Reload to try again.
+          Could not load your saved answers — {loadError}. What you would see below is NOT
+          your saved data, and continuing risks overwriting anything you already saved, so
+          this page will not go further until it can read them. Reload to try again.
         </div>
+      </div>
+    );
+  }
+
+  if (step === "loading") {
+    return (
+      <div className="mx-auto max-w-2xl py-16">
+        <Spinner label="Loading" />
       </div>
     );
   }
