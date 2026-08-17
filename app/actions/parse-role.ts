@@ -250,10 +250,18 @@ async function scoreFitInner(
     const result = parseJson<{ score: number; rationale: string }>(raw);
     return { score: Math.min(5, Math.max(1, Math.round(result.score))), rationale: result.rationale };
   } catch (err) {
+    // The real error is logged, and logged is the only place it goes.
     console.error("scoreFit error:", err);
-    // Not describeWriteFailure: this failure is the model or the parse, not the
-    // database, and a message naming the database would be a false sentence.
-    const message = err instanceof Error && err.message ? err.message : "Failed to score fit.";
-    return { score: 0, rationale: "", error: message };
+    // A CLOSED SET, not the thrown text. The failure that most often lands here
+    // is now the SDK's own — a `model: not_found_error` for a model the key
+    // cannot reach — and SDK error text embeds the request URL and sometimes
+    // the key itself (see app/actions/api-key.ts). None of that may reach a
+    // browser, and passing `err.message` through sent all of it.
+    //
+    // Not describeWriteFailure either: this failure is the model or the parse,
+    // not the database, and UNDESCRIBED_DB_ERROR names the database and would
+    // be a false sentence here. The constant is non-empty on every path, so the
+    // caller's presence check still separates "failed" from "succeeded".
+    return { score: 0, rationale: "", error: "Failed to score fit." };
   }
 }

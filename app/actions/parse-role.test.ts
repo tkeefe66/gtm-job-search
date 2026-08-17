@@ -144,4 +144,18 @@ describe("scoreFit runs through the provider registry, not the raw SDK", () => {
     expect(res.error).toBeTruthy();
     expect(res.score).toBe(0);
   });
+
+  // The other half of the same rule: the sentence is a CLOSED SET, so the SDK's
+  // text never reaches the browser. Now that validateKey probes the tenant's
+  // chosen model, a `model: not_found_error` — which carries the request URL,
+  // and sometimes the key — is the likeliest thing to be thrown here.
+  test("the SDK's text is never passed through, only a fixed sentence", async () => {
+    model.mockRejectedValue(
+      new Error("404 https://api.anthropic.com/v1/messages model: not_found_error key=sk-ant-leak")
+    );
+    const res = await scoreFit({ ...role, fitInputs });
+    expect(res.error).toBe("Failed to score fit.");
+    expect(res.error).not.toContain("sk-ant-leak");
+    expect(res.error).not.toContain("api.anthropic.com");
+  });
 });
