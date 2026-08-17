@@ -9,7 +9,6 @@ import {
   reserveVerdict,
   resetsOn,
   cappedMessage,
-  CENTS_PER_SEARCH,
   type Window,
 } from "./budget";
 
@@ -66,6 +65,7 @@ describe("reserveVerdict", () => {
         daily: { spentCents: 99_999, ceilingCents: 1 },
         monthly: { spentCents: 99_999, ceilingCents: 1 },
         estimateCents: 500,
+        centsPerSearch: 1,
       })
     ).toEqual({ allow: true, maxSearches: null });
   });
@@ -74,7 +74,7 @@ describe("reserveVerdict", () => {
   // keep issuing individually-billed searches that token usage never reports.
   test("a metered call always carries a search cap, never null", () => {
     for (const tier of ["admin"] as const) {
-      const v = reserveVerdict({ tier, daily: open, monthly: open, estimateCents: 10 });
+      const v = reserveVerdict({ tier, daily: open, monthly: open, estimateCents: 10, centsPerSearch: 1 });
       expect(v.allow).toBe(true);
       if (!v.allow) throw new Error("unreachable");
       expect(v.maxSearches).not.toBeNull();
@@ -87,9 +87,23 @@ describe("reserveVerdict", () => {
       daily: { spentCents: 900, ceilingCents: 1000 },   // 100 left
       monthly: { spentCents: 0, ceilingCents: 10_000 }, // 10000 left
       estimateCents: 10,
+      centsPerSearch: 1,
     });
     if (!v.allow) throw new Error("unreachable");
-    expect(v.maxSearches).toBe(100 / CENTS_PER_SEARCH);
+    expect(v.maxSearches).toBe(100);
+  });
+
+  // The cap is priced by the caller-supplied rate, not a fixed constant — a
+  // pricier provider or a cheaper one both change how many searches $1 buys.
+  test("the cap is computed at the resolved provider's search price, not a fixed cent", () => {
+    const v = reserveVerdict({
+      tier: "admin",
+      daily: { spentCents: 0, ceilingCents: 100 },
+      monthly: { spentCents: 0, ceilingCents: 1000 },
+      estimateCents: 1,
+      centsPerSearch: 4,
+    });
+    expect(v).toEqual({ allow: true, maxSearches: 25 });
   });
 
   test("the DAILY window can block while the monthly one is wide open", () => {
@@ -98,6 +112,7 @@ describe("reserveVerdict", () => {
       daily: { spentCents: 1000, ceilingCents: 1000 },
       monthly: { spentCents: 1000, ceilingCents: 100_000 },
       estimateCents: 10,
+      centsPerSearch: 1,
     });
     expect(v.allow).toBe(false);
     if (v.allow) throw new Error("unreachable");
@@ -110,6 +125,7 @@ describe("reserveVerdict", () => {
       daily: { spentCents: 0, ceilingCents: 1000 },
       monthly: { spentCents: 10_000, ceilingCents: 10_000 },
       estimateCents: 10,
+      centsPerSearch: 1,
     });
     expect(v.allow).toBe(false);
     if (v.allow) throw new Error("unreachable");
@@ -125,6 +141,7 @@ describe("reserveVerdict", () => {
       daily: { spentCents: 1000, ceilingCents: 1000 },
       monthly: { spentCents: 10_000, ceilingCents: 10_000 },
       estimateCents: 1,
+      centsPerSearch: 1,
     });
     if (v.allow) throw new Error("unreachable");
     expect(v.reason).toBe("daily");
@@ -136,6 +153,7 @@ describe("reserveVerdict", () => {
       daily: { spentCents: 999, ceilingCents: 1000 },
       monthly: open,
       estimateCents: 0,
+      centsPerSearch: 1,
     });
     if (!v.allow) throw new Error("unreachable");
     expect(v.maxSearches).toBeGreaterThanOrEqual(1);
@@ -143,8 +161,12 @@ describe("reserveVerdict", () => {
 
   test("spending exactly to a ceiling is allowed; one cent past is not", () => {
     const at = { spentCents: 0, ceilingCents: 100 };
-    expect(reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 100 }).allow).toBe(true);
-    expect(reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 101 }).allow).toBe(false);
+    expect(
+      reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 100, centsPerSearch: 1 }).allow
+    ).toBe(true);
+    expect(
+      reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 101, centsPerSearch: 1 }).allow
+    ).toBe(false);
   });
 });
 

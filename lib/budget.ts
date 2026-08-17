@@ -24,9 +24,6 @@
  * account: the owner's, against a runaway.
  */
 
-/** Cents per web_search, matching lib/cost-estimate.ts. */
-export const CENTS_PER_SEARCH = 1;
-
 export type Tier = "admin" | "byo" | "none";
 
 /**
@@ -117,6 +114,9 @@ export function reserveVerdict(input: {
   daily: Window;
   monthly: Window;
   estimateCents: number;
+  /** From the resolved provider — searches are not a cents-per-unit constant
+   *  shared across vendors, and a cap computed at the wrong price is not a cap. */
+  centsPerSearch: number;
 }): ReserveVerdict {
   if (!isMetered(input.tier)) return { allow: true, maxSearches: null };
 
@@ -134,7 +134,7 @@ export function reserveVerdict(input: {
     input.daily.ceilingCents - input.daily.spentCents,
     input.monthly.ceilingCents - input.monthly.spentCents
   );
-  return { allow: true, maxSearches: Math.max(1, Math.floor(remaining / CENTS_PER_SEARCH)) };
+  return { allow: true, maxSearches: Math.max(1, Math.floor(remaining / input.centsPerSearch)) };
 }
 
 /**

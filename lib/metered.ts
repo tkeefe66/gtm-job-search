@@ -4,7 +4,6 @@ import { resolveTenantId } from "@/lib/tenant";
 import { runWithBilling, billingScope, type BillingScope } from "@/lib/billing-context";
 import { reserveSpend, reconcileSpend } from "@/lib/usage-store";
 import {
-  CENTS_PER_SEARCH,
   cappedMessage,
   isMetered,
   needsKeyMessage,
@@ -13,6 +12,8 @@ import {
   resolveTier,
   type Tier,
 } from "@/lib/budget";
+import { providerFor } from "@/lib/providers/registry";
+import { resolveProviderConfig, type ProviderConfig } from "@/lib/providers/resolution";
 
 /**
  * Runs a block of Claude work against a tenant's budget.
@@ -112,10 +113,15 @@ export async function withBudget<T>(opts: {
   // which meant approving a tenant silently spent the owner's money.
   if (tier === "none") return { capped: needsKeyMessage() };
 
+  // The admin with no stored key of their own routes to the platform's own
+  // provider and model — resolveProviderConfig(null) reproduces exactly the
+  // Anthropic + Sonnet routing this app has always used.
+  const config: ProviderConfig = ownKey?.config ?? resolveProviderConfig(null)!;
+
   // BYO spends its own money, so it is not rationed — but its usage is still
   // recorded below, so the tenant can see it.
   if (!isMetered(tier)) {
-    return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0, ownKey);
+    return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0, ownKey?.apiKey ?? null, config);
   }
 
   const { data: counters } = await rawQuery<{ period: string; spent_cents: number }>(
@@ -127,7 +133,13 @@ export async function withBudget<T>(opts: {
   const daily = { spentCents: spent(now.toISOString().slice(0, 10)), ceilingCents: limits.dailyCents };
   const monthly = { spentCents: spent(now.toISOString().slice(0, 7)), ceilingCents: limits.monthlyCents };
 
-  const verdict = reserveVerdict({ tier, daily, monthly, estimateCents: opts.estimateCents });
+  // One search, priced by the adapter — which is the definition of the number.
+  const centsPerSearch = providerFor(config.providerId).costCents(
+    { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1 },
+    config.model
+  );
+
+  const verdict = reserveVerdict({ tier, daily, monthly, estimateCents: opts.estimateCents, centsPerSearch });
   if (!verdict.allow) {
     return {
       capped: cappedMessage({
@@ -162,50 +174,75 @@ export async function withBudget<T>(opts: {
     };
   }
 
-  return runScope(tier, { maxSearches: verdict.maxSearches }, opts, tenantId, now, opts.estimateCents, ownKey);
+  return runScope(
+    tier,
+    { maxSearches: verdict.maxSearches },
+    opts,
+    tenantId,
+    now,
+    opts.estimateCents,
+    ownKey?.apiKey ?? null,
+    config
+  );
+}
+
+interface TenantKey {
+  apiKey: string;
+  config: ProviderConfig;
 }
 
 /**
- * Decrypts this tenant's stored key, or null.
+ * This tenant's key AND how to route it, or null.
  *
- * Null covers three cases that are all "no usable key": nothing stored, a row
+ * Null covers four cases that are all "no usable key": nothing stored, a row
  * that will not open (tampered, moved between tenants, or written under an
- * encryption key that no longer exists), and a key marked failed. None of them
- * may silently fall back to the platform key — that would bill the platform for
- * a tenant who believes they are paying, which is the failure this whole tier is
- * meant to make impossible.
+ * encryption key that no longer exists), a key marked failed, and — new — a
+ * stored provider this build has no adapter for. None of them may silently
+ * fall back to the platform key or to Anthropic — either would bill somebody
+ * who believes they are paying their own vendor, which is the failure this
+ * whole tier is meant to make impossible.
  */
-async function loadTenantKey(tenantId: string): Promise<string | null> {
+async function loadTenantKey(tenantId: string): Promise<TenantKey | null> {
   const { data } = await rawQuery<{
     key_id: string;
+    aad_version: number;
     ciphertext: string;
     nonce: string;
     auth_tag: string;
-    aad_version: number;
+    provider: string;
+    model: string | null;
   }>(
-    `select key_id, ciphertext, nonce, auth_tag, aad_version
+    `select key_id, aad_version, ciphertext, nonce, auth_tag, provider, model
        from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
     [tenantId],
     tenantId
   );
   if (data.length === 0) return null;
+  const row = data[0];
+
+  const config = resolveProviderConfig({ provider: row.provider, model: row.model });
+  if (config === null) {
+    console.error(`metered: a stored API key names a provider this build cannot route: ${row.provider}`);
+    return null;
+  }
 
   const plain = open(
     {
-      keyId: data[0].key_id,
-      aadVersion: data[0].aad_version,
-      ciphertext: data[0].ciphertext,
-      nonce: data[0].nonce,
-      authTag: data[0].auth_tag,
+      keyId: row.key_id,
+      aadVersion: row.aad_version,
+      ciphertext: row.ciphertext,
+      nonce: row.nonce,
+      authTag: row.auth_tag,
     },
-    { tenantId, provider: "anthropic", model: null }
+    { tenantId, provider: row.provider, model: row.model }
   );
   if (plain === null) {
     // Loud, because this is not a normal state: the row exists and cannot be
     // opened, which means tampering, a moved row, or a rotated encryption key.
     console.error(`metered: a stored API key for a tenant could not be opened`);
+    return null;
   }
-  return plain;
+  return { apiKey: plain, config };
 }
 
 async function runScope<T>(
@@ -215,8 +252,10 @@ async function runScope<T>(
   tenantId: string,
   now: Date,
   reservedCents: number,
-  ownKey: string | null
+  ownKey: string | null,
+  config: ProviderConfig
 ): Promise<MeteredResult<T>> {
+  const provider = providerFor(config.providerId);
   const scope: BillingScope = {
     maxSearches: caps.maxSearches,
     // The platform key is reachable ONLY by the admin, whose key it is. Every
@@ -224,8 +263,11 @@ async function runScope<T>(
     // refused above. The `??` is not a fallback for tenants — it is the admin
     // branch, and a keyless non-admin can never reach it.
     apiKey: ownKey ?? (tier === "admin" ? process.env.ANTHROPIC_API_KEY || "" : ""),
+    provider: config.providerId,
+    model: config.model,
     searches: 0,
     inputTokens: 0,
+    cachedInputTokens: 0,
     outputTokens: 0,
   };
 
@@ -234,10 +276,18 @@ async function runScope<T>(
     return { result };
   } finally {
     // In a finally: a call that throws halfway still issued searches, and
-    // charging only successful calls would make a failing loop free.
-    const actual =
-      scope.searches * CENTS_PER_SEARCH +
-      Math.round((scope.inputTokens * 3 + scope.outputTokens * 15) / 10_000);
+    // charging only successful calls would make a failing loop free. Priced
+    // through the adapter — never a hardcoded rate — so a tenant on a
+    // different provider or model is billed at that provider's own price.
+    const actual = provider.costCents(
+      {
+        inputTokens: scope.inputTokens,
+        cachedInputTokens: scope.cachedInputTokens,
+        outputTokens: scope.outputTokens,
+        searches: scope.searches,
+      },
+      scope.model
+    );
     await reconcileSpend({
       tenantId,
       estimateCents: reservedCents,

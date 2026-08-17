@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ProviderId } from "@/lib/providers/types";
 
 /**
  * What a Claude call costs, collected as it happens.
@@ -22,9 +23,16 @@ export interface BillingScope {
   maxSearches: number | null;
   /** The key these calls bill. */
   apiKey: string;
-  /** Accumulated, by the helpers in lib/anthropic.ts. */
+  /** Which adapter routes these calls, and at which model. Resolved per tenant
+   *  in lib/metered.ts, because a module-level constant cannot be a DB read. */
+  provider: ProviderId;
+  model: string;
+  /** Accumulated, by the facade in lib/model-call.ts. */
   searches: number;
   inputTokens: number;
+  /** Separate from inputTokens because providers disagree about whether their
+   *  input count includes cached reads, and they are priced ~10x apart. */
+  cachedInputTokens: number;
   outputTokens: number;
 }
 
@@ -51,11 +59,13 @@ export function billingScope(): BillingScope | null {
 export function recordUsage(u: {
   searches?: number;
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
 }): void {
   const s = store.getStore();
   if (!s) return;
   s.searches += u.searches ?? 0;
   s.inputTokens += u.inputTokens ?? 0;
+  s.cachedInputTokens += u.cachedInputTokens ?? 0;
   s.outputTokens += u.outputTokens ?? 0;
 }
