@@ -34,7 +34,12 @@ vi.mock("@/auth", () => ({ auth: async () => null }));
  * platform context in lib/platform-context.ts is what grants that, and it is
  * entered only after the secret check passes.
  */
-const CRON_CALLED = new Set(["getDueCompanies", "repairJobLinks"]);
+const CRON_CALLED = new Set([
+  "getDueCompanies",
+  "repairJobLinks",
+  // Enumerates tenants for the nightly crawl; the cron route has no session.
+  "listCrawlableTenants",
+]);
 
 /** Not actions — re-exported types and constants carry no session requirement. */
 function isAction(v: unknown): v is (...args: unknown[]) => Promise<unknown> {

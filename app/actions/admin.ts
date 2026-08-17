@@ -95,3 +95,29 @@ export async function suspendUser(id: string): Promise<{ error?: string }> {
   if (id === actor.userId) return { error: "You cannot suspend your own account." };
   return setStatus(id, "suspended", actor.userId);
 }
+
+/**
+ * The tenants scheduled work should act for: everyone currently allowed in.
+ *
+ * Platform-callable, like getDueCompanies and repairJobLinks — the cron route
+ * holds no session, and its CRON_SECRET check is what authorises it. Reads
+ * `users`, which is auth schema with no tenant_id and no RLS policy, so it is
+ * legitimately cross-tenant; that is the whole point of enumerating.
+ *
+ * Only 'active'. A pending, denied or suspended account must not have its
+ * companies crawled — that would spend money on somebody who cannot sign in.
+ */
+export async function listCrawlableTenants(): Promise<{
+  tenantIds: string[];
+  error?: string;
+}> {
+  const { data, error } = await rawQuery<{ id: string }>(
+    `select id from users where status = 'active' order by created_at`
+  );
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "list tenants to crawl"
+  );
+  if (described !== undefined) return { tenantIds: [], error: described };
+  return { tenantIds: data.map((r) => r.id) };
+}

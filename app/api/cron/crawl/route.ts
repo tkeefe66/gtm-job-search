@@ -4,7 +4,9 @@ import { crawlCompany, loadRunContext, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
 import { getDueCompanies } from "@/app/actions/watchlist";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
-import { runAsPlatform } from "@/lib/platform-context";
+import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
+import { splitCrawlBatch } from "@/lib/crawl-fairness";
+import { listCrawlableTenants } from "@/app/actions/admin";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
 // typo in the cron command) selects every due company and crawls them all
@@ -66,76 +68,88 @@ async function handleCrawl(req: Request) {
       ? Math.min(rawLimit, MAX_BATCH_LIMIT)
       : DEFAULT_BATCH_LIMIT;
 
-  // Routed through the same server action the rest of the app uses, rather
-  // than duplicating the query inline, so there is exactly one code path
-  // that decides "which companies are due" (getDueCompanies in
-  // app/actions/watchlist.ts, backed by DUE_COMPANIES_SQL).
-  const { companies: due, error } = await getDueCompanies(limit);
-  if (error) {
-    console.error(`cron/crawl: could not select due companies — ${error}`);
-    return NextResponse.json(
-      { error: `Could not select due companies: ${error}` },
-      { status: 500 }
-    );
+  // Every ACTIVE tenant gets crawled, not just the admin. Before this loop the
+  // platform resolved to one tenant, so a second tenant's tracked companies
+  // would never have been crawled and any result would have landed in the
+  // admin's pipeline — silently, since a watchlist that is never crawled looks
+  // exactly like companies that are never hiring.
+  const { tenantIds, error: tenantError } = await listCrawlableTenants();
+  if (tenantError !== undefined) {
+    console.error(`cron/crawl: could not list tenants — ${tenantError}`);
+    return NextResponse.json({ error: tenantError }, { status: 500 });
   }
+
+  // The budget is 3 sequential crawls at 60-120s each, so with more tenants than
+  // slots somebody misses out every night. The rotation decides that it is a
+  // DIFFERENT somebody each night — see lib/crawl-fairness.ts. Day number, so a
+  // run repeated within a day does not reshuffle.
+  const rotation = Math.floor(Date.now() / 86_400_000);
+  const slices = splitCrawlBatch(tenantIds, limit, rotation);
 
   const results: CrawlOutcome[] = [];
+  // An accumulator object rather than a `let`: TypeScript cannot follow an
+  // assignment made inside an async callback and narrows the variable to `never`,
+  // so the reads below stop type-checking.
+  const linkAcc: { value: LinkRepairReport | null } = { value: null };
 
-  // Skipped entirely when nothing is due — which is most ticks. The context is
-  // a settings read plus the run-history lookups behind it, and spending them
-  // to crawl zero companies is pure waste.
-  if (due.length > 0) {
-    // Resolved ONCE for the whole batch, before the loop. Two reasons, and the
-    // first is the load-bearing one: a settings save landing halfway through a
-    // batch would otherwise crawl the first companies against the old title
-    // list and the rest against the new one, producing a run whose results
-    // cannot be interpreted. Second, it is one settings read per batch instead
-    // of one per company.
-    const ctx = await loadRunContext();
-
-    // Sequential on purpose: avoids bursting the Anthropic API by firing many
-    // concurrent web_search-tier calls at once. This does NOT keep the request
-    // inside normal HTTP timeouts — a search-tier crawl is ~60-120s, so a full
-    // batch can run well past what most timeouts allow (see DEFAULT_BATCH_LIMIT's
-    // comment in lib/crawl-schedule.ts). The batch self-heals against that:
-    // each company's last_checked_at advances as it completes, so a request
-    // that gets cut off mid-batch simply resumes with the next-due companies
-    // on the following run. One company failing never aborts the batch either.
-    for (const company of due) {
-      try {
-        results.push(await crawlCompany(company, { dryRun, ctx }));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`cron/crawl: ${company} threw — ${message}`);
-        results.push({
-          company,
-          method: null,
-          rolesFound: 0,
-          newRoles: 0,
-          status: "error",
-          error: message,
-        });
+  for (const slice of slices) {
+    // One scope per tenant. loadRunContext resolves ONE criteria set per batch
+    // precisely because mixing two title lists produces a run whose results
+    // cannot be interpreted — which is the same reason the scope is per tenant
+    // rather than per run.
+    await runAsTenant(slice.tenantId, async () => {
+      const { companies: due, error } = await getDueCompanies(slice.limit);
+      if (error) {
+        console.error(`cron/crawl: due companies failed for a tenant — ${error}`);
+        return;
       }
-    }
-  }
+      if (due.length > 0) {
+        const ctx = await loadRunContext();
+        for (const company of due) {
+          try {
+            results.push(await crawlCompany(company, { dryRun, ctx }));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`cron/crawl: ${company} threw — ${message}`);
+            results.push({
+              company,
+              method: null,
+              rolesFound: 0,
+              newRoles: 0,
+              status: "error",
+              error: message,
+            });
+          }
+        }
+      }
 
-  // Link rot is a daily problem, not a per-crawl one: a posting closes without
-  // anything about its company being due, so this runs on every tick rather
-  // than only when `due` was non-empty. It spends no Claude credits — HTTP
-  // plus the vendors' public board endpoints — which is why it can sit in a
-  // route whose whole design is about rationing paid calls. A dry run skips it
-  // because it writes.
-  let links: LinkRepairReport | null = null;
-  if (!dryRun) {
-    try {
-      links = await repairJobLinks();
-    } catch (err) {
-      // Never aborts the batch: the crawl above is the expensive part and its
-      // results must still be reported.
-      console.error(
-        `cron/crawl: link repair threw — ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+      // Link rot is per tenant too: repairJobLinks reads that tenant's jobs.
+      // Running it once outside the loop would have repaired only one tenant's
+      // links, under RLS, and reported the count as if it covered everyone.
+      if (!dryRun) {
+        try {
+          const report = await repairJobLinks();
+          const prev = linkAcc.value;
+          // Summed across tenants, not replaced. Reporting only the last
+          // tenant's numbers would understate the run and look like link repair
+          // had barely done anything.
+          linkAcc.value = prev
+            ? {
+                ...report,
+                checked: prev.checked + report.checked,
+                relinked: prev.relinked + report.relinked,
+                closed: prev.closed + report.closed,
+                closedUnlisted: prev.closedUnlisted + report.closedUnlisted,
+                unclear: [...prev.unclear, ...report.unclear],
+              }
+            : report;
+        } catch (err) {
+          console.error(
+            `cron/crawl: link repair threw — ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    });
   }
 
   const totals = {
@@ -152,9 +166,9 @@ async function handleCrawl(req: Request) {
   // logs a human actually checks.
   console.log(
     `cron/crawl: dryRun=${dryRun} crawled=${results.length} newRoles=${totals.newRoles} failed=${totals.failed}` +
-      (links
-        ? ` links=${links.checked} relinked=${links.relinked} ` +
-          `closed=${links.closed + links.closedUnlisted} unclear=${links.unclear.length}`
+      (linkAcc.value
+        ? ` links=${linkAcc.value.checked} relinked=${linkAcc.value.relinked} ` +
+          `closed=${linkAcc.value.closed + linkAcc.value.closedUnlisted} unclear=${linkAcc.value.unclear.length}`
         : "")
   );
 
@@ -163,6 +177,6 @@ async function handleCrawl(req: Request) {
     crawled: results.length,
     totals,
     results,
-    links,
+    links: linkAcc.value,
   });
 }

@@ -27,18 +27,47 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * `new AsyncLocalStorage()` can be instantiated twice and a value set in one
  * would be invisible to the other.
  */
-const g = globalThis as unknown as { __platformALS?: AsyncLocalStorage<true> };
-const store = (g.__platformALS ??= new AsyncLocalStorage<true>());
+/**
+ * The store carries WHICH tenant the platform is acting for, not merely that it
+ * is the platform. `tenantId: null` means platform work with no tenant yet —
+ * enumerating who exists — and any tenant-scoped query attempted in that state
+ * throws rather than guessing.
+ */
+type PlatformScope = { tenantId: string | null };
+
+const g = globalThis as unknown as { __platformALS?: AsyncLocalStorage<PlatformScope> };
+const store = (g.__platformALS ??= new AsyncLocalStorage<PlatformScope>());
 
 /**
  * Run `fn` as the platform. Call this ONLY after authenticating the caller —
  * in the cron route, that means after the `CRON_SECRET` check, never before.
  */
 export function runAsPlatform<T>(fn: () => Promise<T>): Promise<T> {
-  return store.run(true, fn);
+  return store.run({ tenantId: null }, fn);
 }
 
-/** True only inside a `runAsPlatform` callback. Defaults to false everywhere else. */
+/**
+ * Run `fn` as a SPECIFIC tenant, with no session.
+ *
+ * This is what the crawler needs. Before it existed, scheduled work resolved to
+ * "the admin" — so with a second tenant approved, their tracked companies would
+ * never be crawled and any crawl result would land in the admin's pipeline. The
+ * cron route now enumerates tenants and enters this scope once per tenant.
+ *
+ * Nested inside runAsPlatform: the enumeration is platform work, each crawl is
+ * tenant work.
+ */
+export function runAsTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+  if (!tenantId) throw new Error("runAsTenant requires a tenant id");
+  return store.run({ tenantId }, fn);
+}
+
+/** True inside any platform scope, with or without a tenant. */
 export function isPlatform(): boolean {
-  return store.getStore() === true;
+  return store.getStore() !== undefined;
+}
+
+/** The tenant the platform is acting for, or null if it has not chosen one. */
+export function platformTenantId(): string | null {
+  return store.getStore()?.tenantId ?? null;
 }
