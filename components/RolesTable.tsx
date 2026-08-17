@@ -1198,7 +1198,7 @@ const PROVENANCE: Record<string, { label: string; cls: string; title: string }> 
   "Role Search": {
     label: "Role search",
     cls: "border-slate bg-canvas text-ink/55",
-    title: "Found by Discover → by role, searching titles and GTM stack terms.",
+    title: "Found by Discover → by role, searching titles and tools of the trade terms.",
   },
   Crawl: {
     label: "Crawl",

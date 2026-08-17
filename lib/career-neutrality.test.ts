@@ -73,10 +73,12 @@ describe("no production module holds a career-specific string", () => {
     // owner's name throughout (a captured golden set, scored against a
     // specific fit brain) and must keep it. Word-boundary regex so this
     // doesn't false-positive on substrings like "custom" or "bottom".
+    // Case-insensitive so "tom's ..." or "TOM'S ..." can't slip back in
+    // under a different capitalization.
     const scoped = FILES.filter(
       (f) => f.rel.startsWith("app" + path.sep) || f.rel.startsWith("components" + path.sep)
     );
-    const offenders = scoped.filter((f) => /\bTom\b/.test(f.text)).map((f) => f.rel);
+    const offenders = scoped.filter((f) => /\bTom\b/i.test(f.text)).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 

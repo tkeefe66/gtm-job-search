@@ -16,7 +16,7 @@ import { Spinner, Tag } from "./ui";
 
 const FAMILIES: { value: RoleSearchFamily; label: string }[] = [
   { value: "title", label: "Titles" },
-  { value: "stack", label: "GTM stack" },
+  { value: "stack", label: "Tools of the trade" },
 ];
 
 export default function RoleSearchPanel() {
