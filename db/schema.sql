@@ -139,3 +139,83 @@ create table if not exists app_settings (
   value      jsonb not null,
   updated_at timestamptz default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Auth (sub-project B). Additive and idempotent: these tables are unused until
+-- the Auth.js wiring lands, so applying this early is safe.
+--
+-- Shapes follow @auth/pg-adapter, which issues quoted camelCase identifiers
+-- ("userId", "sessionToken", "emailVerified", "providerAccountId") — hence the
+-- quoted columns in an otherwise snake_case schema. Renaming them to match house
+-- style would break the adapter's SQL, which is not configurable.
+
+create table if not exists users (
+  id            uuid primary key default gen_random_uuid(),
+  name          text,
+  email         text not null unique,
+  "emailVerified" timestamptz,
+  image         text,
+
+  -- IDENTITY IS (provider, sub), NOT email. Google's sub is permanent; the email
+  -- is a mutable attribute a Workspace admin can reassign to a new hire, who
+  -- would otherwise match this row and inherit the previous holder's pipeline,
+  -- fit brain and stored API key. Nullable so the seeded admin row can be
+  -- claimed once by its first verified sign-in. See lib/auth-policy.ts.
+  google_sub    text unique,
+
+  -- Only 'active' is allowed in; everything else, INCLUDING an unrecognised
+  -- value, is refused (accessFor fails closed). 'pending' is what the waitlist
+  -- lists — the row must be written even though no session is issued, or the
+  -- admin has nothing to approve.
+  status        text not null default 'pending',
+  role          text not null default 'user',
+
+  created_at    timestamptz not null default now(),
+  approved_at   timestamptz,
+  approved_by   uuid references users(id),
+  suspended_at  timestamptz
+);
+create index if not exists users_status_idx on users (status);
+
+create table if not exists accounts (
+  id                  uuid primary key default gen_random_uuid(),
+  "userId"            uuid not null references users(id) on delete cascade,
+  type                text not null,
+  provider            text not null,
+  "providerAccountId" text not null,
+  refresh_token       text,
+  access_token        text,
+  expires_at          bigint,
+  token_type          text,
+  scope               text,
+  id_token            text,
+  session_state       text,
+  unique (provider, "providerAccountId")
+);
+
+create table if not exists sessions (
+  id             uuid primary key default gen_random_uuid(),
+  "sessionToken" text not null unique,
+  "userId"       uuid not null references users(id) on delete cascade,
+  expires        timestamptz not null,
+
+  -- The ABSOLUTE lifetime cap Auth.js does not provide. It rolls `expires`
+  -- forward on every request, so an actively-used stolen cookie never dies —
+  -- the attacker's own traffic keeps renewing it. Only a bound measured from
+  -- created_at stops that, and created_at must NEVER be advanced. Enforced in a
+  -- wrapper around the adapter's getSessionAndUser (the `session` callback
+  -- cannot deny — its return type has no null). See lib/auth-policy.ts.
+  created_at     timestamptz not null default now()
+);
+create index if not exists sessions_user_idx on sessions ("userId");
+
+-- Created by the adapter and unused under Google-only sign-in. Kept because the
+-- adapter's schema expects it; if email magic links are ever added, revisit the
+-- identity rule above first — a magic link authenticates an ADDRESS, which is
+-- the mutable thing google_sub exists to avoid trusting.
+create table if not exists verification_token (
+  identifier text not null,
+  token      text not null,
+  expires    timestamptz not null,
+  primary key (identifier, token)
+);
