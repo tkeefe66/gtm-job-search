@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
@@ -158,7 +159,7 @@ export async function getWatchlist(): Promise<{ entries: WatchlistEntry[]; error
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .select("*")
     .order("added_at", { ascending: false });
@@ -224,7 +225,7 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
     payload.last_crawl_error = null;
   }
 
-  const { error } = await supabase.from("watchlist").upsert(payload, { onConflict: "company" });
+  const { error } = await supabase.forTenant(await resolveTenantId()).from("watchlist").upsert(payload, { onConflict: "tenant_id,company" });
   return { error: error?.message };
 }
 
@@ -237,7 +238,7 @@ export async function removeFromWatchlist(company: string): Promise<{ error?: st
   await requireActor();
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
-  const { error } = await supabase.from("watchlist").delete().eq("company", target.company);
+  const { error } = await supabase.forTenant(await resolveTenantId()).from("watchlist").delete().eq("company", target.company);
   return { error: error?.message };
 }
 
@@ -250,7 +251,7 @@ export async function markChecked(company: string): Promise<{ error?: string }> 
   await requireActor();
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
-  const { error } = await supabase
+  const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update({ last_checked_at: new Date().toISOString() })
     .eq("company", target.company);
@@ -276,7 +277,7 @@ export async function getWatchedCompanyKeys(): Promise<{
   // Discover result) reading as the same company. Renamed from
   // getWatchedCompanyNames to make that contract change explicit at every
   // call site instead of a same-shaped-but-different-meaning silent swap.
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .select("company")
     .eq("tracking_enabled", true);
@@ -313,7 +314,7 @@ export async function getTrackedCompanies(): Promise<{
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .select("*")
     .order("added_at", { ascending: false });
@@ -363,14 +364,14 @@ export async function trackCompanyByName(
     return { error: readFailureError(trimmed, "tracking") };
   }
 
-  const { error } = await supabase.from("watchlist").upsert(
+  const { error } = await supabase.forTenant(await resolveTenantId()).from("watchlist").upsert(
     {
       company,
       source: "manual",
       tracking_enabled: true,
       consecutive_failures: 0,
     },
-    { onConflict: "company" }
+    { onConflict: "tenant_id,company" }
   );
   if (error) {
     return { error: `Could not track "${company}" — ${error.message}` };
@@ -402,7 +403,7 @@ export async function setTracking(
   if (target.error) return { error: target.error };
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
   if (enabled) patch.consecutive_failures = 0;
-  const { error } = await supabase
+  const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update(patch)
     .eq("company", target.company);
@@ -422,7 +423,7 @@ export async function setCareersUrl(
   }
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
-  const { error } = await supabase
+  const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update({
       careers_url: trimmed,

@@ -50,7 +50,14 @@ const h = vi.hoisted(() => {
 
 vi.mock("@/lib/supabase", () => ({
   rawQuery: vi.fn(),
-  supabase: { from: (t: string) => h.makeBuilder(t) },
+  supabase: {
+    from: (t: string) => h.makeBuilder(t),
+    // Same builder either way: these tests assert what the ACTION does,
+    // not what the transport adds. That every tenant table is reached
+    // through forTenant is enforced by lib/supabase.ts itself, which
+    // throws on supabase.from() for a scoped table.
+    forTenant: () => ({ from: (t: string) => h.makeBuilder(t) }),
+  },
 }));
 vi.mock("@/lib/crawler", () => ({ crawlCompany: vi.fn() }));
 

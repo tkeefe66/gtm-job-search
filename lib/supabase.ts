@@ -111,6 +111,30 @@ function encode(v: unknown): unknown {
 
 type Op = "select" | "insert" | "update" | "delete" | "upsert";
 
+/**
+ * Tables whose rows belong to a tenant.
+ *
+ * A query against any of these MUST carry a tenant, and the builder refuses to
+ * construct one that does not — see `from()` below. That refusal is the point:
+ * the alternative is 21 hand-written `.eq("tenant_id", …)` call sites where a
+ * single omission is a silent cross-tenant read that looks like working
+ * software.
+ *
+ * Adding a tenant-scoped table means adding it here. A table absent from this
+ * list is treated as GLOBAL, so the failure mode of forgetting is "shared data",
+ * which is why lib/supabase.test.ts pins this list against db/schema.sql.
+ */
+export const TENANT_TABLES = [
+  "jobs",
+  "watchlist",
+  "app_settings",
+  "insights_cache",
+] as const;
+
+export function isTenantTable(table: string): boolean {
+  return (TENANT_TABLES as readonly string[]).includes(table);
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
   private op: Op = "select";
@@ -122,7 +146,12 @@ class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
   private limitN: number | null = null;
   private rowMode: "many" | "single" | "maybe" = "many";
 
-  constructor(private table: string) {}
+  /**
+   * `tenantId` is null ONLY for global tables. For a tenant table the builder
+   * cannot be constructed without one (see `from()`), so by the time a query is
+   * built the scope is guaranteed rather than hoped for.
+   */
+  constructor(private table: string, private tenantId: string | null = null) {}
 
   select(cols = "*"): this {
     this.columns = cols || "*";
@@ -183,6 +212,21 @@ class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
   }
 
   private build(): { text: string; values: unknown[] } {
+    // Applied HERE rather than at the call sites, so it cannot be forgotten by
+    // one of them. A select/update/delete gains the predicate; an insert/upsert
+    // gains the column, because a row written without an owner is unreachable
+    // afterwards by every scoped read — invisible rather than wrong.
+    if (this.tenantId !== null) {
+      if (this.op === "insert" || this.op === "upsert") {
+        this.payload = { tenant_id: this.tenantId, ...(this.payload ?? {}) };
+      }
+      if (this.op !== "insert") {
+        this.filters = [
+          { col: "tenant_id", op: "=", val: this.tenantId },
+          ...this.filters,
+        ];
+      }
+    }
     const t = ident(this.table);
     const values: unknown[] = [];
     const ph = (v: unknown) => {
@@ -260,8 +304,33 @@ class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
 }
 
 export const supabase = {
+  /**
+   * Global tables only. Throws for a tenant-scoped table rather than returning
+   * an unscoped builder — an unscoped read of `jobs` is every tenant's pipeline,
+   * and it would return rows and look correct.
+   */
   from(table: string) {
+    if (isTenantTable(table)) {
+      throw new Error(
+        `supabase.from("${table}") is tenant-scoped — use supabase.forTenant(id).from("${table}")`
+      );
+    }
     return new QueryBuilder(table);
+  },
+
+  /** Scoped accessor. Every query it builds carries the tenant automatically. */
+  forTenant(tenantId: string) {
+    if (!tenantId) {
+      // An empty tenant would produce `tenant_id = ''`, which matches nothing
+      // and reads as "this tenant has no data" — the silent-empty failure this
+      // whole design exists to avoid.
+      throw new Error("supabase.forTenant() requires a tenant id");
+    }
+    return {
+      from(table: string) {
+        return new QueryBuilder(table, isTenantTable(table) ? tenantId : null);
+      },
+    };
   },
 };
 

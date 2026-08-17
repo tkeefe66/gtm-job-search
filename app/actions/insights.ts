@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning } from "@/lib/cache-write-warning";
@@ -19,7 +20,7 @@ export async function getCachedInsights(): Promise<{
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("insights_cache")
     .select("insights, fetched_at")
     .order("fetched_at", { ascending: false })
@@ -39,7 +40,7 @@ export async function analyzePipeline(): Promise<{
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabase.forTenant(await resolveTenantId())
       .from("jobs")
       .select(
         "company, role_title, seniority, category, traction, fit_summary, notes"
@@ -80,11 +81,11 @@ export async function analyzePipeline(): Promise<{
     // `.neq("id", <sentinel>)` is sound here: insights_cache.id is a non-null
     // uuid primary key, so `id <> '000…'` matches every real row. It is NOT
     // the `<> NULL` bug.
-    const { error: deleteError } = await supabase
+    const { error: deleteError } = await supabase.forTenant(await resolveTenantId())
       .from("insights_cache")
       .delete()
       .neq("id", "00000000-0000-0000-0000-000000000000");
-    const { error: insertError } = await supabase.from("insights_cache").insert({
+    const { error: insertError } = await supabase.forTenant(await resolveTenantId()).from("insights_cache").insert({
       insights,
       fetched_at: new Date().toISOString(),
     });

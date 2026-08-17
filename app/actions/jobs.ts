@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { supabase } from "@/lib/supabase";
 import type { Job, JobInsert, JobStatus } from "@/lib/types";
@@ -9,7 +10,7 @@ export async function getJobs(): Promise<{ jobs: Job[]; error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("jobs")
     .select("*")
     .order("created_at", { ascending: false });
@@ -27,7 +28,7 @@ export async function addJob(
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("jobs")
     .insert(job)
     .select()
@@ -54,7 +55,7 @@ export async function updateJob(
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { error } = await supabase
+  const { error } = await supabase.forTenant(await resolveTenantId())
     .from("jobs")
     // updated_at is stamped UNCONDITIONALLY on purpose: rescoreAll pages
     // through jobs with `order by updated_at asc` (lib/rescore-scope.ts), so
@@ -72,7 +73,7 @@ export async function deleteJob(id: string): Promise<{ error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { error } = await supabase.from("jobs").delete().eq("id", id);
+  const { error } = await supabase.forTenant(await resolveTenantId()).from("jobs").delete().eq("id", id);
   if (error) {
     console.error("deleteJob error:", error);
     return { error: error.message };

@@ -1,4 +1,5 @@
 import { callStructured, callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { resolveTenantId } from "@/lib/tenant";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
@@ -485,7 +486,7 @@ async function closeStalePostings(
   const closing = new Set(toClose);
   for (const job of active) {
     if (!closing.has(job.key)) continue;
-    const { error: closeError } = await supabase
+    const { error: closeError } = await supabase.forTenant(await resolveTenantId())
       .from("jobs")
       .update({ status: "Posting Closed", updated_at: new Date().toISOString() })
       .eq("id", job.id);
@@ -517,7 +518,7 @@ export async function crawlCompany(
   const dryRun = opts.dryRun ?? false;
   const ctx = opts.ctx ?? (await loadRunContext());
 
-  const { data: row, error: watchlistReadError } = await supabase
+  const { data: row, error: watchlistReadError } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .select("*")
     .eq("company", company)
@@ -592,7 +593,7 @@ export async function crawlCompany(
       // A dry run previews a crawl; it must not permanently write a
       // model-guessed careers_url the user never reviewed.
       if (careersUrl && !dryRun) {
-        const { error: careersUrlError } = await supabase
+        const { error: careersUrlError } = await supabase.forTenant(await resolveTenantId())
           .from("watchlist")
           .update({ careers_url: careersUrl })
           .eq("company", company);

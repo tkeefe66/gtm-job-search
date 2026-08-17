@@ -1,6 +1,7 @@
 "use server";
 
 import { supabase } from "@/lib/supabase";
+import { resolveTenantId } from "@/lib/tenant";
 import { updateJob } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
@@ -64,7 +65,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     unresolved: 0,
   };
 
-  const { data, error } = await supabase.from("jobs").select("*");
+  const { data, error } = await supabase.forTenant(await resolveTenantId()).from("jobs").select("*");
   // Presence, not truthiness: an unreachable database rejects with an empty
   // message, and reading that as success would report "0 links checked, all
   // healthy" for a pipeline nobody could see.
