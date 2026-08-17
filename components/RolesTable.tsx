@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
-import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
+import { scoreFit } from "@/app/actions/parse-role";
 import { type Job } from "@/lib/types";
 import {
   DEFAULT_STATUSES,
@@ -25,8 +25,8 @@ import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/li
 import { classifyJobLink, hostOf } from "@/lib/job-link";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
+import { sourceOptions } from "@/lib/job-sources";
 import { Spinner } from "./ui";
-import RecruiterPanel from "./RecruiterPanel";
 
 const STATUS_STYLES: Record<string, string> = {
   New: "bg-[#F3F4F6] text-[#6B7280]",
@@ -52,6 +52,65 @@ type SortDir = "asc" | "desc";
 // clicking Fit or Found — ascending would bury the answer at the bottom.
 const DESC_FIRST: SortKey[] = ["fit_score", "created_at"];
 
+/**
+ * The sort axes the picker offers.
+ *
+ * A SUBSET of SortKey, deliberately: every column header is still clickable, so
+ * the rarer axes (location, ARR, backer…) remain reachable without turning a
+ * five-item menu into a fourteen-item one. These five are what the previous pill
+ * row offered, kept identical so the change is a shape change, not a capability
+ * change.
+ */
+const SORT_OPTIONS: [SortKey, string][] = [
+  ["fit_score", "Fit"],
+  ["created_at", "Found"],
+  ["company", "Company"],
+  ["status", "Status"],
+  ["stage", "Stage"],
+];
+
+/** One shape for every picker in the control row, so the group reads as a unit. */
+const PICKER_CLS =
+  "rounded-md border border-slate bg-white py-2 pl-2.5 pr-7 text-sm text-ink outline-none transition hover:border-ink focus:border-ink";
+
+/**
+ * A labelled control. The axis name is carried in text rather than left to the
+ * selected value, because "Fit" or "Crawl" alone does not say what it controls —
+ * and this row now holds three pickers that would otherwise be three unlabelled
+ * menus sitting side by side.
+ */
+function Picker({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex items-center gap-1.5">
+      <span className="text-xs font-medium uppercase tracking-wide text-ink/45">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/**
+ * Drawn rather than a "↑"/"↓" glyph: one authored mark that rotates between the
+ * two states, so the control keeps a single silhouette and the change of
+ * direction is legible as motion instead of as a substituted character.
+ */
+function SortArrow({ dir }: { dir: SortDir }) {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      className={`h-3 w-3 transition-transform duration-150 ${dir === "asc" ? "rotate-180" : ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 2v8" />
+      <path d="M2.75 6.75 6 10l3.25-3.25" />
+    </svg>
+  );
+}
+
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   return (
     <span className={`ml-1 inline-block text-[10px] ${active ? "text-ink" : "text-ink/30"}`}>
@@ -76,8 +135,10 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     key: "Open",
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showRecruiter, setShowRecruiter] = useState(false);
+  /** "All", or one `jobs.source` value. Plain string, not a tagged union: unlike
+   *  the status filter there are no sentinels beyond "All" and no user-defined
+   *  values, so there is nothing for a real source to collide with. */
+  const [sourceFilter, setSourceFilter] = useState<string>("All");
   const [sortKey, setSortKey] = useState<SortKey>("fit_score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   // Two INDEPENDENT booleans, not another exclusive chip group like
@@ -302,6 +363,28 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     { label: "Out", key: "Out", count: counts.out },
   ];
 
+  /**
+   * Which sources the picker offers. Derived from the loaded rows rather than
+   * from a fixed list, so it never offers a filter that would empty the table —
+   * and so a source this app does not know about is still filterable.
+   *
+   * Depends on `jobs` alone: the other filters must not narrow this list, or
+   * picking a source would remove the option that got you there.
+   */
+  const sourceChoices = useMemo(() => sourceOptions(jobs.map((j) => j.source)), [jobs]);
+
+  /**
+   * Drops a source filter that no longer matches anything — after a reload, a
+   * delete, or a link-repair pass. Without it the picker keeps pointing at a
+   * value no row has and the table reads as empty with nothing to explain it.
+   * Same reconciliation the status filter does above.
+   */
+  useEffect(() => {
+    if (sourceFilter !== "All" && !sourceChoices.includes(sourceFilter)) {
+      setSourceFilter("All");
+    }
+  }, [sourceChoices, sourceFilter]);
+
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir(DESC_FIRST.includes(key) ? "desc" : "asc"); }
@@ -317,6 +400,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         if (bucketFor(statuses, j.status) !== "terminal") return false;
       }
       // "All" falls through and shows everything.
+      if (sourceFilter !== "All" && j.source !== sourceFilter) return false;
       if (!bucketPasses(bucketOf(j), { meetsOnly, hideNoRange })) return false;
       if (search) {
         const q = search.toLowerCase();
@@ -356,7 +440,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     // invalidates this memo. Listing compFloor as well would be a dependency
     // this callback no longer reads. statuses is read directly (bucketFor,
     // compareByConfig), not just through bucketOf, so it needs its own entry.
-  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf, statuses]);
+  }, [jobs, search, statusFilter, sourceFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf, statuses]);
 
   // Counted against what is ON SCREEN, so narrowing the filter with rows ticked
   // shrinks the count instead of promising to write rows that scrolled out of
@@ -517,18 +601,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           >
             {checkingLinks ? "Checking links…" : "Check links"}
           </button>
-          <button
-            onClick={() => setShowRecruiter(true)}
-            className="rounded-md border border-ink px-4 py-2 text-sm font-medium transition hover:bg-ink hover:text-white"
-          >
-            + Recruiter role
-          </button>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90"
-          >
-            + Add manually
-          </button>
         </div>
       </div>
 
@@ -640,30 +712,77 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         ))}
       </div>
 
-      {/* Filters */}
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+      {/* Controls. Search leads (it is the fastest way to a known row), then the
+          three pickers that narrow and order the list, grouped tightly together
+          because they answer one question between them: which rows, in what
+          order. The compensation toggles stay on their own line below — they are
+          booleans, not pickers, and mixing the two shapes reads as one
+          undifferentiated bar of controls. */}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search company, role, or location…"
           className="w-full rounded-md border border-slate bg-white px-3 py-2 text-sm outline-none focus:border-ink sm:max-w-xs"
         />
-        <div className="flex flex-wrap gap-2">
-          {([{ kind: "sentinel", key: "Open" }, { kind: "sentinel", key: "All" }] as StatusFilter[])
-            .concat(statuses.filter((d) => !d.hidden).map((d) => ({ kind: "status", key: d.key })))
-            .map((f) => (
-              <button
-                key={`${f.kind}:${f.key}`}
-                onClick={() => setStatusFilter(f)}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                  statusFilter.kind === f.kind && statusFilter.key === f.key
-                    ? "border-ink bg-ink text-white"
-                    : "border-slate bg-white hover:border-ink"
-                }`}
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Picker label="Sort">
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              className={PICKER_CLS}
+            >
+              {SORT_OPTIONS.map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+              aria-label={sortDir === "asc" ? "Sort ascending — switch to descending" : "Sort descending — switch to ascending"}
+              title={sortDir === "asc" ? "Ascending" : "Descending"}
+              className="rounded-md border border-slate bg-white p-1.5 text-ink/60 transition hover:border-ink hover:text-ink"
+            >
+              <SortArrow dir={sortDir} />
+            </button>
+          </Picker>
+
+          <Picker label="Status">
+            <select
+              // The tagged union is flattened to a string for the DOM and parsed
+              // back on change. Sentinels are prefixed so a user-defined status
+              // keyed "Open" still cannot collide with the Open sentinel — the
+              // whole reason the filter state is tagged rather than a bare string.
+              value={`${statusFilter.kind}:${statusFilter.key}`}
+              onChange={(e) => {
+                const [kind, ...rest] = e.target.value.split(":");
+                setStatusFilter({ kind: kind as StatusFilter["kind"], key: rest.join(":") } as StatusFilter);
+              }}
+              className={PICKER_CLS}
+            >
+              <option value="sentinel:Open">Open</option>
+              <option value="sentinel:Out">Out</option>
+              <option value="sentinel:All">All statuses</option>
+              {statuses.filter((d) => !d.hidden).map((d) => (
+                <option key={d.key} value={`status:${d.key}`}>{d.label}</option>
+              ))}
+            </select>
+          </Picker>
+
+          {sourceChoices.length > 1 && (
+            <Picker label="Source">
+              <select
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value)}
+                className={PICKER_CLS}
               >
-                {f.kind === "sentinel" ? f.key : labelFor(statuses, f.key)}
-              </button>
-            ))}
+                <option value="All">All sources</option>
+                {sourceChoices.map((s) => (
+                  <option key={s} value={s}>{PROVENANCE[s]?.label ?? s}</option>
+                ))}
+              </select>
+            </Picker>
+          )}
         </div>
       </div>
 
@@ -724,19 +843,13 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
               title={`Select all ${filtered.length} roles shown`}
               className="mr-2 h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
             />
+            {/* Sort moved into the control row above, so this bar now says one
+                thing: how many rows are shown, or what you are about to do to
+                the ones you picked. */}
             {selectedCount === 0 ? (
-              <>
-                <span>Sort:</span>
-                {([["fit_score", "Fit"], ["created_at", "Found"], ["company", "Company"], ["status", "Status"], ["stage", "Stage"]] as [SortKey, string][]).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => toggleSort(key)}
-                    className={`rounded px-2 py-0.5 transition ${sortKey === key ? "bg-ink text-white" : "hover:bg-slate"}`}
-                  >
-                    {label} {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : ""}
-                  </button>
-                ))}
-              </>
+              <span>
+                {filtered.length} of {jobs.length} shown
+              </span>
             ) : (
               <>
                 <span className="font-medium text-ink">{selectedCount} selected</span>
@@ -943,12 +1056,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         </div>
       )}
 
-      {showAdd && (
-        <AddPanel statuses={statuses} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); void load(); }} />
-      )}
-      {showRecruiter && (
-        <RecruiterPanel onClose={() => setShowRecruiter(false)} onAdded={() => { setShowRecruiter(false); void load(); }} />
-      )}
     </div>
   );
 }
@@ -1146,202 +1253,5 @@ function InlineEdit({ value, onSave, placeholder }: { value: string; onSave: (v:
       placeholder={placeholder}
       className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-sm outline-none hover:border-slate focus:border-ink focus:bg-white"
     />
-  );
-}
-
-const EMPTY_ADD = {
-  company: "", role_title: "", location: "", salary_range: "", department: "",
-  job_url: "", company_url: "", company_description: "", stage: "", category: "",
-  arr: "", exit_signal: "", backer: "", fit_summary: "", key_skills: "",
-  ic_flag: false, status: "New",
-};
-
-function AddPanel({
-  statuses,
-  onClose,
-  onAdded,
-}: {
-  statuses: JobStatusDef[];
-  onClose: () => void;
-  onAdded: () => void;
-}) {
-  const [step, setStep] = useState<"url" | "review">("url");
-  const [url, setUrl] = useState("");
-  const [parsing, setParsing] = useState(false);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [form, setForm] = useState({ ...EMPTY_ADD });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
-
-  function set(k: keyof typeof EMPTY_ADD, v: string) {
-    setForm((f) => ({ ...f, [k]: v }));
-  }
-
-  async function handleParse() {
-    if (!url.trim()) return;
-    setParsing(true);
-    setParseError(null);
-    const res = await parseJobUrl(url.trim());
-    setParsing(false);
-    if (res.error) { setParseError(res.error); return; }
-    if (res.role) setForm((f) => ({ ...f, ...res.role }));
-    setStep("review");
-  }
-
-  async function handleSave() {
-    if (!form.company || !form.role_title) { setSaveError("Company and role title are required."); return; }
-    setSaving(true);
-    setSaveError(null);
-    setSaveStatus("Scoring fit…");
-    const [scoreRes, jobRes] = await Promise.all([
-      scoreFit({
-        company: form.company, role_title: form.role_title,
-        company_description: form.company_description, key_skills: form.key_skills,
-        fit_summary: form.fit_summary, department: form.department, location: form.location,
-        // Required, not optional: the same string the row below stores. Left
-        // out, the role would score as if the posting published no pay.
-        salary_range: form.salary_range,
-        arr: form.arr || undefined, exit_signal: form.exit_signal || undefined,
-        backer: form.backer || undefined,
-        // null, not omitted: this is a client component and cannot call
-        // loadScoringInputs (it transitively imports `pg`). null tells the
-        // server action to load the user's CURRENT stored fit brain AND
-        // compensation floor, so a manually-added role is scored against the
-        // edited criteria.
-        fitInputs: null,
-      }),
-      addJob({
-        company: form.company, role_title: form.role_title, status: form.status,
-        // An INSERT can start life at "Applied" — the panel offers the whole
-        // dropdown — so it needs the stamp as much as the update paths do.
-        // Without it this creates the exact row the rule exists to prevent, and
-        // "first answer wins" then makes it unrepairable: the only fix surface
-        // is a <select>, which fires no onChange when you re-pick the value it
-        // is already showing.
-        ...appliedDatePatch(form.status, null, todayStamp()),
-        location: form.location || null, salary_range: form.salary_range || null,
-        department: form.department || null, job_url: form.job_url || null,
-        company_url: form.company_url || null, company_description: form.company_description || null,
-        stage: form.stage || null, category: form.category || null,
-        arr: form.arr || null, exit_signal: form.exit_signal || null,
-        backer: form.backer || null, ic_flag: form.ic_flag || false,
-        fit_summary: form.fit_summary || null, key_skills: form.key_skills || null,
-        source: "Manual",
-      }),
-    ]);
-    // describeWriteFailure, not `if (jobRes.error)`. Presence, not truthiness:
-    // an unreachable database rejects with an empty message (lib/write-failure.ts),
-    // and a truthiness check would report the add as saved and clear the form.
-    const failure = describeWriteFailure(jobRes.error, "save this role");
-    if (failure !== undefined) { setSaving(false); setSaveError(failure); return; }
-    if (jobRes.job && scoreRes.score > 0) {
-      const { updateJob } = await import("@/app/actions/jobs");
-      await updateJob(jobRes.job.id, {
-        fit_score: scoreRes.score,
-        fit_summary: scoreRes.rationale || form.fit_summary || null,
-      });
-    }
-    setSaving(false);
-    setSaveStatus(null);
-    onAdded();
-  }
-
-  const reviewFields: [keyof typeof EMPTY_ADD, string][] = [
-    ["company", "Company *"], ["role_title", "Role title *"], ["stage", "Stage"],
-    ["category", "Industry"], ["location", "Location"], ["salary_range", "Salary range"],
-    ["arr", "ARR"], ["backer", "Backer"], ["exit_signal", "Exit signal"],
-    ["company_url", "Company website"], ["job_url", "Job URL"],
-  ];
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-ink/20">
-      <div className="h-full w-full max-w-lg overflow-y-auto bg-white p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-heading font-semibold">Add a role</h3>
-            <p className="text-xs text-ink/50">
-              {step === "url" ? "Paste a job posting URL to auto-fill details" : "Review and edit the extracted details"}
-            </p>
-          </div>
-          <button onClick={onClose} className="text-ink/50 hover:text-ink">✕</button>
-        </div>
-
-        {step === "url" && (
-          <div className="flex flex-col gap-4">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-ink/60">Job posting URL</span>
-              <input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleParse()}
-                placeholder="https://jobs.ashbyhq.com/company/..."
-                className="w-full rounded-md border border-slate bg-canvas px-3 py-2 text-sm outline-none focus:border-ink"
-              />
-            </label>
-            {parseError && <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{parseError}</div>}
-            {parsing && <Spinner label="Fetching job posting and company details…" />}
-            <div className="flex gap-3">
-              <button
-                onClick={handleParse}
-                disabled={parsing || !url.trim()}
-                className="flex-1 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
-              >
-                {parsing ? "Fetching…" : "Fetch & extract →"}
-              </button>
-              <button onClick={onClose} className="rounded-md border border-slate px-4 py-2 text-sm hover:border-ink">Cancel</button>
-            </div>
-          </div>
-        )}
-
-        {step === "review" && (
-          <div className="flex flex-col gap-4">
-            <div className="rounded-lg border border-slate p-4">
-              <div className="flex flex-col gap-3">
-                {reviewFields.map(([key, label]) => (
-                  <label key={key} className="block">
-                    <span className="mb-1 block text-xs font-medium text-ink/60">{label}</span>
-                    <input
-                      value={form[key] as string}
-                      onChange={(e) => set(key, e.target.value)}
-                      className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
-                    />
-                  </label>
-                ))}
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-ink/60">Company description</span>
-                  <textarea
-                    value={form.company_description}
-                    onChange={(e) => set("company_description", e.target.value)}
-                    rows={2}
-                    className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-ink/60">Status</span>
-                  <select
-                    value={form.status}
-                    onChange={(e) => set("status", e.target.value)}
-                    className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
-                  >
-                    {optionsFor(statuses, form.status).map((d) => (
-                      <option key={d.key} value={d.key}>{d.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-            {saveError && <div className="rounded-md border border-slate p-3 text-sm text-[#92400E]">{saveError}</div>}
-            {saving && <Spinner label={saveStatus ?? "Saving…"} />}
-            <div className="flex gap-3">
-              <button onClick={handleSave} disabled={saving} className="flex-1 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50">
-                {saving ? "Saving…" : "Save to Roles"}
-              </button>
-              <button onClick={() => setStep("url")} className="rounded-md border border-slate px-4 py-2 text-sm hover:border-ink">← Back</button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
   );
 }

@@ -33,77 +33,14 @@ vi.mock("@/lib/model-call", () => ({
 }));
 vi.mock("@/lib/search-criteria", () => ({ loadScoringInputs: vi.fn() }));
 
-import { parseJobUrl, parseRecruiterText, scoreFit } from "./parse-role";
-import { callWithWebSearch, complete } from "@/lib/model-call";
+import { scoreFit } from "./parse-role";
+import { complete } from "@/lib/model-call";
 
-const search = vi.mocked(callWithWebSearch);
 const model = vi.mocked(complete);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => {});
-});
-
-// The caller is `if (res.error)` in components/RolesTable.tsx. An empty
-// message is falsy, so a failure that arrives without text is read as a
-// success: the form advances to the review step with nothing filled in and no
-// error shown. Node's AggregateError — the empty-message case documented in
-// lib/write-failure.ts — is exactly what a connection failure to the API
-// rejects with, so this is a live path, not a hypothetical one.
-describe("parseJobUrl always returns a message when it failed", () => {
-  test("a thrown Error with a message passes that message through", async () => {
-    search.mockRejectedValue(new Error("529 overloaded"));
-
-    const res = await parseJobUrl("https://example.com/jobs/1");
-
-    expect(res.error).toBe("529 overloaded");
-  });
-
-  test("a thrown Error with an EMPTY message still reports a failure", async () => {
-    search.mockRejectedValue(new Error(""));
-
-    const res = await parseJobUrl("https://example.com/jobs/1");
-
-    expect(res.error).toBeTruthy();
-  });
-
-  test("a non-Error throw reports a failure", async () => {
-    search.mockRejectedValue("nope");
-
-    const res = await parseJobUrl("https://example.com/jobs/1");
-
-    expect(res.error).toBeTruthy();
-  });
-
-  test("a successful parse reports no error", async () => {
-    search.mockResolvedValue(JSON.stringify({ company: "Clay" }));
-
-    const res = await parseJobUrl("https://example.com/jobs/1");
-
-    expect(res.error).toBeUndefined();
-    expect(res.role?.company).toBe("Clay");
-  });
-});
-
-// The same defect, the same file, a different caller:
-// components/RecruiterPanel.tsx:59 reads this one with `if (res.error)`.
-describe("parseRecruiterText always returns a message when it failed", () => {
-  test("a thrown Error with an EMPTY message still reports a failure", async () => {
-    search.mockRejectedValue(new Error(""));
-
-    const res = await parseRecruiterText("pasted recruiter email");
-
-    expect(res.error).toBeTruthy();
-  });
-
-  test("a successful parse reports no error", async () => {
-    search.mockResolvedValue(JSON.stringify({ company: "Clay" }));
-
-    const res = await parseRecruiterText("pasted recruiter email");
-
-    expect(res.error).toBeUndefined();
-    expect(res.role?.company).toBe("Clay");
-  });
 });
 
 describe("scoreFit runs through the provider registry, not the raw SDK", () => {
