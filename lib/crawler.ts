@@ -6,6 +6,8 @@ import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import {
+  BUILDING_CONCEPT,
+  CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleExtractionSchema,
@@ -68,7 +70,9 @@ export async function loadRunContext(): Promise<RunContext> {
 export function buildExtractionPrompt(
   company: string,
   page: ExtractedPage,
-  criteria: Criteria
+  criteria: Criteria,
+  persona: string,
+  buildingConcept: string
 ): string {
   const links = page.links
     .map((l) => `${l.text || "(no text)"} -> ${l.href}`)
@@ -80,7 +84,7 @@ Identify every open role matching any of these titles or close variants: ${title
 
 ${criteria.locationRule}
 
-${roleExtractionSchema()}
+${roleExtractionSchema(persona, buildingConcept)}
 
 Use the link list to fill job_url — resolve relative URLs against the careers page where you can, otherwise return the relative path as-is. If no role on the page qualifies, return exactly [] and nothing else. Return ONLY the JSON array.
 
@@ -330,7 +334,13 @@ async function extractViaFetch(
 
   const raw = await callStructured({
     system: roleSearchSystem(SEARCH_SUBJECT),
-    prompt: buildExtractionPrompt(company, classification.page, criteria),
+    prompt: buildExtractionPrompt(
+      company,
+      classification.page,
+      criteria,
+      CANDIDATE_PERSONA,
+      BUILDING_CONCEPT
+    ),
     maxTokens: 4000,
   });
   return { kind: "roles", roles: rolesFromRaw(raw) };
@@ -346,7 +356,7 @@ async function extractViaSearch(
     system: roleSearchSystem(SEARCH_SUBJECT),
     prompt: `Search for open ${SEARCH_SUBJECT} roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
-${roleExtractionSchema()}
+${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT)}
 
 If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`,
     // Search narration counts against the budget; 2000 has truncated the

@@ -108,7 +108,37 @@ Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practition
 - Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
 `.trim();
 
-export function roleExtractionSchema(): string {
+/**
+ * How the extraction prompt describes the candidate to the model, in
+ * `fit_signal`'s field description. Verbatim today's text.
+ *
+ * This is not a label: `fit_signal` becomes `fit_summary`
+ * (lib/ingest-roles.ts:156) and reaches the scorer as `Summary:`
+ * (lib/fit-prompt.ts:163), so it is an input to the fit score on every row
+ * from all three ingest paths. A default here would let a future call site
+ * silently emit GTM text for someone else's career.
+ */
+export const CANDIDATE_PERSONA =
+  "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder";
+
+/**
+ * What "the kind of work this person wants to be hands-on building" means,
+ * for `ic_flag`'s field description. Verbatim today's text.
+ *
+ * The source description uses this concept twice: once naming it directly
+ * ("centers on building GTM systems and agentic AI workflows") and once in
+ * the compressed negative case ("no systems/AI-building upside"). Both are
+ * driven off this single constant rather than a second one, because a
+ * second constant naming the same concept under a different string is
+ * exactly the kind of two-places-that-must-not-drift trap this codebase has
+ * been bitten by before (see the compensation boundary rule in CLAUDE.md).
+ * The negative clause is reworded ("no upside from ${buildingConcept}")
+ * rather than reusing the literal source fragment, so the same value reads
+ * grammatically in both places for any persona, not just this one.
+ */
+export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
+
+export function roleExtractionSchema(persona: string, buildingConcept: string): string {
   return [
     "Return a JSON array where each object has these exact fields:",
     "role_title (string)",
@@ -125,8 +155,8 @@ export function roleExtractionSchema(): string {
     'seniority (string, one of: "VP/Head", "Director", "Senior Manager", "Manager/IC")',
     'salary_range (string, exact salary or range from the posting — e.g. "$160,000 - $210,000" — or empty string if not listed)',
     "description_summary (string, 1-2 sentences about the role)",
-    "fit_signal (string, 1 sentence on why a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder might fit)",
-    "ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on building GTM systems and agentic AI workflows, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no systems/AI-building upside)",
+    `fit_signal (string, 1 sentence on why a ${persona} might fit)`,
+    `ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on ${buildingConcept}, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no upside from ${buildingConcept})`,
   ].join("\n- ");
 }
 

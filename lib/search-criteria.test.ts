@@ -16,6 +16,8 @@ vi.mock("@/lib/tenant", () => ({
 // kind of check.
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
 import {
+  BUILDING_CONCEPT,
+  CANDIDATE_PERSONA,
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
@@ -352,7 +354,7 @@ describe("MAX_QUERY_MULTIPLIER", () => {
 
 describe("roleExtractionSchema", () => {
   test("names every field the Role type requires", () => {
-    const schema = roleExtractionSchema();
+    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT);
     for (const field of [
       "role_title",
       "job_url",
@@ -365,6 +367,29 @@ describe("roleExtractionSchema", () => {
     ]) {
       expect(schema).toContain(field);
     }
+  });
+
+  // Load-bearing: fit_signal becomes fit_summary and reaches the scorer as
+  // `Summary:` (lib/ingest-roles.ts:156 → lib/fit-prompt.ts:163), so this
+  // wording is an input to the fit score on every row, not a cosmetic label.
+  // Exact-match rather than toContain, so a one-character edit to either
+  // constant fails this test.
+  test("the persona and building concept reach the schema verbatim", () => {
+    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT);
+    expect(schema).toContain(
+      "fit_signal (string, 1 sentence on why a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder might fit)"
+    );
+    expect(schema).toContain(
+      "ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on building GTM systems and agentic AI workflows, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no upside from building GTM systems and agentic AI workflows)"
+    );
+  });
+
+  test("a different persona replaces it everywhere", () => {
+    const schema = roleExtractionSchema("senior mechanical engineer", "designing mechanical systems");
+    expect(schema).not.toContain("GTM");
+    expect(schema).not.toContain("RevOps");
+    expect(schema).toContain("senior mechanical engineer");
+    expect(schema).toContain("designing mechanical systems");
   });
 });
 

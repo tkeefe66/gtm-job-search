@@ -27,7 +27,12 @@ import {
   type ClosureRun,
 } from "./crawler";
 import { stripHtml } from "./page-extract";
-import { DEFAULT_CRITERIA, type Criteria } from "./search-criteria";
+import {
+  BUILDING_CONCEPT,
+  CANDIDATE_PERSONA,
+  DEFAULT_CRITERIA,
+  type Criteria,
+} from "./search-criteria";
 
 // Reused from lib/page-extract.test.ts's own fixtures so the shell/content
 // boundary this test relies on stays the one that file already pins.
@@ -56,23 +61,35 @@ describe("buildExtractionPrompt", () => {
   );
 
   test("names the company", () => {
-    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Clay");
+    expect(
+      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+    ).toContain("Clay");
   });
 
   test("includes the location rule", () => {
     // "Denver" reaches the prompt only through criteria.locationRule — it
     // appears nowhere else in the template. Keep this assertion as-is.
-    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("Denver");
+    expect(
+      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+    ).toContain("Denver");
   });
 
   test("includes the page text and its links", () => {
-    const prompt = buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA);
+    const prompt = buildExtractionPrompt(
+      "Clay",
+      page,
+      DEFAULT_CRITERIA,
+      CANDIDATE_PERSONA,
+      BUILDING_CONCEPT
+    );
     expect(prompt).toContain("Open roles");
     expect(prompt).toContain("/careers/revops");
   });
 
   test("asks for an empty array rather than prose when nothing matches", () => {
-    expect(buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA)).toContain("[]");
+    expect(
+      buildExtractionPrompt("Clay", page, DEFAULT_CRITERIA, CANDIDATE_PERSONA, BUILDING_CONCEPT)
+    ).toContain("[]");
   });
 
   // The point of the whole task: the prompt renders the criteria it is HANDED,
@@ -87,7 +104,13 @@ describe("buildExtractionPrompt", () => {
       locationRule: "Reykjavik only.",
       fitBrain: "irrelevant here",
     };
-    const prompt = buildExtractionPrompt("Clay", page, edited);
+    const prompt = buildExtractionPrompt(
+      "Clay",
+      page,
+      edited,
+      CANDIDATE_PERSONA,
+      BUILDING_CONCEPT
+    );
     expect(prompt).toContain("Chief Waffle Officer");
     expect(prompt).toContain("Reykjavik only.");
     expect(prompt).not.toContain("Denver");

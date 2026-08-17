@@ -75,6 +75,8 @@ vi.mock("@/lib/model-call", () => ({
 vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
 vi.mock("@/lib/search-criteria", () => ({
   SEARCH_SUBJECT: "go-to-market and revenue operations",
+  CANDIDATE_PERSONA: "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder",
+  BUILDING_CONCEPT: "building GTM systems and agentic AI workflows",
   roleSearchSystem: () => "system",
   loadCriteriaAndScoringInputs: vi.fn(async () => ({
     criteria: { titles: ["RevOps"], locationRule: "remote" },

@@ -11,6 +11,8 @@ import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
+  BUILDING_CONCEPT,
+  CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleExtractionSchema,
@@ -108,7 +110,7 @@ async function findAndSaveRolesInner(
 
     const prompt = `Search for open ${SEARCH_SUBJECT} roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
-${roleExtractionSchema()}
+${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT)}
 
 If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`;
 
