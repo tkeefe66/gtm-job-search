@@ -16,9 +16,11 @@ import {
   compScoringRescoredFrom,
   jobStatusesFrom,
   mergeSettings,
+  profileFrom,
   type SettingRow,
 } from "@/lib/settings-store";
 import type { JobStatusDef } from "@/lib/job-statuses";
+import type { Profile } from "@/lib/profile";
 
 export interface SettingsView {
   criteria: Criteria;
@@ -38,6 +40,14 @@ export interface SettingsView {
   compScoringRescoredAt: string | null;
   /** The user's pipeline statuses, resolved from the same snapshot as the rest. */
   statuses: JobStatusDef[];
+  /**
+   * The tenant's career profile — the generated fields /settings' "How your
+   * roles are scored" and "How your field is described" sections edit. Read
+   * off the SAME snapshot as everything else above (see `profileFrom`'s own
+   * doc): a second query here would be a second snapshot a concurrent save
+   * could split the page across.
+   */
+  profile: Profile;
   /** Everything wrong with this load, in one line, or absent when clean. */
   error?: string;
 }
@@ -118,6 +128,12 @@ export function buildSettingsView(input: SettingsViewInput): SettingsView {
     // is already on screen next to it.
     compScoringRescoredAt: compScoringRescoredFrom(input.rows),
     statuses: jobStatusesFrom(input.rows),
+    // Off the SAME snapshot as everything else in this function, for the
+    // reason every other reader here gives: a second query is a second
+    // snapshot a concurrent save could split the page across. On a failed
+    // settings read `rows` is empty, so this reads as DEFAULT_PROFILE — the
+    // same safe degradation `criteria` gets above, next to the same banner.
+    profile: profileFrom(input.rows),
     // Joined rather than first-wins: the settings read and the count are
     // separate queries that fail separately, and hiding one behind the other
     // loses a failure the user needs.

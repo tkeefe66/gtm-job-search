@@ -25,11 +25,13 @@ import {
 } from "@/lib/rescore-scope";
 import { loadScoringInputs } from "@/lib/search-criteria";
 import { affectsCrawl, cachesToClear, pathsToRevalidate } from "@/lib/settings-effects";
+import type { Profile } from "@/lib/profile";
 import {
   SETTING_KEYS,
   UNDESCRIBED_DB_ERROR,
   deleteSetting,
   describeWriteFailure,
+  profileFrom,
   type ListSettingKey,
   type TextSettingKey,
   readAllSettingsResult,
@@ -37,6 +39,7 @@ import {
   writeCompScoringRescoredAt,
   writeCriteriaChangedAt,
   writeJobStatuses,
+  writeProfile,
   writeSetting,
   type SettingKey,
 } from "@/lib/settings-store";
@@ -240,6 +243,170 @@ export async function saveCriteriaText(
   }
 
   await applySideEffects(key);
+  return {};
+}
+
+/**
+ * Profile fields where `""` is a real value, not a blank error — same
+ * exception `optionalText()` in lib/profile.ts carves out for these two: they
+ * OMIT their whole prompt block when empty (titleScopeBlock / domainBonusBlock),
+ * so an empty save is a decision, not a mistake, and must not be blocked the
+ * way an empty fit brain or clause tail is.
+ */
+const PROFILE_FIELDS_ALLOWING_EMPTY = new Set<keyof Profile>(["titleScope", "domainBonus"]);
+
+/** Human labels for the profile fields saveProfileFields can touch, for its
+ *  own validation errors only — components/Settings.tsx has its own copy for
+ *  its section headings and field labels, and the two are not required to
+ *  match word for word. */
+const PROFILE_FIELD_LABELS: Partial<Record<keyof Profile, string>> = {
+  titleScope: "Title scope",
+  domainBonus: "Domain bonus",
+  weakFitTail: "Weak-fit guidance",
+  moderateTail: "Moderate-fit guidance",
+  strongTail: "Strong-fit guidance",
+  searchSubject: "Search subject",
+  querySubject: "Query subject",
+  stackFamilyIntro: "Stack family intro",
+  candidatePersona: "Candidate persona",
+  buildingConcept: "Building concept",
+  buildingUpside: "Building upside",
+};
+
+/**
+ * The profile fields that change what a search FINDS, spelled out here so
+ * `saveProfileFields` can decide invalidation from the shape of the patch it
+ * was actually handed rather than from which UI section called it. See that
+ * function's docblock for the full reasoning.
+ */
+const PROFILE_FIELDS_AFFECTING_SEARCH: (keyof Profile)[] = [
+  "searchSubject",
+  "querySubject",
+  "stackFamilyIntro",
+  "candidatePersona",
+  "buildingConcept",
+  "buildingUpside",
+];
+
+/**
+ * Saves an edit to the tenant's GENERATED profile fields — the "How your
+ * roles are scored" (titleScope, domainBonus, and the three clause tails) and
+ * "How your field is described" (the six search/extraction strings) sections
+ * on /settings. Lets a user correct a bad onboarding generation without
+ * re-running the whole flow.
+ *
+ * Shape follows saveCriteriaText exactly: requireActor() first, validate,
+ * write, describeWriteFailure(...) then `!== undefined` (never truthiness —
+ * the driver's message can be EMPTY, see lib/settings-store.ts), then side
+ * effects.
+ *
+ * READ-modify-write rather than a partial update, because writeProfile
+ * replaces the WHOLE jsonb row (see PROFILE_KEY's doc in
+ * lib/settings-store.ts: "the profile is replaced whole, never merged
+ * field-by-field"). Writing `patch` alone would blank every field the patch
+ * does not mention.
+ *
+ * DELIBERATELY DOES NOT TOUCH SETTING_KEYS.fitBrain, even though an earlier
+ * draft of this task's brief said it must. It is wrong under the precedence
+ * Task 4 actually shipped: `scoringInputsFrom` in lib/search-criteria.ts reads
+ * `criteria.fitBrain || profile.fitBrain` — the SETTING ROW wins and the
+ * profile is only the fallback the row degrades to when nothing is stored
+ * there. /settings' existing fit-brain card already writes that row, through
+ * `saveCriteriaText`, and that path is untouched by this task. Writing
+ * `profile.fitBrain` here too would buy nothing (the row already wins every
+ * read) while opening a second place the two copies could read differently —
+ * so this action's `patch` is expected to hold the OTHER generated fields,
+ * the ones with no setting-row equivalent, and never `fitBrain`.
+ *
+ * INVALIDATION RULE. The profile is not a `SettingKey` — it has no entry in
+ * CACHES_TO_CLEAR (lib/settings-effects.ts), so that funnel cannot decide
+ * this for a profile save the way `applySideEffects` decides it for a
+ * criteria save. The rule, decided here instead:
+ *
+ *   - searchSubject, querySubject, stackFamilyIntro, candidatePersona,
+ *     buildingConcept, buildingUpside change what a search FINDS — they are
+ *     spliced into the role-search prompt, the stack-family intro sentence,
+ *     and the extraction schema's fit_signal field description. A row
+ *     already sitting in `role_searches` or `discovered_roles` was produced
+ *     by a prompt built from the OLD values, so both caches are cleared when
+ *     the patch touches any of these six — the same two tables a
+ *     `titles`/`locationRule` save clears in `applySideEffects`.
+ *   - titleScope, domainBonus, and the three clause tails (weakFitTail /
+ *     moderateTail / strongTail) change only what an ALREADY-FOUND role
+ *     SCORES — they reach `scoreFit` through `profileToFitInputs`, never a
+ *     search or extraction prompt. The roles a cached search already found
+ *     are still the right roles; nothing cached is stale because of these
+ *     five. Clearing either cache for them would burn a re-billed,
+ *     ~8000-token, 10+-web-search regeneration per watched company for a
+ *     change the search path cannot even observe — so this patch clears
+ *     NOTHING when it touches only these fields. The remedy is a rescore,
+ *     offered exactly like a fit-brain edit is: `fitBrainRescoreOffer` in
+ *     lib/rescore-progress.ts is the existing shape for that offer, and
+ *     components/Settings.tsx drives it the same way it drives a fit-brain
+ *     save.
+ *
+ * Getting this backwards is expensive in both directions — burning money that
+ * was never asked for in one, serving a stranger's search results in the
+ * other — which is why it is decided once, here, keyed off the actual patch
+ * contents, rather than trusted to whichever UI section happens to call this
+ * action.
+ */
+export async function saveProfileFields(
+  patch: Partial<Profile>
+): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (typeof value !== "string") continue;
+    const field = key as keyof Profile;
+    if (PROFILE_FIELDS_ALLOWING_EMPTY.has(field)) continue;
+    if (!value.trim()) {
+      const label = PROFILE_FIELD_LABELS[field] ?? key;
+      return { error: `${label} cannot be empty.` };
+    }
+  }
+
+  const { rows, error: readError } = await readAllSettingsResult();
+  const readDescribed = describeWriteFailure(readError, "read your profile");
+  if (readDescribed !== undefined) {
+    console.error(`settings: ${readDescribed}`);
+    return { error: readDescribed };
+  }
+  const next: Profile = { ...profileFrom(rows), ...patch };
+
+  const { error } = await writeProfile(next);
+  // Presence, not truthiness — see saveCriteriaList above.
+  const described = describeWriteFailure(error, "save your profile");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described };
+  }
+
+  const touchesSearch = Object.keys(patch).some((k) =>
+    PROFILE_FIELDS_AFFECTING_SEARCH.includes(k as keyof Profile)
+  );
+  if (touchesSearch) {
+    // Same two tables, same tenant-scoped delete, applySideEffects uses for a
+    // titles/locationRule save — see the docblock above for why exactly these
+    // two and only when the patch touches a search-affecting field.
+    for (const table of ["role_searches", "discovered_roles"]) {
+      const { error: clearError } = await rawQuery(
+        `delete from ${table} where tenant_id = $1`,
+        [await resolveTenantId()],
+        await resolveTenantId()
+      );
+      if (clearError) {
+        // Non-fatal, same reasoning as applySideEffects: the profile is
+        // already saved, and a surviving cache serves stale results until it
+        // expires, which is worse than fresh but far better than reporting
+        // the save itself as failed.
+        console.error(`settings: could not clear ${table} — ${clearError.message}`);
+      }
+    }
+  }
+
   return {};
 }
 

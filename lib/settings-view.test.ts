@@ -5,9 +5,11 @@ import {
   COMP_SCORING_RESCORED_AT_KEY,
   CRITERIA_CHANGED_AT_KEY,
   JOB_STATUSES_KEY,
+  PROFILE_KEY,
   UNDESCRIBED_DB_ERROR,
 } from "./settings-store";
 import { DEFAULT_STATUSES } from "./job-statuses";
+import { DEFAULT_PROFILE } from "./profile";
 
 const CLEAN = {
   rows: [] as { key: string; value: unknown }[],
@@ -190,5 +192,21 @@ describe("statuses on the settings view", () => {
       ],
     });
     expect(view.statuses.find((d) => d.key === "Applied")!.label).toBe("Submitted");
+  });
+});
+
+describe("profile on the settings view", () => {
+  test("the view carries the tenant's profile off the same snapshot", () => {
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [{ key: PROFILE_KEY, value: { searchSubject: "nursing" } }],
+    });
+    expect(view.profile.searchSubject).toBe("nursing");
+  });
+
+  test("a failed read shows the shipped profile, and the banner explains why", () => {
+    const view = buildSettingsView({ ...CLEAN, settingsError: "" });
+    expect(view.profile).toEqual(DEFAULT_PROFILE);
+    expect(view.error).toBeTruthy();
   });
 });
