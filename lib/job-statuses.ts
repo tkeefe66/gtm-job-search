@@ -15,12 +15,16 @@ export type StatusBucket = "active" | "terminal";
 /**
  * The statuses that code writes or reads BY NAME, not merely displays.
  *
- * They are why `jobs.status` stores keys rather than labels. Two of these are
- * matched in raw SQL that no settings page can reach —
+ * They are why `jobs.status` stores keys rather than labels. ONE of them —
+ * `New` — is matched in raw SQL that no settings page can reach, in two queries:
  * `STALE_POSTING_CANDIDATES_SQL` (lib/crawler.ts) and `CRAWL_TITLE_MATCH_SQL`
- * (lib/removed-titles.ts) both say `status = 'New'` — and `db/schema.sql` makes
- * `'New'` the column default. A rename that rewrote rows would leave all three
- * matching nothing, silently disabling stale-posting closure.
+ * (lib/removed-titles.ts) both say `status = 'New'`. `db/schema.sql` makes
+ * `'New'` the column default as well. A rename that rewrote rows would leave all
+ * three matching nothing, silently disabling stale-posting closure. `Applied`
+ * and `Posting Closed` are written and read by name in TypeScript only
+ * (lib/applied-date.ts; lib/crawler.ts, lib/ingest-roles.ts and
+ * app/actions/link-health.ts), which is no less binding on the key — it is
+ * simply reachable by the typechecker.
  */
 export type SystemStatusKey = "New" | "Applied" | "Posting Closed";
 
@@ -129,8 +133,14 @@ export function resolveStatuses(raw: unknown): JobStatusDef[] {
     return DEFAULT_STATUSES.map((d) => ({ ...d }));
   }
 
-  // Any system key the saved config dropped comes back, in its shipped position
-  // relative to the others rather than appended blindly.
+  // Any system key the saved config dropped comes back, APPENDED AT THE END —
+  // Map preserves insertion order, and these are inserted after every key the
+  // saved config carried. Not its shipped position; the comment here used to
+  // claim otherwise. Benign, and the behaviour is left alone deliberately: this
+  // only fires on a config that lost a system key (a hand-edited row, or a
+  // save from a build that did not have it), the status still works from
+  // wherever it lands, and the user can reorder it. Restoring position would
+  // mean guessing where a user who never had this row wanted it.
   for (const def of DEFAULT_STATUSES) {
     if (def.system && !byKey.has(def.key)) {
       // Make a copy of the default entry to avoid sharing the reference

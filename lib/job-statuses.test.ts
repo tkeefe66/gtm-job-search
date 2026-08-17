@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import {
   DEFAULT_STATUSES,
   SYSTEM_STATUS_KEYS,
@@ -189,9 +191,6 @@ describe("compareByConfig", () => {
     expect(["Ghosted", "New"].sort(cmp)).toEqual(["New", "Ghosted"]);
   });
 });
-
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 /**
  * tailwind.config.ts scans ./app/** and ./components/** only. An

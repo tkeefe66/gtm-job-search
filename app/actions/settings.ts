@@ -650,7 +650,24 @@ export async function saveJobStatuses(
   // Resolved before storing, never after: repairs (a dropped system key, New
   // forced back to active) belong in the stored value, not re-applied on every
   // read of a config the user believes they saved.
-  return writeJobStatuses(resolveStatuses(defs));
+  const { error } = await writeJobStatuses(resolveStatuses(defs));
+  // Logged like every other save in this file, and for the same reason: a
+  // failed write of the one column the user authors by hand should leave a
+  // trace on the server, not only a banner in one browser.
+  //
+  // Presence, not truthiness: writeJobStatuses passes the driver's message
+  // through verbatim and a connection-level failure carries an EMPTY one, so
+  // `if (error)` would drop the log line for precisely the failure worth
+  // logging.
+  //
+  // Unlike its siblings this RETURNS the store's raw error rather than the
+  // described one. components/StatusEditor.tsx calls describeWriteFailure on
+  // it with this same `what`, so returning the described string would render
+  // "Could not save your statuses — Could not save your statuses — …". The
+  // user-facing sentence is identical either way.
+  const described = describeWriteFailure(error, "save your statuses");
+  if (described !== undefined) console.error(`settings: ${described}`);
+  return { error };
 }
 
 /**

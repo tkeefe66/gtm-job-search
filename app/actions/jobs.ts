@@ -6,7 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
 import { JOB_STATUSES_KEY } from "@/lib/settings-store";
 import { rawQuery, supabase } from "@/lib/supabase";
-import type { Job, JobInsert, JobStatus } from "@/lib/types";
+import type { Job, JobInsert } from "@/lib/types";
 
 export async function getJobs(): Promise<{ jobs: Job[]; error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that

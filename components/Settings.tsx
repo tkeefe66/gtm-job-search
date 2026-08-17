@@ -785,8 +785,28 @@ export default function Settings() {
         compile error in syncSection's exhaustive switch. Guarded on `view`
         (not `loading`) because the load effect can finish with `view` still
         null on a thrown error, and StatusEditor requires initial: JobStatusDef[].
+
+        AND guarded on view.error, which is the important half. On a FAILED
+        settings read buildSettingsView still returns `statuses` — it calls
+        jobStatusesFrom on an empty `rows`, which resolves to the shipped
+        defaults. Rendering the editor on those puts an enabled "Save statuses"
+        in front of a config that is not the user's, and one click overwrites
+        every rename, hidden flag, custom status and ordering they actually
+        have. There is no history table. Not rendering, rather than passing a
+        `disabled` prop: a prop can be half-honoured, an absent component
+        cannot. The read-failure banner is already on screen above.
+
+        Presence, never truthiness: the message can be EMPTY (an unreachable
+        dual-stack host rejects with an empty AggregateError), and `!view.error`
+        would render the editor for exactly the failure that matters most.
+
+        `view.error` also folds in the scored-role count's failure, so a count
+        blip hides this card too. Deliberate: that count fails when the jobs
+        table is unreachable, which is when the editor's own count and
+        reassignment would fail anyway, and the conservative direction here
+        costs a page reload while the other direction costs the config.
       */}
-      {view && (
+      {view && view.error === undefined && (
         <div className="mb-4">
           <StatusEditor initial={view.statuses} />
         </div>

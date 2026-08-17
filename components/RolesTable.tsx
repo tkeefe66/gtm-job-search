@@ -111,24 +111,74 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     setLoading(true);
     let failure: string | null = null;
     try {
-      const res = await getJobs();
-      // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
-      // getJobs returns `error.message` verbatim and a connection-level failure
-      // carries an EMPTY one, so the truthiness spelling took the `else` branch,
-      // cleared the banner, and rendered `jobs: []` as a genuinely empty
-      // pipeline. "You have no roles" and "the database is unreachable" are the
-      // two answers that must never be confused, and this table showed the
-      // first for the second.
-      failure = describeWriteFailure(res.error, "load your roles") ?? null;
-      setJobs(res.jobs);
+      // Promise.all, and each read owns its own failure. They are independent
+      // queries, and this path re-runs after every failed write — running them
+      // in series doubled the latency of a recovery reload for nothing.
+      //
+      // Each promise is settled INTO a result object rather than left to
+      // reject, because a bare Promise.all would land both rejections in the
+      // one catch below — which says "Could not load your roles". That is how
+      // a failed status read came to blame the roles table, which had loaded
+      // fine. Settling here lets each branch name what actually failed. (Not
+      // Promise.allSettled: its union shape needs a narrowing dance for each
+      // read anyway, and this spelling keeps the value typed.)
+      const [res, cfg] = await Promise.all([
+        getJobs().then(
+          (r) => ({ ok: true as const, r }),
+          (err: unknown) => ({ ok: false as const, err })
+        ),
+        getJobStatuses().then(
+          (r) => ({ ok: true as const, r }),
+          (err: unknown) => ({ ok: false as const, err })
+        ),
+      ]);
 
-      const cfg = await getJobStatuses();
-      setStatuses(cfg.statuses);
-      // Presence, not truthiness: the message can be empty.
-      setStatusError(cfg.error !== undefined
-        ? describeWriteFailure(cfg.error, "load your status settings")
-        : undefined);
+      if (res.ok) {
+        // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
+        // getJobs returns `error.message` verbatim and a connection-level failure
+        // carries an EMPTY one, so the truthiness spelling took the `else` branch,
+        // cleared the banner, and rendered `jobs: []` as a genuinely empty
+        // pipeline. "You have no roles" and "the database is unreachable" are the
+        // two answers that must never be confused, and this table showed the
+        // first for the second.
+        failure = describeWriteFailure(res.r.error, "load your roles") ?? null;
+        setJobs(res.r.jobs);
+      } else {
+        failure = describeWriteFailure(
+          res.err instanceof Error ? res.err.message : String(res.err),
+          "load your roles"
+        ) ?? null;
+      }
+
+      if (cfg.ok) {
+        // Presence, not truthiness: the message can be empty.
+        const described =
+          cfg.r.error !== undefined
+            ? describeWriteFailure(cfg.r.error, "load your status settings")
+            : undefined;
+        // Only adopt the config when the read actually SUCCEEDED. getJobStatuses
+        // returns the shipped defaults alongside a failed read, and its own doc
+        // comment says that config must never be presented as the user's — this
+        // table is the one with a write path, so adopting them would put hidden
+        // and deleted statuses back in the row <select> and let the user store
+        // one on a role. components/RecruiterPanel.tsx does the same, and was
+        // right first.
+        if (described === undefined) setStatuses(cfg.r.statuses);
+        setStatusError(described);
+      } else {
+        // getJobStatuses calls requireActor(), which THROWS on an expired or
+        // missing session. Attributed to the status read, not to the roles.
+        setStatusError(
+          describeWriteFailure(
+            cfg.err instanceof Error ? cfg.err.message : String(cfg.err),
+            "load your status settings"
+          )
+        );
+      }
     } catch (err) {
+      // Nothing above should reach here — both reads catch their own rejection
+      // — but a throw from setState or from describeWriteFailure would
+      // otherwise leave the spinner up forever.
       failure = describeWriteFailure(
         err instanceof Error ? err.message : String(err),
         "load your roles"
@@ -204,6 +254,25 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   }
 
   useEffect(() => { void load(); }, []);
+
+  /**
+   * Keeps the chip filter pointing at a status that still exists.
+   *
+   * A status deleted on /settings disappears from `statuses` the next time
+   * load() runs. A `{ kind: "status" }` filter still holding that key then
+   * matches nothing, no chip renders as selected, and the table shows zero rows
+   * with nothing on screen to explain why. Falling back to the default "Open"
+   * sentinel is the same state a fresh mount starts in.
+   *
+   * Returns `prev` untouched when the key is still there, so this cannot loop.
+   */
+  useEffect(() => {
+    setStatusFilter((prev) =>
+      prev.kind === "status" && !statuses.some((d) => d.key === prev.key)
+        ? { kind: "sentinel", key: "Open" }
+        : prev
+    );
+  }, [statuses]);
 
   const counts = useMemo(
     () => tileCounts(statuses, jobs.map((j) => j.status)),
