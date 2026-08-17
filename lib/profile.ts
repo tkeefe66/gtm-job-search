@@ -154,6 +154,11 @@ export const DEFAULT_PROFILE: Profile = {
 
   hiringSignal: {
     name: "funding rounds",
+    // discover.ts states its sources TWICE and the two lists differ: the
+    // system prompt names ten, the user prompt eight. This field renders
+    // both, so it carries the superset — see Ruling 3 in the SDD ledger. Do
+    // not trim this to the user prompt's eight; that list cannot reproduce
+    // the system prompt.
     sources: [
       "TechCrunch",
       "Crunchbase",
@@ -163,6 +168,8 @@ export const DEFAULT_PROFILE: Profile = {
       "VentureBeat",
       "Reuters",
       "WSJ",
+      "Business Insider",
+      "X/Twitter",
     ],
     qualifier: "Series B and above",
     hasRecency: true,

@@ -39,6 +39,17 @@ describe("DEFAULT_PROFILE", () => {
     expect(DEFAULT_PROFILE.hiringSignal.hasRecency).toBe(true);
     expect(DEFAULT_PROFILE.hiringSignal.sources).toContain("TechCrunch");
   });
+
+  test("its hiring-signal sources are the 10-source superset, in the system prompt's order", () => {
+    // discover.ts states its sources TWICE and the two lists differ: the system
+    // prompt names ten, the user prompt eight. One field renders both, so it
+    // carries the superset — see Ruling 3 in the SDD ledger. Do not trim this
+    // to the user prompt's eight; that list cannot reproduce the system prompt.
+    expect(DEFAULT_PROFILE.hiringSignal.sources).toEqual([
+      "TechCrunch", "Crunchbase", "The Information", "Bloomberg", "Forbes",
+      "VentureBeat", "Reuters", "WSJ", "Business Insider", "X/Twitter",
+    ]);
+  });
 });
 
 describe("resolveProfile", () => {
