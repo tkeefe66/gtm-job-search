@@ -74,7 +74,8 @@ vi.mock("@/lib/model-call", () => ({
 }));
 vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
 vi.mock("@/lib/search-criteria", () => ({
-  ROLE_SEARCH_SYSTEM: "system",
+  SEARCH_SUBJECT: "go-to-market and revenue operations",
+  roleSearchSystem: () => "system",
   loadCriteriaAndScoringInputs: vi.fn(async () => ({
     criteria: { titles: ["RevOps"], locationRule: "remote" },
     fitInputs: {},

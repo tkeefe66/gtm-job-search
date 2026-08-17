@@ -62,9 +62,37 @@ export const DEFAULT_LOCATION_RULE =
   'roles available only in other cities with no remote option. If a role lists ' +
   '"Denver, CO • New York, NY" or is remote-friendly, include it.';
 
-export const ROLE_SEARCH_SYSTEM =
-  "You are a recruiting researcher specializing in go-to-market and revenue " +
-  "operations roles. Return ONLY valid JSON, no markdown, no preamble.";
+/** What the search prompts call the field. Verbatim today's text. */
+export const SEARCH_SUBJECT = "go-to-market and revenue operations";
+
+/**
+ * Renders the system prompt for every role-search call. Required parameter,
+ * not defaulted: a default would let a future call site that forgets to pass
+ * the tenant's subject silently emit GTM text for someone else's career.
+ */
+export function roleSearchSystem(subject: string): string {
+  return `You are a recruiting researcher specializing in ${subject} roles. Return ONLY valid JSON, no markdown, no preamble.`;
+}
+
+/**
+ * The whole stack-family intro, not just its subject.
+ *
+ * The sentence names three GTM job titles after the subject — "Business Systems
+ * Manager, Growth Systems Lead, Revenue Systems… not just the obvious RevOps
+ * titles" — which are exactly as career-specific as the four words in front of
+ * them. Extracting only the subject would keep phase 1 a no-op and then, in
+ * phase 2, produce a prompt that reads coherently for half a sentence before
+ * naming RevOps roles at a mechanical engineer.
+ *
+ * FAMILY_INTRO.title (in role-search.ts) is career-agnostic as written and
+ * stays in place.
+ *
+ * Lives here rather than in role-search.ts because that file is "use server",
+ * which forbids non-async exports — the same reason fit-prompt.ts is
+ * separate from parse-role.ts.
+ */
+export const STACK_FAMILY_INTRO =
+  "Search job boards and company careers pages for currently-open go-to-market / revenue operations roles that mention these tools. Titles vary — include Business Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the obvious RevOps titles. Use these searches";
 
 export const DEFAULT_FIT_BRAIN = `
 Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:

@@ -10,12 +10,14 @@ import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
-  ROLE_SEARCH_SYSTEM,
+  SEARCH_SUBJECT,
+  STACK_FAMILY_INTRO,
   dateContextLine,
   emptySearchReason,
   loadSearchInputs,
   planQueries,
   roleExtractionSchema,
+  roleSearchSystem,
   stackQueries,
   titleQueries,
   type Criteria,
@@ -35,8 +37,7 @@ export interface RoleSearchResult {
 const FAMILY_INTRO: Record<RoleSearchFamily, string> = {
   title:
     "Search job boards and company careers pages for currently-open roles matching these searches",
-  stack:
-    "Search job boards and company careers pages for currently-open go-to-market / revenue operations roles that mention these tools. Titles vary — include Business Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the obvious RevOps titles. Use these searches",
+  stack: STACK_FAMILY_INTRO,
 };
 
 function allQueriesFor(
@@ -192,7 +193,7 @@ async function findRolesByCriteriaInner(
     );
 
     const raw = await callWithWebSearch({
-      system: ROLE_SEARCH_SYSTEM,
+      system: roleSearchSystem(SEARCH_SUBJECT),
       prompt: buildPrompt(family, queries, criteria),
       // Many searches per call; search narration counts against the budget.
       maxTokens: 8000,

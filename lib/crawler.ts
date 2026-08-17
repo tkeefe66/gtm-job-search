@@ -6,9 +6,10 @@ import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import {
-  ROLE_SEARCH_SYSTEM,
+  SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleExtractionSchema,
+  roleSearchSystem,
   titleListForPrompt,
   type Criteria,
 } from "@/lib/search-criteria";
@@ -328,7 +329,7 @@ async function extractViaFetch(
   }
 
   const raw = await callStructured({
-    system: ROLE_SEARCH_SYSTEM,
+    system: roleSearchSystem(SEARCH_SUBJECT),
     prompt: buildExtractionPrompt(company, classification.page, criteria),
     maxTokens: 4000,
   });
@@ -342,8 +343,8 @@ async function extractViaSearch(
 ): Promise<Role[]> {
   const hint = careersUrl ? ` Their careers page may be: ${careersUrl}.` : "";
   const raw = await callWithWebSearch({
-    system: ROLE_SEARCH_SYSTEM,
-    prompt: `Search for open go-to-market and revenue operations roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
+    system: roleSearchSystem(SEARCH_SUBJECT),
+    prompt: `Search for open ${SEARCH_SUBJECT} roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 

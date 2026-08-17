@@ -11,9 +11,10 @@ import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
-  ROLE_SEARCH_SYSTEM,
+  SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleExtractionSchema,
+  roleSearchSystem,
   titleListForPrompt,
 } from "@/lib/search-criteria";
 
@@ -105,14 +106,14 @@ async function findAndSaveRolesInner(
       ? ` Their careers page may be: ${startup.careers_url}.`
       : "";
 
-    const prompt = `Search for open go-to-market and revenue operations roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
+    const prompt = `Search for open ${SEARCH_SUBJECT} roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
 
 ${roleExtractionSchema()}
 
 If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`;
 
     const raw = await callWithWebSearch({
-      system: ROLE_SEARCH_SYSTEM,
+      system: roleSearchSystem(SEARCH_SUBJECT),
       prompt,
       // The role search runs many web_search calls (often 10+); 2000 tokens
       // truncated the response before the JSON was ever emitted (stop_reason
