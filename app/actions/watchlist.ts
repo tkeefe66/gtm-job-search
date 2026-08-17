@@ -9,8 +9,9 @@ import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL, crawlIntervalError } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
 import { normalizeCompanyName } from "@/lib/role-key";
+import { withBudget } from "@/lib/metered";
 import { rawQuery, supabase } from "@/lib/supabase";
-import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
+import { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
 import type { Startup, TrackedCompany } from "@/lib/types";
 
 // Company identity across this file is resolved case-insensitively using a
@@ -434,8 +435,27 @@ export async function trackCompanyByName(
     return { error: `Could not track "${company}" — ${error.message}` };
   }
 
-  const outcome = await crawlCompany(company);
-  return { outcome };
+  // Metered for the same reason checkCompanyNow is: tracking a company runs a
+  // full crawl immediately, and an unmetered one bills the platform key.
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "crawl-on-track",
+    estimateCents: 10,
+    isAdmin: actor.isAdmin,
+    fn: () => crawlCompany(company),
+  });
+
+  // The company IS now tracked — the write above succeeded — so a refused crawl
+  // is reported as an outcome rather than as a failure to track. Saying "could
+  // not track" here would send the user to re-add a company that is already on
+  // their watchlist.
+  if (budget.capped !== undefined) return { outcome: refusedCrawl(company, budget.capped) };
+  if (budget.error !== undefined) {
+    return {
+      outcome: refusedCrawl(company, describeWriteFailure(budget.error, "crawl that company") ?? UNDESCRIBED_DB_ERROR),
+    };
+  }
+  return { outcome: budget.result! };
 }
 
 // setTracking, markChecked, setCareersUrl, and removeFromWatchlist all
@@ -506,11 +526,50 @@ export async function setCareersUrl(
   return { error: error?.message };
 }
 
+/**
+ * A crawl costs the same whether a schedule asked for it or a person did, so it
+ * is metered the same way.
+ *
+ * This was UNMETERED, and the consequence was not a missing statistic. With no
+ * ambient scope, `routing()` in lib/model-call.ts falls back to
+ * `process.env.ANTHROPIC_API_KEY` — the PLATFORM key — with `maxSearches: null`,
+ * so any approved tenant could spend the owner's money, uncapped and unrecorded,
+ * by clicking "Check now". The nightly path through app/api/cron/crawl was
+ * wrapped; this one, which a person triggers, was not. A search-tier crawl is
+ * 60-120 seconds of billed web searches.
+ *
+ * The same defect app/actions/parse-role.ts documents having already shipped
+ * once, on a path that fix did not reach.
+ *
+ * `estimateCents: 10` matches the per-company figure the cron route uses
+ * (`10 * slice.limit` for a batch).
+ */
 export async function checkCompanyNow(company: string): Promise<CrawlOutcome> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
-  return crawlCompany(company);
+  const actor = await requireActor();
+
+  const budget = await withBudget({
+    action: "crawl-now",
+    estimateCents: 10,
+    isAdmin: actor.isAdmin,
+    fn: () => crawlCompany(company),
+  });
+
+  // Presence, not truthiness: `error` can be an empty string, and a capped
+  // refusal is a sentence rather than a failure. Both surface through
+  // CrawlOutcome's own error channel so the Watchlist renders them where it
+  // already renders a failed crawl.
+  if (budget.capped !== undefined) return refusedCrawl(company, budget.capped);
+  if (budget.error !== undefined) {
+    return refusedCrawl(company, describeWriteFailure(budget.error, "check that company") ?? UNDESCRIBED_DB_ERROR);
+  }
+  return budget.result!;
+}
+
+/** A crawl that never ran, shaped so the existing UI renders the reason. */
+function refusedCrawl(company: string, error: string): CrawlOutcome {
+  return { company, method: null, rolesFound: 0, newRoles: 0, status: "error", error };
 }
 
 export async function getDueCompanies(

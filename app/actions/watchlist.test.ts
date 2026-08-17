@@ -15,6 +15,16 @@ vi.mock("@/lib/require-actor", () => ({
 }));
 
 
+// The budget wrapper is bypassed, the same way app/actions/parse-role.test.ts
+// bypasses it: these tests are about tracking and crawl reporting, and
+// withBudget reaches the database for tiers and counters before the crawl runs.
+// Budget behaviour is pinned in lib/budget.test.ts; that these two actions are
+// WRAPPED at all is pinned separately, below.
+vi.mock("@/lib/metered", () => ({
+  withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
+}));
+
+
 // A `"use server"` module IS testable when the network is mocked at its edge —
 // the same lesson app/actions/settings.test.ts records in its own header, and
 // the reason vitest.config.ts includes `app/**`. The audit that produced these
@@ -63,6 +73,7 @@ vi.mock("@/lib/crawler", () => ({ crawlCompany: vi.fn() }));
 
 import {
   addToWatchlist,
+  checkCompanyNow,
   getWatchedCompanyKeys,
   setTracking,
   trackCompanyByName,
@@ -234,5 +245,53 @@ describe("resolveWriteTarget tells 'could not look' apart from 'not there'", () 
     expect(res.error).toBeUndefined();
     expect(h.state.writes).toHaveLength(1);
     expect(h.state.writes[0].payload.tracking_enabled).toBe(false);
+  });
+});
+
+/**
+ * The two interactive crawl paths are METERED.
+ *
+ * They were not, and the consequence was not a missing statistic: with no
+ * ambient billing scope, routing() in lib/model-call.ts falls back to
+ * process.env.ANTHROPIC_API_KEY — the PLATFORM key — uncapped and unrecorded.
+ * Any approved tenant could spend the owner's money by clicking "Check now".
+ * The nightly path through app/api/cron/crawl was wrapped; these, which a person
+ * triggers, were not.
+ *
+ * These tests assert the WRAPPING, which is what regressed. They deliberately
+ * un-mock the module-level withBudget stub for one call each, because a stub
+ * that always runs `fn` cannot tell a wrapped action from an unwrapped one — the
+ * exact blindness that let this ship.
+ */
+describe("the interactive crawl paths are metered", () => {
+  test("a capped budget means no crawl runs at all", async () => {
+    const metered = await import("@/lib/metered");
+    const spy = vi
+      .spyOn(metered, "withBudget")
+      .mockResolvedValue({ capped: "Add your API key to run searches." });
+
+    const outcome = await checkCompanyNow("Clay");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The refusal reached the caller as a reason, not as silence...
+    expect(outcome.error).toBe("Add your API key to run searches.");
+    expect(outcome.status).toBe("error");
+    // ...and the billed work never happened.
+    expect(crawl).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  test("checkCompanyNow declares the crawl action and its cost", async () => {
+    const metered = await import("@/lib/metered");
+    const spy = vi.spyOn(metered, "withBudget");
+
+    await checkCompanyNow("Clay");
+
+    // estimateCents matches the cron route's per-company figure. A wrapper that
+    // reserved nothing would pass every budget check and cap nothing.
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "crawl-now", estimateCents: 10 })
+    );
+    spy.mockRestore();
   });
 });

@@ -152,7 +152,6 @@ not handle.
 Reading and repairing it is `resolveProfile` in `lib/profile.ts`, pure and in the
 shape of `resolveStatuses`: an unknown shape repairs to a safe value rather than
 reaching a prompt.
-assertion is doing its job here; satisfy it, do not widen it.
 
 `onboarded_at` is a **standalone key outside `SETTING_KEYS`**, following
 `CRITERIA_CHANGED_AT_KEY` and `COMP_SCORING_RESCORED_AT_KEY`: it is a stamp the
