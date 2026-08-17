@@ -31,6 +31,7 @@ import {
 } from "@/lib/rescore-progress";
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
+import ApiKeyPanel from "./ApiKeyPanel";
 
 // Setting keys are written as literals rather than imported from
 // lib/settings-store.ts on purpose: that module imports lib/supabase, which
@@ -837,6 +838,7 @@ function SectionActions({
       >
         {resetLabel}
       </button>
-    </div>
+      <ApiKeyPanel />
+</div>
   );
 }

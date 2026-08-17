@@ -1,4 +1,5 @@
 import { rawQuery } from "@/lib/supabase";
+import { open } from "@/lib/secret-box";
 import { resolveTenantId } from "@/lib/tenant";
 import { runWithBilling, type BillingScope } from "@/lib/billing-context";
 import { reserveSpend, reconcileSpend } from "@/lib/usage-store";
@@ -84,18 +85,18 @@ export async function withBudget<T>(opts: {
   const tenantId = await resolveTenantId();
   const now = new Date();
 
-  const { data: keyRows } = await rawQuery<{ tenant_id: string }>(
-    `select tenant_id from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
-    [tenantId],
-    tenantId
-  );
-  const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: keyRows.length > 0 });
+  // The tenant's own key, decrypted here and nowhere else. Loading it BEFORE
+  // deciding the tier matters: a stored key that will not open is not a BYO
+  // tenant, and treating them as one would leave them unmetered AND unable to
+  // call anything.
+  const ownKey = await loadTenantKey(tenantId);
+  const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: ownKey !== null });
   const limits = await limitsFor(tenantId, tier);
 
   // BYO spends its own money, so it is not rationed — but its usage is still
   // recorded below, so the tenant can see it.
   if (!isMetered(tier)) {
-    return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0);
+    return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0, ownKey);
   }
 
   const { data: counters } = await rawQuery<{ period: string; spent_cents: number }>(
@@ -142,7 +143,48 @@ export async function withBudget<T>(opts: {
     };
   }
 
-  return runScope(tier, { maxSearches: verdict.maxSearches }, opts, tenantId, now, opts.estimateCents);
+  return runScope(tier, { maxSearches: verdict.maxSearches }, opts, tenantId, now, opts.estimateCents, ownKey);
+}
+
+/**
+ * Decrypts this tenant's stored key, or null.
+ *
+ * Null covers three cases that are all "no usable key": nothing stored, a row
+ * that will not open (tampered, moved between tenants, or written under an
+ * encryption key that no longer exists), and a key marked failed. None of them
+ * may silently fall back to the platform key — that would bill the platform for
+ * a tenant who believes they are paying, which is the failure this whole tier is
+ * meant to make impossible.
+ */
+async function loadTenantKey(tenantId: string): Promise<string | null> {
+  const { data } = await rawQuery<{
+    key_id: string;
+    ciphertext: string;
+    nonce: string;
+    auth_tag: string;
+  }>(
+    `select key_id, ciphertext, nonce, auth_tag
+       from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
+    [tenantId],
+    tenantId
+  );
+  if (data.length === 0) return null;
+
+  const plain = open(
+    {
+      keyId: data[0].key_id,
+      ciphertext: data[0].ciphertext,
+      nonce: data[0].nonce,
+      authTag: data[0].auth_tag,
+    },
+    tenantId
+  );
+  if (plain === null) {
+    // Loud, because this is not a normal state: the row exists and cannot be
+    // opened, which means tampering, a moved row, or a rotated encryption key.
+    console.error(`metered: a stored API key for a tenant could not be opened`);
+  }
+  return plain;
 }
 
 async function runScope<T>(
@@ -151,11 +193,15 @@ async function runScope<T>(
   opts: { action: string; estimateCents: number; fn: () => Promise<T> },
   tenantId: string,
   now: Date,
-  reservedCents: number
+  reservedCents: number,
+  ownKey: string | null
 ): Promise<MeteredResult<T>> {
   const scope: BillingScope = {
     maxSearches: caps.maxSearches,
-    apiKey: process.env.ANTHROPIC_API_KEY || "",
+    // The tenant's key when they have one. Never a silent fallback: if a BYO
+    // tenant's key stops working, the call fails as THEIR key failing rather
+    // than quietly moving the cost to the platform.
+    apiKey: ownKey ?? (process.env.ANTHROPIC_API_KEY || ""),
     searches: 0,
     inputTokens: 0,
     outputTokens: 0,
