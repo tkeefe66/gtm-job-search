@@ -1048,7 +1048,17 @@ function StatusSelect({
 }
 ```
 
-Pass `statuses` at its call site (`:745`). Do the same `optionsFor(...)` replacement at the bulk dropdown (`:653`) and the add form (`:1205`), using `optionsFor(statuses, form.status)` for the latter and `optionsFor(statuses, "")` for the bulk one — its `value` is always `""`, so nothing is injected.
+Pass `statuses` at its call site (`:745`). Use `optionsFor(statuses, form.status)` at the add form (`:1205`) for the same reason as `StatusSelect` — it renders a real stored value.
+
+The bulk dropdown (`:653`) is the exception and does **not** use `optionsFor`:
+
+```tsx
+                  {statuses.filter((d) => !d.hidden).map((d) => (
+                    <option key={d.key} value={d.key}>{d.label}</option>
+                  ))}
+```
+
+`optionsFor` injects the current value so a `<select>` can never render a status the row does not hold. That hazard does not exist here: this select's value is always `""` (it resets after each pick so choosing the same status twice still fires `onChange`), and the explicit `<option value="">Set status…</option>` already covers the empty value. Passing `""` as `current` would inject a *second*, blank option beside the placeholder, because `optionsFor` appends any `current` it cannot find — and `""` is never in the config.
 
 Retype `handleStatus(job: Job, status: string)` and `handleBulkStatus(status: string)`, and change the banner text at `:280` to use the label:
 
