@@ -24,16 +24,75 @@ import { accessFor, sessionVerdict, resolveIdentity } from "@/lib/auth-policy";
  * cannot deny. A check placed there looks correct and is bypassed by every
  * other read path.
  */
+/**
+ * Turns the ISO strings this app's `pg` configuration produces back into Dates.
+ *
+ * lib/supabase.ts installs a GLOBAL type parser mapping every `timestamptz` to
+ * an ISO string, so the server actions can treat timestamps as strings. Auth.js
+ * expects real `Date` objects, and hands `session.expires` straight to the cookie
+ * serializer — which rejects a string with
+ * `TypeError: option expires is invalid`, breaking sign-in at the last step
+ * after the user has already been created.
+ *
+ * A separate pool would NOT fix it: `types.setTypeParser` is global to the `pg`
+ * module, not per-pool. So the conversion has to happen here, at the adapter
+ * boundary, on every value Auth.js expects to be temporal.
+ */
+function reviveDates<T>(row: T): T {
+  if (!row || typeof row !== "object") return row;
+  const out = row as unknown as Record<string, unknown>;
+  for (const key of ["expires", "emailVerified", "created_at"]) {
+    const v = out[key];
+    if (typeof v === "string") out[key] = new Date(v);
+  }
+  return row;
+}
+
 function guardedAdapter(): Adapter {
   const base = PostgresAdapter(authPool()) as Adapter;
   const inner = base.getSessionAndUser!.bind(base);
 
+  // Every adapter method that hands Auth.js a row carrying a timestamp needs the
+  // revival above. Wrapped generically rather than one-by-one so a method added
+  // by a future beta cannot quietly skip it.
+  // `R | PromiseLike<R>` — Auth.js's `Awaitable<R>`. Not `Promise<R>`: adapter
+  // methods may return synchronously, and PromiseLike is wider than Promise, so
+  // anything narrower rejects every method the adapter actually defines.
+  const wrap = <A extends unknown[], R>(fn?: (...a: A) => R | PromiseLike<R>) =>
+    fn
+      ? async (...args: A): Promise<R> => {
+          const r = await fn(...args);
+          if (r && typeof r === "object") {
+            const rec = r as unknown as Record<string, unknown>;
+            // getSessionAndUser returns { session, user }; everything else is a row.
+            if (rec.session || rec.user) {
+              reviveDates(rec.session);
+              reviveDates(rec.user);
+            } else {
+              reviveDates(r);
+            }
+          }
+          return r;
+        }
+      : fn;
+
   return {
     ...base,
+    createSession: wrap(base.createSession?.bind(base)),
+    updateSession: wrap(base.updateSession?.bind(base)),
+    createUser: wrap(base.createUser?.bind(base)),
+    updateUser: wrap(base.updateUser?.bind(base)),
+    getUser: wrap(base.getUser?.bind(base)),
+    getUserByEmail: wrap(base.getUserByEmail?.bind(base)),
+    getUserByAccount: wrap(base.getUserByAccount?.bind(base)),
 
     async getSessionAndUser(sessionToken: string) {
       const result = await inner(sessionToken);
       if (!result) return null;
+      // Same revival as the wrapped methods above — this one is hand-written
+      // because it also carries the cap and status checks below.
+      reviveDates(result.session);
+      reviveDates(result.user);
 
       // `created_at` is ours, added in db/schema.sql. The adapter selects * so it
       // arrives at runtime even though AdapterSession does not type it.
