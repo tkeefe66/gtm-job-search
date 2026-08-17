@@ -182,3 +182,28 @@ describe("compareByConfig", () => {
     expect(["Ghosted", "New"].sort(cmp)).toEqual(["New", "Ghosted"]);
   });
 });
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * tailwind.config.ts scans ./app/** and ./components/** only. An
+ * arbitrary-value class written under lib/ is never generated, so the element
+ * renders unstyled — through a green build, a green typecheck, and green
+ * value-level assertions. No other check in this repo can catch it.
+ */
+describe("Tailwind content globs", () => {
+  it("has no arbitrary-value class anywhere under lib/", () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const path = join(dir, entry);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (/\.tsx?$/.test(entry) && /\bbg-\[#|\btext-\[#/.test(readFileSync(path, "utf8")))
+          offenders.push(path);
+      }
+    };
+    walk("lib");
+    expect(offenders).toEqual([]);
+  });
+});
