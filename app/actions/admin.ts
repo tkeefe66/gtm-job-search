@@ -121,3 +121,131 @@ export async function listCrawlableTenants(): Promise<{
   if (described !== undefined) return { tenantIds: [], error: described };
   return { tenantIds: data.map((r) => r.id) };
 }
+
+export interface TenantBudget {
+  id: string;
+  email: string;
+  role: string;
+  dailyCents: number;
+  monthlyCents: number;
+  spentTodayCents: number;
+  spentMonthCents: number;
+  hasOwnKey: boolean;
+}
+
+/**
+ * Spend and ceilings for every tenant.
+ *
+ * usage_counters is under FORCE RLS and app_rw is NOBYPASSRLS, so there is no
+ * cross-tenant SELECT to write — the admin genuinely cannot read another
+ * tenant's counters. This enters each tenant's scope in turn instead, one
+ * explicit read per tenant. That is slower and it is the honest shape: the
+ * isolation is not being bypassed, it is being used deliberately, N times, from
+ * an action that checks the admin role server-side.
+ */
+export async function getBudgetOverview(): Promise<{
+  tenants: TenantBudget[];
+  error?: string;
+}> {
+  await requireAdmin();
+
+  const { data: users, error } = await rawQuery<{
+    id: string;
+    email: string;
+    role: string;
+    daily_budget_cents: number | null;
+    monthly_budget_cents: number | null;
+  }>(
+    `select id, email, role, daily_budget_cents, monthly_budget_cents
+       from users where status = 'active' order by role desc, created_at`
+  );
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "load budgets"
+  );
+  if (described !== undefined) return { tenants: [], error: described };
+
+  const { data: defaults } = await rawQuery<{ key: string; value: unknown }>(
+    `select key, value from platform_settings`
+  );
+  const num = (k: string, f: number) => {
+    const v = defaults.find((d) => d.key === k)?.value;
+    return typeof v === "number" ? v : f;
+  };
+
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const month = now.toISOString().slice(0, 7);
+
+  const tenants: TenantBudget[] = [];
+  for (const u of users) {
+    const admin = u.role === "admin";
+    // Scoped to THIS tenant, so the policy permits the read.
+    const { data: counters } = await rawQuery<{ period: string; spent_cents: number }>(
+      `select period, spent_cents from usage_counters where tenant_id = $1`,
+      [u.id],
+      u.id
+    );
+    const { data: keys } = await rawQuery<{ tenant_id: string }>(
+      `select tenant_id from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
+      [u.id],
+      u.id
+    );
+    const spent = (p: string) => counters.find((c) => c.period === p)?.spent_cents ?? 0;
+
+    tenants.push({
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      dailyCents:
+        u.daily_budget_cents ??
+        num(admin ? "adminDailyBudgetCents" : "defaultDailyBudgetCents", admin ? 1000 : 200),
+      monthlyCents:
+        u.monthly_budget_cents ??
+        num(admin ? "adminMonthlyBudgetCents" : "defaultMonthlyBudgetCents", admin ? 10_000 : 1000),
+      spentTodayCents: spent(today),
+      spentMonthCents: spent(month),
+      hasOwnKey: keys.length > 0,
+    });
+  }
+  return { tenants };
+}
+
+/**
+ * Set a tenant's ceilings. The admin's own row included — that is the escape
+ * hatch that makes a hard cap safe to have at all.
+ *
+ * A runaway loop cannot press this button, which is why the protection still
+ * holds while lockout does not.
+ */
+export async function setBudget(
+  id: string,
+  dailyCents: number,
+  monthlyCents: number
+): Promise<{ error?: string }> {
+  await requireAdmin();
+
+  // Refuse nonsense rather than storing it: a daily ceiling above the monthly
+  // one can never bind, so the daily protection would silently stop existing.
+  if (!Number.isFinite(dailyCents) || !Number.isFinite(monthlyCents)) {
+    return { error: "Budgets must be numbers." };
+  }
+  if (dailyCents < 0 || monthlyCents < 0) {
+    return { error: "Budgets cannot be negative." };
+  }
+  if (dailyCents > monthlyCents) {
+    return { error: "The daily limit cannot exceed the monthly limit — it would never apply." };
+  }
+
+  const { error } = await rawQuery(
+    `update users set daily_budget_cents = $2, monthly_budget_cents = $3 where id = $1::uuid`,
+    [id, Math.round(dailyCents), Math.round(monthlyCents)]
+  );
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "save that budget"
+  );
+  if (described !== undefined) return { error: described };
+  revalidatePath("/admin");
+  return {};
+}

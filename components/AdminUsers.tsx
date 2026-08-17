@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { listUsers, approveUser, denyUser, suspendUser, type AdminUser } from "@/app/actions/admin";
 import { Spinner } from "./ui";
+import AdminBudgets from "./AdminBudgets";
 
 const BADGE: Record<string, string> = {
   pending: "bg-[#FEF3C7] text-[#92400E]",
@@ -130,6 +131,8 @@ export default function AdminUsers() {
           </tbody>
         </table>
       </div>
+
+      <AdminBudgets />
     </div>
   );
 }
