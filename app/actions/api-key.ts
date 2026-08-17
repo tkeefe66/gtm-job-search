@@ -104,6 +104,24 @@ export async function saveApiKey(
   // while storing something else proves nothing.
   const probeModel = model ?? provider.defaultModel;
 
+  // A model this provider cannot PRICE must not be storable, and the check is
+  // here rather than at spend time because the meter is the owner's only
+  // runaway protection and the owner is the one holding the text box. An
+  // unpriced model is metered at the default model's rate — for a 5x model
+  // that records a fifth of real spend, passes both ceilings at ~5x the
+  // intended dollars, and renders a per-run estimate wrong by the same factor.
+  // `anthropicPrice`'s fallback stays as the last-resort guard it is; this gate
+  // is what makes it unreachable from the save path.
+  //
+  // Before validateKey deliberately: it costs nothing and needs no network.
+  if (!provider.pricedModels.includes(probeModel)) {
+    return {
+      error:
+        `This app can only meter spend on models it has a price for. ` +
+        `Choose one of: ${provider.pricedModels.join(", ")}.`,
+    };
+  }
+
   // The adapter owns both checks: the shape of its keys and whether the vendor
   // accepts this one on this model. What comes back is a REASON, never the
   // SDK's text — that embeds request URLs and sometimes the key itself, and

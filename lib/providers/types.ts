@@ -67,6 +67,19 @@ export interface Provider {
   /** Cost in cents, per provider AND resolved model. Never a shared constant. */
   costCents(usage: Usage, model: string): number;
   /**
+   * The models this provider can PRICE — the closed set a stored model must
+   * come from, asked as `pricedModels.includes(model)`.
+   *
+   * It sits next to `costCents` because it is the same fact from the other
+   * side: `costCents` falls back to a default rate for a model it does not
+   * know, which is a last-resort guard against a zero-cost runaway, NOT a
+   * price. A model stored outside this set is metered at another model's rate
+   * — the meter under-counts, both ceilings pass several times the intended
+   * dollars, and the estimate on /settings is wrong by the same factor. Every
+   * provider needs this gate, so it belongs on the interface.
+   */
+  pricedModels: readonly string[];
+  /**
    * Probe the key against the model it will ACTUALLY run on.
    *
    * `model` is not optional and is not the adapter's default: a tenant who

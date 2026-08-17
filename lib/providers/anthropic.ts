@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { report } from "../usage.js";
-import { ANTHROPIC_DEFAULT_MODEL, anthropicCostCents } from "./anthropic-pricing";
+import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_PRICES, anthropicCostCents } from "./anthropic-pricing";
 import type { Completion, CompleteOpts, KeyVerdict, Provider, SearchOpts, Usage } from "./types";
 
 // The installed @anthropic-ai/sdk's ContentBlock union (TextBlock | ToolUseBlock)
@@ -70,6 +70,7 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
     searchCapEnforcement: "in-request",
 
     costCents: anthropicCostCents,
+    pricedModels: Object.keys(ANTHROPIC_PRICES),
 
     async complete(opts: CompleteOpts): Promise<Completion> {
       const body: Record<string, unknown> = {
