@@ -73,6 +73,10 @@ vi.mock("@/lib/model-call", () => ({
   parseJson: (raw: string) => JSON.parse(raw),
 }));
 vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
+// These four strings are ARBITRARY FIXTURES, not a pin on the real constants:
+// this mock replaces the whole module, so nothing here asserts what
+// lib/search-criteria.ts actually holds. When phase 2 makes these per-user,
+// change them freely — the real pins are in lib/search-criteria.test.ts.
 vi.mock("@/lib/search-criteria", () => ({
   SEARCH_SUBJECT: "go-to-market and revenue operations",
   CANDIDATE_PERSONA: "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder",

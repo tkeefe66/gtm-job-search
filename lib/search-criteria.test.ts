@@ -146,7 +146,7 @@ describe("stackQueries", () => {
     expect(q).toEqual(['"Salesforce" revenue operations hiring Denver']);
   });
 
-  test("QUERY_SUBJECT is two words, not the five-word prose SEARCH_SUBJECT", () => {
+  test("QUERY_SUBJECT is two words, not the four-word prose SEARCH_SUBJECT", () => {
     expect(QUERY_SUBJECT).toBe("revenue operations");
   });
 
@@ -381,11 +381,11 @@ describe("roleExtractionSchema", () => {
   });
 
   // Load-bearing: fit_signal becomes fit_summary and reaches the scorer as
-  // `Summary:` (lib/ingest-roles.ts:156 → lib/fit-prompt.ts:163), so this
+  // `Summary:` (lib/ingest-roles.ts:156 → lib/fit-prompt.ts:225), so this
   // wording is an input to the fit score on every row, not a cosmetic label.
   //
-  // ic_flag is asserted TWICE: once with toContain (cheap sanity check) and
-  // once by isolating the exact field entry (the schema is built with
+  // BOTH fields are asserted twice: once with toContain (cheap sanity check)
+  // and once by isolating the exact field entry (the schema is built with
   // `.join("\n- ")`, so splitting on that separator recovers each field
   // verbatim) and comparing it with `.toBe()` against the literal text
   // pinned at 7c7cb6a:lib/search-criteria.ts:129 — byte-identical, not a
@@ -393,14 +393,16 @@ describe("roleExtractionSchema", () => {
   // CANDIDATE_PERSONA, BUILDING_CONCEPT, or BUILDING_UPSIDE fails this test.
   test("the persona and building concept reach the schema verbatim", () => {
     const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE);
-    expect(schema).toContain(
-      "fit_signal (string, 1 sentence on why a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder might fit)"
-    );
+    const field = (name: string) =>
+      schema.split("\n- ").find((line) => line.startsWith(name));
+    const ORIGINAL_FIT_SIGNAL_LINE =
+      "fit_signal (string, 1 sentence on why a GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder might fit)";
+    expect(schema).toContain(ORIGINAL_FIT_SIGNAL_LINE);
+    expect(field("fit_signal")).toBe(ORIGINAL_FIT_SIGNAL_LINE);
     const ORIGINAL_IC_FLAG_LINE =
       "ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on building GTM systems and agentic AI workflows, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no systems/AI-building upside)";
     expect(schema).toContain(ORIGINAL_IC_FLAG_LINE);
-    const icFlagField = schema.split("\n- ").find((line) => line.startsWith("ic_flag"));
-    expect(icFlagField).toBe(ORIGINAL_IC_FLAG_LINE);
+    expect(field("ic_flag")).toBe(ORIGINAL_IC_FLAG_LINE);
   });
 
   // Proves a different persona reaches BOTH grammatical forms the building

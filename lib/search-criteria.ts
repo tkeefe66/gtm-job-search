@@ -66,9 +66,16 @@ export const DEFAULT_LOCATION_RULE =
 export const SEARCH_SUBJECT = "go-to-market and revenue operations";
 
 /**
- * Renders the system prompt for every role-search call. Required parameter,
- * not defaulted: a default would let a future call site that forgets to pass
- * the tenant's subject silently emit GTM text for someone else's career.
+ * Renders the system prompt for every role-search call.
+ *
+ * Required parameter, not defaulted — but NOT because that stops phase 2
+ * shipping GTM text to a nurse. It does not: a required parameter catches
+ * OMISSION, and a phase-2 site that forgets to switch its argument keeps
+ * passing `SEARCH_SUBJECT`, which compiles and ships. The narrower reason
+ * is sufficient: it makes THIS phase's transcription exhaustive by
+ * construction, because the build stops at any call site missed. Phase 2's
+ * risk is a different one and needs its own guard — which is what the
+ * golden tests asserting a CHANGED value reaches the output are for.
  */
 export function roleSearchSystem(subject: string): string {
   return `You are a recruiting researcher specializing in ${subject} roles. Return ONLY valid JSON, no markdown, no preamble.`;
@@ -79,8 +86,11 @@ export function roleSearchSystem(subject: string): string {
  *
  * The sentence names three GTM job titles after the subject — "Business Systems
  * Manager, Growth Systems Lead, Revenue Systems… not just the obvious RevOps
- * titles" — which are exactly as career-specific as the four words in front of
- * them. Extracting only the subject would keep phase 1 a no-op and then, in
+ * titles" — which are exactly as career-specific as the subject in front of
+ * them. (That subject is the SLASHED form, "go-to-market / revenue
+ * operations", not `SEARCH_SUBJECT`'s "and" form; the slash form is not
+ * extracted as its own constant anywhere — it lives here, inside the whole
+ * sentence.) Extracting only the subject would keep phase 1 a no-op and then, in
  * phase 2, produce a prompt that reads coherently for half a sentence before
  * naming RevOps roles at a mechanical engineer.
  *
@@ -114,9 +124,10 @@ Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practition
  *
  * This is not a label: `fit_signal` becomes `fit_summary`
  * (lib/ingest-roles.ts:156) and reaches the scorer as `Summary:`
- * (lib/fit-prompt.ts:163), so it is an input to the fit score on every row
- * from all three ingest paths. A default here would let a future call site
- * silently emit GTM text for someone else's career.
+ * (lib/fit-prompt.ts:225), so it is an input to the fit score on every row
+ * from all three ingest paths. Required rather than defaulted for the reason
+ * given on `roleSearchSystem` above — exhaustive transcription now, not
+ * protection later.
  */
 export const CANDIDATE_PERSONA =
   "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder";

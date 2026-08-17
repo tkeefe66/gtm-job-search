@@ -159,8 +159,11 @@ then naming RevOps roles at a mechanical engineer. So the constant is
 extracted.
 
 `QUERY_SUBJECT` is a **search query** term, not prose. `stackQueries` builds
-`` `"${tool}" revenue operations hiring ${place}` ``; a five-word phrase there
-yields `"Salesforce" go-to-market and revenue operations hiring Denver`.
+`` `"${tool}" revenue operations hiring ${place}` ``; `SEARCH_SUBJECT`'s longer
+phrase there yields `"Salesforce" go-to-market and revenue operations hiring
+Denver`. (Corrected after implementation: this said "a five-word phrase".
+`SEARCH_SUBJECT` is four words. The wrong count reached a docblock and a test
+name before anyone counted it.)
 
 `CANDIDATE_PERSONA` is the one that matters most and is least visible.
 `fit_signal` becomes `fit_summary` (`lib/ingest-roles.ts:156`), which

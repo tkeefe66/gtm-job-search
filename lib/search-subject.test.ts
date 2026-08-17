@@ -16,7 +16,7 @@ describe("the search subject renders into its sites", () => {
   });
 
   test("the stack intro keeps the job titles it names", () => {
-    // The subject is four words of a longer sentence. If a future change
+    // The subject is the opening of a longer sentence. If a future change
     // extracts only the subject, these three titles are left behind pointing at
     // the wrong career.
     expect(STACK_FAMILY_INTRO).toContain("Business Systems Manager");

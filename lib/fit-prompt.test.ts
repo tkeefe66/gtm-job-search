@@ -507,21 +507,36 @@ describe("the rendered prompt, against its fixture", () => {
     }
   });
 
-  test("renders titleScope and domainBonus it is HANDED, never a module default", () => {
+  test("renders every career-specific field it is HANDED, never a module default", () => {
     // Same property pinned for fitBrain above: an implementation that ignored
     // inputs.titleScope/domainBonus and rendered DEFAULT_TITLE_SCOPE /
     // DEFAULT_DOMAIN_BONUS instead would pass every fixture test above (they
     // ARE the defaults) while ignoring a tenant's own text entirely. No .txt
     // fixture for this one — an inline assertion is enough and it cannot drift.
+    //
+    // The three clause tails are here for the same reason and were missed at
+    // first: EVERY other FitInputs construction in the whole suite passes the
+    // DEFAULT_* tails, so nothing else in 861 tests can tell "reads the field"
+    // apart from "inlines the constant". This assertion is the only thing that
+    // can. Any field added to FitInputs belongs in this test.
     const inputs: FitInputs = {
       ...WITH_FLOOR,
       titleScope: "- SYNTHETIC TITLE SCOPE",
       domainBonus: "SYNTHETIC DOMAIN BONUS",
+      weakFitTail: "SYNTHETIC WEAK TAIL",
+      moderateTail: "SYNTHETIC MODERATE TAIL",
+      strongTail: "SYNTHETIC STRONG TAIL",
     };
     const prompt = buildFitPrompt(ROLE, inputs);
     expect(prompt).toContain("- SYNTHETIC TITLE SCOPE");
     expect(prompt).toContain("SYNTHETIC DOMAIN BONUS");
+    expect(prompt).toContain("SYNTHETIC WEAK TAIL");
+    expect(prompt).toContain("SYNTHETIC MODERATE TAIL");
+    expect(prompt).toContain("SYNTHETIC STRONG TAIL");
     expect(prompt).not.toContain(DEFAULT_TITLE_SCOPE);
     expect(prompt).not.toContain(DEFAULT_DOMAIN_BONUS);
+    expect(prompt).not.toContain(DEFAULT_WEAK_FIT_TAIL);
+    expect(prompt).not.toContain(DEFAULT_MODERATE_TAIL);
+    expect(prompt).not.toContain(DEFAULT_STRONG_TAIL);
   });
 });
