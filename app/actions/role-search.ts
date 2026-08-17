@@ -10,12 +10,8 @@ import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { buildRoleSearchPrompt } from "@/lib/role-search-prompt";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
+import type { Profile } from "@/lib/profile";
 import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
-  SEARCH_SUBJECT,
-  STACK_FAMILY_INTRO,
   emptySearchReason,
   loadSearchInputs,
   planQueries,
@@ -38,9 +34,12 @@ export interface RoleSearchResult {
 
 function allQueriesFor(
   family: RoleSearchFamily,
-  criteria: Criteria
+  criteria: Criteria,
+  profile: Profile
 ): string[] {
-  return family === "title" ? titleQueries(criteria) : stackQueries(criteria);
+  return family === "title"
+    ? titleQueries(criteria)
+    : stackQueries(criteria, profile.querySubject);
 }
 
 async function readCache(family: RoleSearchFamily) {
@@ -143,7 +142,7 @@ async function findRolesByCriteriaInner(
     // can neither split the run across two title lists nor pair one version's
     // titles with another version's ceiling — or another version's fit brain
     // and compensation floor, which the ingest scores every found role against.
-    const { criteria, ceiling, fitInputs } = await loadSearchInputs();
+    const { criteria, ceiling, fitInputs, profile } = await loadSearchInputs();
 
     // An empty title (or location) list enumerates to zero queries. Without
     // this the run would build a prompt with an empty bullet list, spend a
@@ -164,7 +163,7 @@ async function findRolesByCriteriaInner(
     // ceiling set the full enumeration is sent (coverage beats sixty cents,
     // see MAX_QUERY_MULTIPLIER); a ceiling narrows it to a proportional
     // spread. planQueries decides both the offer and the hard cap together.
-    const allQueries = allQueriesFor(family, criteria);
+    const allQueries = allQueriesFor(family, criteria, profile);
     const { queries, maxSearches, reason } = planQueries(allQueries, ceiling);
     console.log(
       `findRolesByCriteria(${family}): sending ${queries.length} of ${allQueries.length} queries ` +
@@ -172,15 +171,15 @@ async function findRolesByCriteriaInner(
     );
 
     const raw = await callWithWebSearch({
-      system: roleSearchSystem(SEARCH_SUBJECT),
+      system: roleSearchSystem(profile.searchSubject),
       prompt: buildRoleSearchPrompt({
         family,
         queries,
         criteria,
-        stackFamilyIntro: STACK_FAMILY_INTRO,
-        persona: CANDIDATE_PERSONA,
-        buildingConcept: BUILDING_CONCEPT,
-        buildingUpside: BUILDING_UPSIDE,
+        stackFamilyIntro: profile.stackFamilyIntro,
+        persona: profile.candidatePersona,
+        buildingConcept: profile.buildingConcept,
+        buildingUpside: profile.buildingUpside,
       }),
       // Many searches per call; search narration counts against the budget.
       maxTokens: 8000,

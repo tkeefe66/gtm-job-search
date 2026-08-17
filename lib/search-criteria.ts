@@ -11,7 +11,7 @@
 // database.
 
 import type { FitInputs } from "@/lib/fit-inputs";
-import { profileToFitInputs } from "@/lib/profile";
+import { profileToFitInputs, type Profile } from "@/lib/profile";
 import {
   ceilingFrom,
   compFloorFrom,
@@ -57,47 +57,27 @@ export const DEFAULT_LOCATION_RULE =
   'roles available only in other cities with no remote option. If a role lists ' +
   '"Denver, CO • New York, NY" or is remote-friendly, include it.';
 
-/** What the search prompts call the field. Verbatim today's text. */
-export const SEARCH_SUBJECT = "go-to-market and revenue operations";
-
 /**
  * Renders the system prompt for every role-search call.
  *
  * Required parameter, not defaulted — but NOT because that stops phase 2
  * shipping GTM text to a nurse. It does not: a required parameter catches
  * OMISSION, and a phase-2 site that forgets to switch its argument keeps
- * passing `SEARCH_SUBJECT`, which compiles and ships. The narrower reason
- * is sufficient: it makes THIS phase's transcription exhaustive by
- * construction, because the build stops at any call site missed. Phase 2's
- * risk is a different one and needs its own guard — which is what the
- * golden tests asserting a CHANGED value reaches the output are for.
+ * passing GTM text, which compiles and ships. The narrower reason is
+ * sufficient: it makes a single call site's transcription exhaustive by
+ * construction, because the build stops if it is missed. The omission risk
+ * for EVERY call site across the codebase is a different, larger risk, and
+ * that is what `lib/career-neutrality.test.ts` now guards — the phrase scan
+ * catches a career-specific string surviving anywhere outside `lib/profile.ts`
+ * (and `lib/fit-prompt.ts`), and the deleted-name scan catches a re-introduced
+ * import of a constant this task removed. The per-builder tests (this file's,
+ * `lib/company-role-prompt.test.ts`, `lib/role-search-prompt.test.ts`) are the
+ * other half: they assert a CHANGED value actually reaches the rendered
+ * prompt, which the guard above cannot see because it only reads source text.
  */
 export function roleSearchSystem(subject: string): string {
   return `You are a recruiting researcher specializing in ${subject} roles. Return ONLY valid JSON, no markdown, no preamble.`;
 }
-
-/**
- * The whole stack-family intro, not just its subject.
- *
- * The sentence names three GTM job titles after the subject — "Business Systems
- * Manager, Growth Systems Lead, Revenue Systems… not just the obvious RevOps
- * titles" — which are exactly as career-specific as the subject in front of
- * them. (That subject is the SLASHED form, "go-to-market / revenue
- * operations", not `SEARCH_SUBJECT`'s "and" form; the slash form is not
- * extracted as its own constant anywhere — it lives here, inside the whole
- * sentence.) Extracting only the subject would keep phase 1 a no-op and then, in
- * phase 2, produce a prompt that reads coherently for half a sentence before
- * naming RevOps roles at a mechanical engineer.
- *
- * FAMILY_INTRO.title (in role-search.ts) is career-agnostic as written and
- * stays in place.
- *
- * Lives here rather than in role-search.ts because that file is "use server",
- * which forbids non-async exports — the same reason fit-prompt.ts is
- * separate from parse-role.ts.
- */
-export const STACK_FAMILY_INTRO =
-  "Search job boards and company careers pages for currently-open go-to-market / revenue operations roles that mention these tools. Titles vary — include Business Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the obvious RevOps titles. Use these searches";
 
 export const DEFAULT_FIT_BRAIN = `
 Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
@@ -112,55 +92,6 @@ Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practition
 - Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
 - Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
 `.trim();
-
-/**
- * How the extraction prompt describes the candidate to the model, in
- * `fit_signal`'s field description. Verbatim today's text.
- *
- * This is not a label: `fit_signal` becomes `fit_summary`
- * (lib/ingest-roles.ts:156) and reaches the scorer as `Summary:`
- * (lib/fit-prompt.ts:225), so it is an input to the fit score on every row
- * from all three ingest paths. Required rather than defaulted for the reason
- * given on `roleSearchSystem` above — exhaustive transcription now, not
- * protection later.
- */
-export const CANDIDATE_PERSONA =
-  "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder";
-
-/**
- * What "the kind of work this person wants to be hands-on building" means,
- * for `ic_flag`'s field description — the positive gerund-phrase form
- * ("centers on building GTM systems and agentic AI workflows"). Verbatim
- * today's text.
- *
- * The source description uses the same underlying idea a second time, in a
- * different grammatical form: the compressed negative compound adjective
- * "no systems/AI-building upside". That second form is NOT reconstructable
- * from this constant by substitution — see `BUILDING_UPSIDE` below, which
- * holds it as its own constant rather than being derived from this one.
- * (An earlier revision of this file drove both fragments off this single
- * constant with reworded connective text around the second occurrence; the
- * rendered sentence was no longer byte-identical to the source, which is
- * exactly the failure this task exists to prevent. Splitting per grammatical
- * form is the same choice `QUERY_SUBJECT` makes against `SEARCH_SUBJECT`, and
- * the same reason `STACK_FAMILY_INTRO` holds a whole sentence rather than a
- * subject: where a form is not reachable by substitution, it gets its own
- * constant.)
- */
-export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
-
-/**
- * The same concept as `BUILDING_CONCEPT`, in the compressed negative
- * compound-adjective form `ic_flag` uses for its false case: "no
- * systems/AI-building upside". Verbatim today's text, including the trailing
- * "upside" — the template below splices this in directly with no connective
- * word of its own, so the constant carries the whole noun phrase rather than
- * the template reconstructing it. Kept as its own constant — not derived
- * from `BUILDING_CONCEPT` — because the two grammatical forms cannot be
- * produced from one string without changing the rendered wording; see the
- * note on `BUILDING_CONCEPT`.
- */
-export const BUILDING_UPSIDE = "systems/AI-building upside";
 
 export function roleExtractionSchema(
   persona: string,
@@ -226,19 +157,18 @@ export function titleQueries(criteria: Criteria): string[] {
 }
 
 /**
- * The field term used inside a SEARCH QUERY, which is why it is short.
+ * Queries that catch roles with idiosyncratic titles.
  *
- * Two words where SEARCH_SUBJECT is four. A query is not a sentence: the longer
- * phrase makes the query worse, not more precise. Phase 2 should not assume one
- * generated value serves both this and the prose sites.
+ * `querySubject` is the SHORT form (profile.querySubject) — two words where the
+ * prose subject (profile.searchSubject) is four. A query is not a sentence: the
+ * longer phrase makes the query worse, not more precise, so one generated value
+ * does not serve both.
  */
-export const QUERY_SUBJECT = "revenue operations";
-
-export function stackQueries(criteria: Criteria): string[] {
+export function stackQueries(criteria: Criteria, querySubject: string): string[] {
   const queries: string[] = [];
   for (const tool of criteria.stackTerms) {
     for (const place of criteria.locations) {
-      queries.push(`"${tool}" ${QUERY_SUBJECT} hiring ${place}`);
+      queries.push(`"${tool}" ${querySubject} hiring ${place}`);
     }
   }
   return queries;
@@ -360,13 +290,20 @@ export async function loadSearchInputs(): Promise<{
   criteria: Criteria;
   ceiling: number | null;
   fitInputs: FitInputs;
+  profile: Profile;
 }> {
   const rows = await readAllSettings();
   const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
-  // fitInputs comes off the SAME rows: the search ingests what it finds, and
-  // scoring a role against one snapshot's fit brain and another's floor is the
-  // split this function exists to prevent.
-  return { criteria, ceiling: ceilingFrom(rows), fitInputs: scoringInputsFrom(criteria, rows) };
+  // fitInputs and profile both come off the SAME rows: the search ingests
+  // what it finds, and building a prompt from one snapshot's profile while
+  // scoring against another's fit brain and floor is the split this function
+  // exists to prevent.
+  return {
+    criteria,
+    ceiling: ceilingFrom(rows),
+    fitInputs: scoringInputsFrom(criteria, rows),
+    profile: profileFrom(rows),
+  };
 }
 
 /**
@@ -457,8 +394,13 @@ export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitIn
 export async function loadCriteriaAndScoringInputs(): Promise<{
   criteria: Criteria;
   fitInputs: FitInputs;
+  profile: Profile;
 }> {
   const rows = await readAllSettings();
   const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
-  return { criteria, fitInputs: scoringInputsFrom(criteria, rows) };
+  return {
+    criteria,
+    fitInputs: scoringInputsFrom(criteria, rows),
+    profile: profileFrom(rows),
+  };
 }

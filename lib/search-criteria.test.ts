@@ -16,9 +16,6 @@ vi.mock("@/lib/tenant", () => ({
 // kind of check.
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
 import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
@@ -28,7 +25,6 @@ import {
   loadSearchInputs,
   pickQueries,
   planQueries,
-  QUERY_SUBJECT,
   roleExtractionSchema,
   scoringInputsFrom,
   stackQueries,
@@ -37,6 +33,7 @@ import {
   type Criteria,
 } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
+import { DEFAULT_PROFILE } from "@/lib/profile";
 import {
   DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
@@ -126,15 +123,17 @@ describe("titleQueries", () => {
 });
 
 describe("stackQueries", () => {
+  const QUERY_SUBJECT = DEFAULT_PROFILE.querySubject;
+
   test("pairs tool names with hiring language", () => {
-    const queries = stackQueries(SMALL);
+    const queries = stackQueries(SMALL, QUERY_SUBJECT);
     expect(queries.length).toBe(4);
     expect(queries.some((q) => q.includes("Clay"))).toBe(true);
     expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
   });
 
   test("every query carries a location term", () => {
-    const queries = stackQueries(SMALL);
+    const queries = stackQueries(SMALL, QUERY_SUBJECT);
     expect(queries.length).toBeGreaterThan(0);
     for (const q of queries) {
       expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
@@ -142,17 +141,24 @@ describe("stackQueries", () => {
   });
 
   test("a stack query reproduces today's shape exactly", () => {
-    const q = stackQueries({ ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] });
+    const q = stackQueries(
+      { ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] },
+      QUERY_SUBJECT
+    );
     expect(q).toEqual(['"Salesforce" revenue operations hiring Denver']);
   });
 
-  test("QUERY_SUBJECT is two words, not the four-word prose SEARCH_SUBJECT", () => {
-    expect(QUERY_SUBJECT).toBe("revenue operations");
+  test("a different query subject reaches the query", () => {
+    const q = stackQueries(
+      { ...SMALL, stackTerms: ["CAD"], locations: ["Denver"] },
+      "mechanical engineering"
+    );
+    expect(q).toEqual(['"CAD" mechanical engineering hiring Denver']);
   });
 
   test("returns nothing when either list is empty", () => {
-    expect(stackQueries({ ...SMALL, stackTerms: [] })).toEqual([]);
-    expect(stackQueries({ ...SMALL, locations: [] })).toEqual([]);
+    expect(stackQueries({ ...SMALL, stackTerms: [] }, QUERY_SUBJECT)).toEqual([]);
+    expect(stackQueries({ ...SMALL, locations: [] }, QUERY_SUBJECT)).toEqual([]);
   });
 });
 
@@ -211,7 +217,7 @@ describe("pickQueries", () => {
   });
 
   test("stack queries: covers every entry in DEFAULT_CRITERIA.stackTerms at cap 15", () => {
-    const queries = stackQueries(DEFAULT_CRITERIA);
+    const queries = stackQueries(DEFAULT_CRITERIA, DEFAULT_PROFILE.querySubject);
     const picked = pickQueries(queries, 15);
     expect(picked.length).toBe(15);
     for (const tool of DEFAULT_CRITERIA.stackTerms) {
@@ -352,7 +358,9 @@ describe("emptySearchReason", () => {
     for (const patch of cases) {
       const c = { ...SMALL, ...patch };
       expect(emptySearchReason("title", c) === null).toBe(titleQueries(c).length > 0);
-      expect(emptySearchReason("stack", c) === null).toBe(stackQueries(c).length > 0);
+      expect(emptySearchReason("stack", c) === null).toBe(
+        stackQueries(c, DEFAULT_PROFILE.querySubject).length > 0
+      );
     }
   });
 });
@@ -365,7 +373,11 @@ describe("MAX_QUERY_MULTIPLIER", () => {
 
 describe("roleExtractionSchema", () => {
   test("names every field the Role type requires", () => {
-    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE);
+    const schema = roleExtractionSchema(
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
+    );
     for (const field of [
       "role_title",
       "job_url",
@@ -390,9 +402,14 @@ describe("roleExtractionSchema", () => {
   // verbatim) and comparing it with `.toBe()` against the literal text
   // pinned at 7c7cb6a:lib/search-criteria.ts:129 — byte-identical, not a
   // substring match that could pass on a superset. A one-character edit to
-  // CANDIDATE_PERSONA, BUILDING_CONCEPT, or BUILDING_UPSIDE fails this test.
+  // DEFAULT_PROFILE.candidatePersona, .buildingConcept, or .buildingUpside
+  // fails this test.
   test("the persona and building concept reach the schema verbatim", () => {
-    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE);
+    const schema = roleExtractionSchema(
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
+    );
     const field = (name: string) =>
       schema.split("\n- ").find((line) => line.startsWith(name));
     const ORIGINAL_FIT_SIGNAL_LINE =

@@ -6,11 +6,8 @@ import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
+import type { Profile } from "@/lib/profile";
 import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
-  SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleExtractionSchema,
   roleSearchSystem,
@@ -52,21 +49,24 @@ export interface CrawlOutcome {
 export interface RunContext {
   criteria: Criteria;
   fitInputs: FitInputs;
+  /** The tenant's career profile — every prompt fragment this run interpolates. */
+  profile: Profile;
   criteriaChangedAt: string | null;
 }
 
 /**
  * Resolves a RunContext from the database. One settings read (inside
- * loadCriteriaAndScoringInputs) plus one timestamp read — the criteria and the
- * fit inputs come off the SAME snapshot rather than two, so a save landing
- * between them cannot crawl one title list and score against another floor.
+ * loadCriteriaAndScoringInputs) plus one timestamp read — the criteria, the
+ * fit inputs, and the profile all come off the SAME snapshot rather than two
+ * reads, so a save landing between them cannot crawl one title list, one
+ * profile, and score against another floor.
  */
 export async function loadRunContext(): Promise<RunContext> {
-  const [{ criteria, fitInputs }, criteriaChangedAt] = await Promise.all([
+  const [{ criteria, fitInputs, profile }, criteriaChangedAt] = await Promise.all([
     loadCriteriaAndScoringInputs(),
     readCriteriaChangedAt(),
   ]);
-  return { criteria, fitInputs, criteriaChangedAt };
+  return { criteria, fitInputs, profile, criteriaChangedAt };
 }
 
 export function buildExtractionPrompt(
@@ -317,7 +317,8 @@ type FetchTierResult =
 async function extractViaFetch(
   company: string,
   careersUrl: string,
-  criteria: Criteria
+  criteria: Criteria,
+  profile: Profile
 ): Promise<FetchTierResult> {
   if (!(await fetchAllowed(careersUrl))) {
     console.log(
@@ -336,14 +337,14 @@ async function extractViaFetch(
   }
 
   const raw = await callStructured({
-    system: roleSearchSystem(SEARCH_SUBJECT),
+    system: roleSearchSystem(profile.searchSubject),
     prompt: buildExtractionPrompt(
       company,
       classification.page,
       criteria,
-      CANDIDATE_PERSONA,
-      BUILDING_CONCEPT,
-      BUILDING_UPSIDE
+      profile.candidatePersona,
+      profile.buildingConcept,
+      profile.buildingUpside
     ),
     maxTokens: 4000,
   });
@@ -353,19 +354,20 @@ async function extractViaFetch(
 async function extractViaSearch(
   company: string,
   careersUrl: string | null,
-  criteria: Criteria
+  criteria: Criteria,
+  profile: Profile
 ): Promise<Role[]> {
   const prompt = buildCompanyRolePrompt({
     company,
     careersUrl,
     criteria,
-    searchSubject: SEARCH_SUBJECT,
-    persona: CANDIDATE_PERSONA,
-    buildingConcept: BUILDING_CONCEPT,
-    buildingUpside: BUILDING_UPSIDE,
+    searchSubject: profile.searchSubject,
+    persona: profile.candidatePersona,
+    buildingConcept: profile.buildingConcept,
+    buildingUpside: profile.buildingUpside,
   });
   const raw = await callWithWebSearch({
-    system: roleSearchSystem(SEARCH_SUBJECT),
+    system: roleSearchSystem(profile.searchSubject),
     prompt,
     // Search narration counts against the budget; 2000 has truncated the
     // response before the JSON was emitted.
@@ -635,7 +637,7 @@ export async function crawlCompany(
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
       let fetchResult: FetchTierResult | null = null;
       if (tracked.crawl_method !== "search") {
-        fetchResult = await extractViaFetch(company, careersUrl, ctx.criteria);
+        fetchResult = await extractViaFetch(company, careersUrl, ctx.criteria, ctx.profile);
       }
 
       if (fetchResult?.kind === "roles") {
@@ -653,7 +655,7 @@ export async function crawlCompany(
         // what actually ran, whether or not this run taught us anything new.
         learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
         runMethod = "search";
-        roles = await extractViaSearch(company, careersUrl, ctx.criteria);
+        roles = await extractViaSearch(company, careersUrl, ctx.criteria, ctx.profile);
       }
 
       // Read the previous trustworthy run BEFORE this run's row is finalized.

@@ -73,19 +73,22 @@ vi.mock("@/lib/model-call", () => ({
   parseJson: (raw: string) => JSON.parse(raw),
 }));
 vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
-// These four strings are ARBITRARY FIXTURES, not a pin on the real constants:
-// this mock replaces the whole module, so nothing here asserts what
-// lib/search-criteria.ts actually holds. When phase 2 makes these per-user,
-// change them freely — the real pins are in lib/search-criteria.test.ts.
+// This mock replaces the whole module, so nothing here asserts what
+// lib/search-criteria.ts or lib/profile.ts actually hold. The profile fields
+// on the resolved object are ARBITRARY FIXTURES, not a pin on the real
+// constants — the real pins are in lib/search-criteria.test.ts and
+// lib/profile.test.ts.
 vi.mock("@/lib/search-criteria", () => ({
-  SEARCH_SUBJECT: "go-to-market and revenue operations",
-  CANDIDATE_PERSONA: "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder",
-  BUILDING_CONCEPT: "building GTM systems and agentic AI workflows",
-  BUILDING_UPSIDE: "systems/AI-building upside",
   roleSearchSystem: () => "system",
   loadCriteriaAndScoringInputs: vi.fn(async () => ({
     criteria: { titles: ["RevOps"], locationRule: "remote" },
     fitInputs: {},
+    profile: {
+      searchSubject: "go-to-market and revenue operations",
+      candidatePersona: "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder",
+      buildingConcept: "building GTM systems and agentic AI workflows",
+      buildingUpside: "systems/AI-building upside",
+    },
   })),
   roleExtractionSchema: () => "schema",
   titleListForPrompt: () => "RevOps",

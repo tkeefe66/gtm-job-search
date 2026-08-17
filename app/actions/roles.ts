@@ -12,10 +12,6 @@ import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
-  SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
   roleSearchSystem,
 } from "@/lib/search-criteria";
@@ -103,20 +99,20 @@ async function findAndSaveRolesInner(
     // Loaded once here and reused for the prompt and the ingest below, so a
     // save landing mid-call cannot split one run across two title lists — or
     // across two compensation floors, which ride in fitInputs off this same read.
-    const { criteria, fitInputs } = await loadCriteriaAndScoringInputs();
+    const { criteria, fitInputs, profile } = await loadCriteriaAndScoringInputs();
 
     const prompt = buildCompanyRolePrompt({
       company: startup.company,
       careersUrl: startup.careers_url ?? null,
       criteria,
-      searchSubject: SEARCH_SUBJECT,
-      persona: CANDIDATE_PERSONA,
-      buildingConcept: BUILDING_CONCEPT,
-      buildingUpside: BUILDING_UPSIDE,
+      searchSubject: profile.searchSubject,
+      persona: profile.candidatePersona,
+      buildingConcept: profile.buildingConcept,
+      buildingUpside: profile.buildingUpside,
     });
 
     const raw = await callWithWebSearch({
-      system: roleSearchSystem(SEARCH_SUBJECT),
+      system: roleSearchSystem(profile.searchSubject),
       prompt,
       // The role search runs many web_search calls (often 10+); 2000 tokens
       // truncated the response before the JSON was ever emitted (stop_reason
