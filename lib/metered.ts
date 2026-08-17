@@ -1,4 +1,5 @@
 import { rawQuery } from "@/lib/supabase";
+import { describeWriteFailure } from "@/lib/write-failure";
 import { open } from "@/lib/secret-box";
 import { resolveTenantId } from "@/lib/tenant";
 import { runWithBilling, billingScope, type BillingScope } from "@/lib/billing-context";
@@ -105,7 +106,15 @@ export async function withBudget<T>(opts: {
   // deciding the tier matters: a stored key that will not open is not a BYO
   // tenant, and treating them as one would leave them unmetered AND unable to
   // call anything.
-  const ownKey = await loadTenantKey(tenantId);
+  const lookup = await loadTenantKey(tenantId);
+  // "Could not ask" is not "no key stored". A failed read used to fall through
+  // to tier "none", which tells the tenant to add an API key — a sentence about
+  // their account, printed because the database is down. Presence, not
+  // truthiness: the driver reports an unreachable database with an EMPTY
+  // message, so the check is on the error's existence, never on its text.
+  if (!lookup.ok) return { error: lookup.error };
+  const ownKey = lookup.key;
+
   const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: ownKey !== null });
   const limits = await limitsFor(tenantId, tier);
 
@@ -203,18 +212,27 @@ interface TenantKey {
 }
 
 /**
- * This tenant's key AND how to route it, or null.
+ * This tenant's key AND how to route it — or "no usable key", or "could not
+ * ask". The third case is a separate arm ON PURPOSE.
  *
- * Null covers four cases that are all "no usable key": nothing stored, a row
- * that will not open (tampered, moved between tenants, or written under an
- * encryption key that no longer exists), a key marked failed, and — new — a
- * stored provider this build has no adapter for. None of them may silently
- * fall back to the platform key or to Anthropic — either would bill somebody
- * who believes they are paying their own vendor, which is the failure this
- * whole tier is meant to make impossible.
+ * `key: null` covers four cases that are all "no usable key": nothing stored, a
+ * row that will not open (tampered, moved between tenants, or written under an
+ * encryption key that no longer exists), a key marked failed, and a stored
+ * provider this build has no adapter for. None of them may silently fall back
+ * to the platform key or to Anthropic — either would bill somebody who believes
+ * they are paying their own vendor, which is the failure this whole tier is
+ * meant to make impossible.
+ *
+ * A FAILED READ is none of those. An unreachable database returns `data: []`
+ * with an error whose message is the EMPTY STRING (pg's AggregateError — see
+ * lib/write-failure.ts), so discarding the error made a dead database
+ * indistinguishable from a tenant who never stored a key, and printed "add your
+ * API key" at them while Postgres was down.
  */
-async function loadTenantKey(tenantId: string): Promise<TenantKey | null> {
-  const { data } = await rawQuery<{
+type KeyLookup = { ok: true; key: TenantKey | null } | { ok: false; error: string };
+
+async function loadTenantKey(tenantId: string): Promise<KeyLookup> {
+  const { data, error } = await rawQuery<{
     key_id: string;
     aad_version: number;
     ciphertext: string;
@@ -228,13 +246,26 @@ async function loadTenantKey(tenantId: string): Promise<TenantKey | null> {
     [tenantId],
     tenantId
   );
-  if (data.length === 0) return null;
+
+  // The reader idiom: describeWriteFailure, then branch on !== undefined. The
+  // transport hands back an object-or-null whose MESSAGE may be empty, and it
+  // is the message that gets shown, so the description is substituted here.
+  const described = describeWriteFailure(
+    error === null ? undefined : error.message,
+    "load your API key"
+  );
+  if (described !== undefined) {
+    console.error(`metered: could not read the tenant's stored API key — ${error?.message || "(no message)"}`);
+    return { ok: false, error: described };
+  }
+
+  if (data.length === 0) return { ok: true, key: null };
   const row = data[0];
 
   const config = resolveProviderConfig({ provider: row.provider, model: row.model });
   if (config === null) {
     console.error(`metered: a stored API key names a provider this build cannot route: ${row.provider}`);
-    return null;
+    return { ok: true, key: null };
   }
 
   const plain = open(
@@ -251,9 +282,9 @@ async function loadTenantKey(tenantId: string): Promise<TenantKey | null> {
     // Loud, because this is not a normal state: the row exists and cannot be
     // opened, which means tampering, a moved row, or a rotated encryption key.
     console.error(`metered: a stored API key for a tenant could not be opened`);
-    return null;
+    return { ok: true, key: null };
   }
-  return { apiKey: plain, config };
+  return { ok: true, key: { apiKey: plain, config } };
 }
 
 async function runScope<T>(
