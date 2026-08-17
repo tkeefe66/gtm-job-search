@@ -26,6 +26,10 @@ export default function ApiKeyPanel() {
     // message, and `if (res.error)` would render "no key stored" for it.
     setError(res.error !== undefined ? res.error : null);
     setStatus(res);
+    // PREFILLED with the stored model, because a blank field means "the
+    // provider's default" — so re-pasting a key to change nothing would
+    // silently move a tenant off a non-default model and onto Sonnet.
+    setModelDraft(res.model ?? "");
   }
   useEffect(() => { void load(); }, []);
 
@@ -34,7 +38,8 @@ export default function ApiKeyPanel() {
     const res = await saveApiKey(draft, { model: modelDraft });
     setError(res.error !== undefined ? res.error : null);
     setBusy(false);
-    if (res.error === undefined) { setDraft(""); setModelDraft(""); setSaved(true); await load(); }
+    // The model field is not cleared — load() refills it from what was stored.
+    if (res.error === undefined) { setDraft(""); setSaved(true); await load(); }
   }
 
   async function remove() {
@@ -120,7 +125,7 @@ export default function ApiKeyPanel() {
             type="text"
             value={modelDraft}
             onChange={(e) => setModelDraft(e.target.value)}
-            placeholder={status.model ?? ANTHROPIC_DEFAULT_MODEL}
+            placeholder={ANTHROPIC_DEFAULT_MODEL}
             autoComplete="off"
             className="w-56 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
           />
