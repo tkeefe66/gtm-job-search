@@ -6,6 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/model-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
+import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { supabase } from "@/lib/supabase";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { ingestRoles } from "@/lib/ingest-roles";
@@ -16,9 +17,7 @@ import {
   CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   loadCriteriaAndScoringInputs,
-  roleExtractionSchema,
   roleSearchSystem,
-  titleListForPrompt,
 } from "@/lib/search-criteria";
 
 export interface SavedCompanyRoles {
@@ -105,15 +104,16 @@ async function findAndSaveRolesInner(
     // save landing mid-call cannot split one run across two title lists — or
     // across two compensation floors, which ride in fitInputs off this same read.
     const { criteria, fitInputs } = await loadCriteriaAndScoringInputs();
-    const hint = startup.careers_url
-      ? ` Their careers page may be: ${startup.careers_url}.`
-      : "";
 
-    const prompt = `Search for open ${SEARCH_SUBJECT} roles at "${startup.company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
-
-${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE)}
-
-If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`;
+    const prompt = buildCompanyRolePrompt({
+      company: startup.company,
+      careersUrl: startup.careers_url ?? null,
+      criteria,
+      searchSubject: SEARCH_SUBJECT,
+      persona: CANDIDATE_PERSONA,
+      buildingConcept: BUILDING_CONCEPT,
+      buildingUpside: BUILDING_UPSIDE,
+    });
 
     const raw = await callWithWebSearch({
       system: roleSearchSystem(SEARCH_SUBJECT),

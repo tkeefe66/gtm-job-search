@@ -8,6 +8,7 @@ import { callWithWebSearch, parseJson } from "@/lib/model-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
+import { buildRoleSearchPrompt } from "@/lib/role-search-prompt";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import {
   BUILDING_CONCEPT,
@@ -15,11 +16,9 @@ import {
   CANDIDATE_PERSONA,
   SEARCH_SUBJECT,
   STACK_FAMILY_INTRO,
-  dateContextLine,
   emptySearchReason,
   loadSearchInputs,
   planQueries,
-  roleExtractionSchema,
   roleSearchSystem,
   stackQueries,
   titleQueries,
@@ -37,34 +36,11 @@ export interface RoleSearchResult {
   error?: string;
 }
 
-const FAMILY_INTRO: Record<RoleSearchFamily, string> = {
-  title:
-    "Search job boards and company careers pages for currently-open roles matching these searches",
-  stack: STACK_FAMILY_INTRO,
-};
-
 function allQueriesFor(
   family: RoleSearchFamily,
   criteria: Criteria
 ): string[] {
   return family === "title" ? titleQueries(criteria) : stackQueries(criteria);
-}
-
-function buildPrompt(
-  family: RoleSearchFamily,
-  queries: string[],
-  criteria: Criteria
-): string {
-  return `${FAMILY_INTRO[family]}:
-
-${queries.map((q) => `- ${q}`).join("\n")}
-
-Run as many of these searches as you can and combine the results. ${dateContextLine()} Prioritize postings from the last 60 days. ${criteria.locationRule}
-
-${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE)}
-- company (string, the hiring company name — REQUIRED, never empty)
-
-Return up to 25 roles. Deduplicate identical postings. Return ONLY the JSON array.`;
 }
 
 async function readCache(family: RoleSearchFamily) {
@@ -197,7 +173,15 @@ async function findRolesByCriteriaInner(
 
     const raw = await callWithWebSearch({
       system: roleSearchSystem(SEARCH_SUBJECT),
-      prompt: buildPrompt(family, queries, criteria),
+      prompt: buildRoleSearchPrompt({
+        family,
+        queries,
+        criteria,
+        stackFamilyIntro: STACK_FAMILY_INTRO,
+        persona: CANDIDATE_PERSONA,
+        buildingConcept: BUILDING_CONCEPT,
+        buildingUpside: BUILDING_UPSIDE,
+      }),
       // Many searches per call; search narration counts against the budget.
       maxTokens: 8000,
       // The prompt's query list is advisory — the model decides how many

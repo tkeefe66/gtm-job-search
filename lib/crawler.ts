@@ -1,5 +1,6 @@
 import { callStructured, callWithWebSearch, parseJson } from "@/lib/model-call";
 import { resolveTenantId } from "@/lib/tenant";
+import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
@@ -354,14 +355,18 @@ async function extractViaSearch(
   careersUrl: string | null,
   criteria: Criteria
 ): Promise<Role[]> {
-  const hint = careersUrl ? ` Their careers page may be: ${careersUrl}.` : "";
+  const prompt = buildCompanyRolePrompt({
+    company,
+    careersUrl,
+    criteria,
+    searchSubject: SEARCH_SUBJECT,
+    persona: CANDIDATE_PERSONA,
+    buildingConcept: BUILDING_CONCEPT,
+    buildingUpside: BUILDING_UPSIDE,
+  });
   const raw = await callWithWebSearch({
     system: roleSearchSystem(SEARCH_SUBJECT),
-    prompt: `Search for open ${SEARCH_SUBJECT} roles at "${company}".${hint} Look for these titles: ${titleListForPrompt(criteria)}. Visit each job posting URL if available to extract the full details. IMPORTANT location filter: ${criteria.locationRule}
-
-${roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE)}
-
-If no qualifying roles are found, return a JSON object: {"roles": [], "message": "explanation"}. Otherwise return ONLY the JSON array.`,
+    prompt,
     // Search narration counts against the budget; 2000 has truncated the
     // response before the JSON was emitted.
     maxTokens: 8000,
