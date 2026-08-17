@@ -71,15 +71,24 @@ models. Reasons, in order of weight:
 If a real person asks for local models, revisit. For a GTM job-search tool that
 is unlikely.
 
-**No BYO-key-only wall.** Revision 1 retired the free tier entirely. That deletes
-a funnel already built: `cappedMessage` renders *"You've used the $X of Claude
-usage included with a free account… Add your own API key to keep going."* The
-metering, the atomic reservation and the daily/monthly windows all exist and are
-tested. A **one-time lifetime allowance** granted at approval is not subsidising
-anyone's ongoing usage — it is a prepaid, hard-capped acquisition cost on a
-waitlist the owner personally approves, and it is a smaller change than deleting
-the tier. Without it, a new user's entire experience of a product whose
-differentiator is the fit rubric is an empty table behind a credit-card wall.
+**No free tier and no trial allowance.** Decided by the owner and implemented:
+every tenant brings their own key or cannot call anything.
+
+A reviewer argued for a one-time lifetime allowance, on the grounds that a new
+user's whole experience of a fit-rubric product is otherwise an empty table
+behind a credit-card wall. Overruled deliberately — the owner does not want
+anyone spending their key, at any bound.
+
+That made the wall the most important screen in the app, and it exposed a live
+gap: `runScope` resolved a keyless tenant to
+`ownKey ?? process.env.ANTHROPIC_API_KEY`, so approving somebody would silently
+have spent the owner's money up to the daily ceiling. Tier `none` is now refused
+BEFORE the call and returned as `capped`, so callers render it as a sentence
+rather than an error, and the platform key is reachable only on the admin branch.
+
+Consequence for the metering built in sub-project D: it now protects exactly one
+account — the owner's, against a runaway. Everything else is recorded, not
+rationed, because it is not the platform's money.
 
 ## The design
 

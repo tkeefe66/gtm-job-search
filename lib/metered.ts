@@ -7,6 +7,7 @@ import {
   CENTS_PER_SEARCH,
   cappedMessage,
   isMetered,
+  needsKeyMessage,
   reserveVerdict,
   resetsOn,
   resolveTier,
@@ -104,6 +105,12 @@ export async function withBudget<T>(opts: {
   const ownKey = await loadTenantKey(tenantId);
   const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: ownKey !== null });
   const limits = await limitsFor(tenantId, tier);
+
+  // No key, no call. Refused BEFORE fn runs and returned as `capped` so callers
+  // render it as a sentence rather than an error — it is a requirement, not a
+  // failure. Previously this fell through to the platform key with a ceiling,
+  // which meant approving a tenant silently spent the owner's money.
+  if (tier === "none") return { capped: needsKeyMessage() };
 
   // BYO spends its own money, so it is not rationed — but its usage is still
   // recorded below, so the tenant can see it.
@@ -210,10 +217,11 @@ async function runScope<T>(
 ): Promise<MeteredResult<T>> {
   const scope: BillingScope = {
     maxSearches: caps.maxSearches,
-    // The tenant's key when they have one. Never a silent fallback: if a BYO
-    // tenant's key stops working, the call fails as THEIR key failing rather
-    // than quietly moving the cost to the platform.
-    apiKey: ownKey ?? (process.env.ANTHROPIC_API_KEY || ""),
+    // The platform key is reachable ONLY by the admin, whose key it is. Every
+    // other tenant arrives here with their own key, because tier "none" was
+    // refused above. The `??` is not a fallback for tenants — it is the admin
+    // branch, and a keyless non-admin can never reach it.
+    apiKey: ownKey ?? (tier === "admin" ? process.env.ANTHROPIC_API_KEY || "" : ""),
     searches: 0,
     inputTokens: 0,
     outputTokens: 0,

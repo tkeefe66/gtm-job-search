@@ -11,41 +11,61 @@
  * what is left, rather than only before it. A pre-call check catches the NEXT
  * click, not this one.
  *
- * TWO PERIODS, and the daily one is the load-bearing half. The risk a cap
+ * TWO PERIODS, and the daily one is the load-bearing half. They apply to the
+ * ADMIN only — nobody else spends the platform's key. The risk a cap
  * protects against is a BURST — a retry loop, a bad deploy, an uncapped
  * `max_uses` doing forty searches where six were expected. A monthly ceiling is
  * a poor fit for that: set low it locks the owner out for weeks, set high enough
  * not to, it never fires. A daily ceiling contains a burst to one day and heals
  * at midnight. The monthly one is the outer bound.
  *
- * THERE IS NO UNMETERED ADMIN. Admin is a tier with bigger numbers and the sole
- * power to raise its own ceiling. If the owner were exempt, the metering path
- * would never run on the account anyone actually watches, and the first real
- * test of the ceiling would be a stranger hitting it.
+ * THERE IS NO UNMETERED ADMIN and NO FREE TIER. Every other tenant brings their
+ * own key or cannot call anything, so the meter now protects exactly one
+ * account: the owner's, against a runaway.
  */
 
 /** Cents per web_search, matching lib/cost-estimate.ts. */
 export const CENTS_PER_SEARCH = 1;
 
-export type Tier = "admin" | "byo" | "free";
+export type Tier = "admin" | "byo" | "none";
 
 /**
- * BYO outranks free because the spend is the tenant's own. Admin outranks both:
- * it is metered, but against its own ceilings.
+ * "none" means the tenant has stored no API key of their own.
+ *
+ * There is NO free tier. A tenant without a key cannot call anything — they are
+ * refused before the call, not metered against the platform's key. The platform
+ * key is reachable only by the admin, whose key it already is.
+ *
+ * This matters more than a product preference: the previous shape resolved a
+ * keyless tenant to the platform key with a ceiling, which meant approving
+ * somebody silently spent the owner's money at up to the daily cap.
+ */
+
+/**
+ * Admin first, because the platform key is the admin's own. Then a stored key.
+ * Anyone else is "none" and cannot call anything.
  */
 export function resolveTier(input: { isAdmin: boolean; hasOwnKey: boolean }): Tier {
   if (input.isAdmin) return "admin";
   if (input.hasOwnKey) return "byo";
-  return "free";
+  return "none";
 }
 
 /**
- * Everyone except BYO is metered against the platform's money — INCLUDING admin.
- * A BYO tenant's usage is still recorded, so they can see it; it is simply not
- * blocked, because it is not the platform's money to ration.
+ * Only the admin is metered, because only the admin spends the platform's key.
+ * BYO spends their own money — recorded, never rationed. "none" never reaches a
+ * call at all, so it has no meter to be under.
  */
 export function isMetered(tier: Tier): boolean {
-  return tier !== "byo";
+  return tier === "admin";
+}
+
+/** What a keyless tenant is told. Not an error — a requirement. */
+export function needsKeyMessage(): string {
+  return (
+    "This app runs on your own model API key. Add one in Settings to start " +
+    "searching — nothing is charged to anyone else."
+  );
 }
 
 /** Only the admin may raise its own ceiling, and only from /admin. */
@@ -133,15 +153,10 @@ export function cappedMessage(input: {
   const dollars = (input.ceilingCents / 100).toFixed(2);
   const window = input.reason === "daily" ? "today" : "this month";
 
-  if (input.tier === "admin") {
-    return (
-      `You've hit your $${dollars} ${input.reason} limit ${window}. ` +
-      `Raise it on the Accounts page, or wait until ${input.resetsOn}.`
-    );
-  }
+  // Only the admin can be capped — nobody else spends the platform's key.
   return (
-    `You've used the $${dollars} of Claude usage included with a free account ${window}. ` +
-    `Add your own Anthropic API key in Settings to keep going, or wait until ${input.resetsOn}.`
+    `You've hit your $${dollars} ${input.reason} limit ${window}. ` +
+    `Raise it on the Accounts page, or wait until ${input.resetsOn}.`
   );
 }
 

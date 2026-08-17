@@ -3,6 +3,7 @@ import {
   resolveTier,
   isMetered,
   canRaiseOwnCeiling,
+  needsKeyMessage,
   billingPeriod,
   dailyPeriod,
   reserveVerdict,
@@ -18,21 +19,27 @@ describe("tiers", () => {
   test("admin outranks a stored key; a stored key outranks nothing", () => {
     expect(resolveTier({ isAdmin: true, hasOwnKey: true })).toBe("admin");
     expect(resolveTier({ isAdmin: false, hasOwnKey: true })).toBe("byo");
-    expect(resolveTier({ isAdmin: false, hasOwnKey: false })).toBe("free");
+    expect(resolveTier({ isAdmin: false, hasOwnKey: false })).toBe("none");
   });
 
-  // The decision this file was rewritten for. An unmetered admin never exercises
-  // the metering path, so the first real test of the ceiling would be a stranger
-  // hitting it — on an account nobody is watching.
-  test("ADMIN IS METERED; only BYO is not", () => {
+  // There is no free tier: a tenant without a key is refused before the call
+  // rather than metered against the platform's key. The previous shape resolved
+  // them to the owner's key with a ceiling, which meant approving somebody
+  // silently spent the owner's money.
+  test("only the admin is metered, because only the admin spends the platform key", () => {
     expect(isMetered("admin")).toBe(true);
-    expect(isMetered("free")).toBe(true);
     expect(isMetered("byo")).toBe(false);
+    expect(isMetered("none")).toBe(false);
+  });
+
+  test("a keyless tenant is told what to do, not shown an error", () => {
+    expect(needsKeyMessage()).toContain("your own model API key");
+    expect(needsKeyMessage()).toContain("Settings");
   });
 
   test("only admin may raise its own ceiling", () => {
     expect(canRaiseOwnCeiling("admin")).toBe(true);
-    expect(canRaiseOwnCeiling("free")).toBe(false);
+    expect(canRaiseOwnCeiling("none")).toBe(false);
     expect(canRaiseOwnCeiling("byo")).toBe(false);
   });
 });
@@ -66,7 +73,7 @@ describe("reserveVerdict", () => {
   // The reason the ceiling is enforceable at all: without max_uses the model can
   // keep issuing individually-billed searches that token usage never reports.
   test("a metered call always carries a search cap, never null", () => {
-    for (const tier of ["free", "admin"] as const) {
+    for (const tier of ["admin"] as const) {
       const v = reserveVerdict({ tier, daily: open, monthly: open, estimateCents: 10 });
       expect(v.allow).toBe(true);
       if (!v.allow) throw new Error("unreachable");
@@ -76,7 +83,7 @@ describe("reserveVerdict", () => {
 
   test("the cap comes from whichever window has less left", () => {
     const v = reserveVerdict({
-      tier: "free",
+      tier: "admin",
       daily: { spentCents: 900, ceilingCents: 1000 },   // 100 left
       monthly: { spentCents: 0, ceilingCents: 10_000 }, // 10000 left
       estimateCents: 10,
@@ -99,7 +106,7 @@ describe("reserveVerdict", () => {
 
   test("the monthly window blocks even on a fresh day", () => {
     const v = reserveVerdict({
-      tier: "free",
+      tier: "admin",
       daily: { spentCents: 0, ceilingCents: 1000 },
       monthly: { spentCents: 10_000, ceilingCents: 10_000 },
       estimateCents: 10,
@@ -114,7 +121,7 @@ describe("reserveVerdict", () => {
   // are true.
   test("when both windows are exhausted the reason is the daily one", () => {
     const v = reserveVerdict({
-      tier: "free",
+      tier: "admin",
       daily: { spentCents: 1000, ceilingCents: 1000 },
       monthly: { spentCents: 10_000, ceilingCents: 10_000 },
       estimateCents: 1,
@@ -125,7 +132,7 @@ describe("reserveVerdict", () => {
 
   test("never issues a cap of zero while any budget remains", () => {
     const v = reserveVerdict({
-      tier: "free",
+      tier: "admin",
       daily: { spentCents: 999, ceilingCents: 1000 },
       monthly: open,
       estimateCents: 0,
@@ -136,17 +143,19 @@ describe("reserveVerdict", () => {
 
   test("spending exactly to a ceiling is allowed; one cent past is not", () => {
     const at = { spentCents: 0, ceilingCents: 100 };
-    expect(reserveVerdict({ tier: "free", daily: at, monthly: open, estimateCents: 100 }).allow).toBe(true);
-    expect(reserveVerdict({ tier: "free", daily: at, monthly: open, estimateCents: 101 }).allow).toBe(false);
+    expect(reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 100 }).allow).toBe(true);
+    expect(reserveVerdict({ tier: "admin", daily: at, monthly: open, estimateCents: 101 }).allow).toBe(false);
   });
 });
 
 describe("the message a capped tenant sees", () => {
-  test("a free tenant is told it is a free-account limit, and how to lift it", () => {
-    const m = cappedMessage({ tier: "free", reason: "monthly", ceilingCents: 1000, resetsOn: "2026-09-01" });
+  // There is no longer a non-admin capped message: nobody else spends the
+  // platform's key, so nobody else can be capped.
+  test("the monthly cap names the amount and the reset", () => {
+    const m = cappedMessage({ tier: "admin", reason: "monthly", ceilingCents: 1000, resetsOn: "2026-09-01" });
     expect(m).toContain("$10.00");
-    expect(m).toContain("free account");
-    expect(m).toContain("Anthropic API key");
+    expect(m).toContain("2026-09-01");
+    expect(m).not.toContain("free account");
   });
 
   // The admin's way out is different, so the sentence must be too — telling the
