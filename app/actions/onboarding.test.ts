@@ -60,15 +60,35 @@ const VALID_PROFILE: Profile & GeneratedProfile = {
   fitBrain: "- a machinist",
   titles: ["CNC Programmer"],
   locations: ["Denver"],
-  stackTerms: [],
+  stackTerms: ["Mastercam"],
   locationRule: "Only Denver.",
 };
+
+/**
+ * What `saveProfile`'s transaction callback actually wrote, this test.
+ *
+ * `tenantTransaction` is mocked to RUN the real callback against this
+ * recording `q` (rather than swallowing it, `mockResolvedValue(undefined)`
+ * style) precisely so the callback's body has coverage: with a swallowed
+ * callback, deleting one `put(...)` line inside saveProfile passes every test
+ * green, which is exactly the partial-profile failure rule 4 exists to
+ * prevent. See "writes every key a partial profile must never omit" below.
+ */
+let transactionCalls: { key: string; value: unknown }[] = [];
+
+async function recordingQ(_text: string, values: unknown[] = []): Promise<{ rows: unknown[] }> {
+  const [, key, rawValue] = values as [string, string, string];
+  transactionCalls.push({ key, value: JSON.parse(rawValue) });
+  return { rows: [] };
+}
 
 beforeEach(() => {
   budget.mockReset();
   query.mockReset();
   query.mockResolvedValue({ data: [], error: null } as never);
   transaction.mockReset();
+  transactionCalls = [];
+  transaction.mockImplementation(async (_tenantId, run) => run(recordingQ));
   readSettings.mockReset();
   readSettings.mockResolvedValue({ rows: [] });
   writeProf.mockReset();
@@ -143,11 +163,24 @@ describe("generateProfile — metered, capped is a requirement not a failure", (
     expect(res.profile).toBeUndefined();
   });
 
-  test("a budget-layer failure (presence, not truthiness) is reported as an error", async () => {
+  test("a budget-layer failure (presence, not truthiness) is reported as a NON-EMPTY error", async () => {
+    // lib/metered.ts propagates pg's raw message, which is "" when the
+    // database is unreachable — onboarding is the first flow a brand-new
+    // tenant meets, so an unwrapped budget.error would render a blank
+    // failure banner on their very first screen. toBeDefined() alone would
+    // have passed against that regression; this must assert non-empty.
     budget.mockResolvedValue({ error: "" });
     const res = await generateProfile(COMPLETE_ANSWERS);
     expect(res.error).toBeDefined();
+    expect(res.error).not.toBe("");
+    expect(res.error!.length).toBeGreaterThan(0);
     expect(res.capped).toBeUndefined();
+  });
+
+  test("a described budget-layer failure keeps the driver's own words", async () => {
+    budget.mockResolvedValue({ error: "read-only transaction" });
+    const res = await generateProfile(COMPLETE_ANSWERS);
+    expect(res.error).toContain("read-only transaction");
   });
 
   test("a successful call returns the generated profile straight through", async () => {
@@ -167,7 +200,7 @@ describe("generateProfile — metered, capped is a requirement not a failure", (
   });
 });
 
-describe("saveProfile — one transaction, or none", () => {
+describe("saveProfile — validation, before the transaction ever runs", () => {
   test("an empty fit brain is refused before the transaction runs", async () => {
     const res = await saveProfile({ ...VALID_PROFILE, fitBrain: "   " });
     expect(res.error).toBeDefined();
@@ -186,6 +219,49 @@ describe("saveProfile — one transaction, or none", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  test("an empty stack-terms list is refused before the transaction runs", async () => {
+    // stackTerms is a ListSettingKey on /settings too (saveCriteriaList),
+    // which rejects an empty list the same way — onboarding must match, or it
+    // can write a value /settings itself can never re-save.
+    const res = await saveProfile({ ...VALID_PROFILE, stackTerms: [] });
+    expect(res.error).toBeDefined();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  test("a whitespace-only location rule is refused before the transaction runs", async () => {
+    const res = await saveProfile({ ...VALID_PROFILE, locationRule: "   " });
+    expect(res.error).toBeDefined();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveProfile — normalizes lists before writing them, never the raw model output", () => {
+  test("titles and locations are trimmed, deduplicated, and case-folded", async () => {
+    const res = await saveProfile({
+      ...VALID_PROFILE,
+      titles: ["CNC Programmer", "cnc programmer", " CNC  Machinist "],
+      locations: [" Denver ", "denver"],
+    });
+    expect(res).toEqual({});
+    const valueFor = (key: string) => transactionCalls.find((c) => c.key === key)?.value;
+    expect(valueFor("titles")).toEqual(["CNC Programmer", "CNC Machinist"]);
+    expect(valueFor("locations")).toEqual(["Denver"]);
+  });
+
+  test("stackTerms is normalized and locationRule is trimmed the same way", async () => {
+    const res = await saveProfile({
+      ...VALID_PROFILE,
+      stackTerms: ["Mastercam", "mastercam", " Fanuc  Controls "],
+      locationRule: "  Only Denver and nearby suburbs.  ",
+    });
+    expect(res).toEqual({});
+    const valueFor = (key: string) => transactionCalls.find((c) => c.key === key)?.value;
+    expect(valueFor("stackTerms")).toEqual(["Mastercam", "Fanuc Controls"]);
+    expect(valueFor("locationRule")).toBe("Only Denver and nearby suburbs.");
+  });
+});
+
+describe("saveProfile — one transaction, or none", () => {
   test("a failed transaction is reported, not silently swallowed", async () => {
     transaction.mockRejectedValue(new Error("deadlock detected"));
     const res = await saveProfile(VALID_PROFILE);
@@ -193,8 +269,28 @@ describe("saveProfile — one transaction, or none", () => {
     expect(res.error).toContain("deadlock detected");
   });
 
+  test("writes every key a partial profile must never omit", async () => {
+    // The dedicated Finding-3 coverage test. Deleting the fitBrain `put(...)`
+    // line inside saveProfile was verified to fail exactly this assertion —
+    // see the fix report — which is what makes this coverage rather than
+    // decoration: a tenant with titles but no fit brain is the partial-profile
+    // failure rule 4 exists to prevent.
+    const res = await saveProfile(VALID_PROFILE);
+    expect(res).toEqual({});
+    const keys = transactionCalls.map((c) => c.key);
+    expect(keys).toEqual([
+      "profile",
+      "titles",
+      "locations",
+      "stackTerms",
+      "locationRule",
+      "fitBrain",
+      "criteria_changed_at",
+      "onboarded_at",
+    ]);
+  });
+
   test("a clean save clears exactly the caches cachesOnboardingClears names", async () => {
-    transaction.mockResolvedValue(undefined);
     const res = await saveProfile(VALID_PROFILE);
     expect(res).toEqual({});
     expect(transaction).toHaveBeenCalledTimes(1);
@@ -206,7 +302,6 @@ describe("saveProfile — one transaction, or none", () => {
   });
 
   test("cache-clear failures are logged and non-fatal — the profile is already saved", async () => {
-    transaction.mockResolvedValue(undefined);
     query.mockResolvedValue({ data: [], error: { message: "boom" } } as never);
     const res = await saveProfile(VALID_PROFILE);
     expect(res).toEqual({});

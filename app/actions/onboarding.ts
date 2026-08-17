@@ -40,6 +40,7 @@ import {
   ONBOARDED_AT_KEY,
   PROFILE_KEY,
   SETTING_KEYS,
+  UNDESCRIBED_DB_ERROR,
   describeWriteFailure,
   onboardedAtFrom,
   profileFrom,
@@ -125,8 +126,17 @@ export async function generateProfile(
     fn: () => generateProfileInner(answers),
   });
   if (budget.capped) return { capped: budget.capped };
-  // Presence, not truthiness: an unreachable database reports an empty message.
-  if (budget.error !== undefined) return { error: budget.error };
+  // Presence, not truthiness — AND described. lib/metered.ts propagates a raw
+  // pg message, which is "" when the database is unreachable, and onboarding
+  // is the very first flow a brand-new tenant meets. An unwrapped
+  // `budget.error` would render a blank failure banner on that first screen —
+  // this repo's signature defect. Same fix app/actions/watchlist.ts already
+  // applies at its own budget.error checks.
+  if (budget.error !== undefined) {
+    return {
+      error: describeWriteFailure(budget.error, "generate your profile") ?? UNDESCRIBED_DB_ERROR,
+    };
+  }
   return budget.result!;
 }
 
@@ -213,13 +223,29 @@ export async function saveProfile(
   if (!profile.fitBrain.trim()) {
     return { error: "Your profile needs a description of you before it can be saved." };
   }
-  for (const [items, label] of [
-    [profile.titles, "Target titles"],
-    [profile.locations, "Location terms"],
-  ] as const) {
-    const check = validateList(items, label);
-    if (!check.ok) return { error: check.error };
-  }
+
+  // Every list is NORMALIZED here, not merely validated — trimmed,
+  // deduplicated, quote-checked — and it is the normalized value that gets
+  // written, never the raw one. This is the ONE path in the app where these
+  // lists arrive from a MODEL rather than a human, so unnormalized input is
+  // likeliest exactly here: `saveCriteriaList` in app/actions/settings.ts
+  // writes `result.value` for the same reason, and writing `profile.titles`
+  // raw would let ["CNC Programmer", "cnc programmer", " CNC  Machinist "]
+  // through untouched, with titleQueries then billing a duplicate search for
+  // the case-variant.
+  const titlesCheck = validateList(profile.titles, "Target titles");
+  if (!titlesCheck.ok) return { error: titlesCheck.error };
+  const locationsCheck = validateList(profile.locations, "Location terms");
+  if (!locationsCheck.ok) return { error: locationsCheck.error };
+  // stackTerms is a ListSettingKey on /settings too (saveCriteriaList), which
+  // rejects an empty list the same way. Onboarding storing one anyway would
+  // strand the user unable to re-save that field from /settings later.
+  const stackTermsCheck = validateList(profile.stackTerms, "Stack terms");
+  if (!stackTermsCheck.ok) return { error: stackTermsCheck.error };
+  // locationRule is a TextSettingKey on /settings (saveCriteriaText), whose
+  // own check is exactly this: trim, and refuse empty.
+  const locationRule = profile.locationRule.trim();
+  if (!locationRule) return { error: "Location rule cannot be empty." };
 
   const tenantId = await resolveTenantId();
   const clean = resolveProfile(profile);
@@ -235,10 +261,10 @@ export async function saveProfile(
           [tenantId, key, JSON.stringify(value)]
         );
       await put(PROFILE_KEY, clean);
-      await put(SETTING_KEYS.titles, profile.titles);
-      await put(SETTING_KEYS.locations, profile.locations);
-      await put(SETTING_KEYS.stackTerms, profile.stackTerms);
-      await put(SETTING_KEYS.locationRule, profile.locationRule);
+      await put(SETTING_KEYS.titles, titlesCheck.value);
+      await put(SETTING_KEYS.locations, locationsCheck.value);
+      await put(SETTING_KEYS.stackTerms, stackTermsCheck.value);
+      await put(SETTING_KEYS.locationRule, locationRule);
       // The fit brain is written to BOTH the profile and its own setting row:
       // /settings edits the row, and scoringInputsFrom reads the profile first
       // and falls back to the row. Writing only one would make the settings
