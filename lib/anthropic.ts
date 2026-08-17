@@ -1,9 +1,38 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { report } from "./usage.js";
+import { billingScope, recordUsage } from "./billing-context";
 
 export const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || "",
 });
+
+/**
+ * The client a call should use: the tenant's own key when a billing scope
+ * supplies one, otherwise the platform client above.
+ *
+ * A per-call client rather than a mutated singleton — two concurrent requests
+ * from different tenants would otherwise race over one `apiKey` field and bill
+ * each other.
+ */
+export function clientFor(): Anthropic {
+  const key = billingScope()?.apiKey;
+  return key && key !== process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: key }) : anthropic;
+}
+
+/**
+ * The search cap for this call.
+ *
+ * An explicit `maxSearches` argument still wins — the role-search path computes
+ * one from the user's ceiling. Otherwise the budget's cap applies, and THAT is
+ * what makes a ceiling enforceable: web_search calls are billed per search and
+ * are invisible to token usage, so without a cap inside the request the model
+ * can keep spending after the pre-call check has already passed.
+ */
+function searchCap(explicit: number | undefined): number | undefined {
+  if (explicit !== undefined) return explicit;
+  const budgeted = billingScope()?.maxSearches;
+  return budgeted === null || budgeted === undefined ? undefined : budgeted;
+}
 
 export const MODEL = "claude-sonnet-4-6";
 
@@ -53,10 +82,10 @@ export async function callWithWebSearch(opts: {
   const webSearchTool = {
     type: "web_search_20250305",
     name: "web_search",
-    ...(opts.maxSearches !== undefined ? { max_uses: opts.maxSearches } : {}),
+    ...(searchCap(opts.maxSearches) !== undefined ? { max_uses: searchCap(opts.maxSearches) } : {}),
   } as unknown as Anthropic.Tool;
 
-  const message = await anthropic.messages.create({
+  const message = await clientFor().messages.create({
     model: MODEL,
     max_tokens: opts.maxTokens ?? 2000,
     system: opts.system,
@@ -65,8 +94,19 @@ export async function callWithWebSearch(opts: {
   });
 
   // Token cost only -- web_search server-tool calls are billed per search and
-  // are not part of the usage token counts, so they stay untracked.
+  // are not part of the usage token counts, so they stay untracked HERE.
   report("gtm-job-search", MODEL, message.usage);
+
+  // The searches ARE counted, into the billing scope. This is the number the
+  // ceiling depends on: it is the dominant cost of this app and it appears
+  // nowhere in message.usage, so a meter reading only tokens understates every
+  // search-tier call. Counted from the server_tool_use blocks the model actually
+  // emitted, not from max_uses, which is only what it was allowed.
+  recordUsage({
+    searches: (message.content as unknown[]).filter(isWebSearchUseBlock).length,
+    inputTokens: message.usage?.input_tokens ?? 0,
+    outputTokens: message.usage?.output_tokens ?? 0,
+  });
 
   // Logging side-channel: which searches the model actually issued (as
   // opposed to which ones we offered it). Never let this break the call.
@@ -104,7 +144,7 @@ export async function callStructured(opts: {
   prompt: string;
   maxTokens?: number;
 }): Promise<string> {
-  const message = await anthropic.messages.create({
+  const message = await clientFor().messages.create({
     model: MODEL,
     max_tokens: opts.maxTokens ?? 4000,
     system: opts.system,
@@ -112,6 +152,13 @@ export async function callStructured(opts: {
   });
 
   report("gtm-job-search", MODEL, message.usage);
+  // No searches on this path — it is the non-search tier — but the tokens still
+  // count toward the budget, and a call that reported nothing would let the
+  // fetch-tier crawl spend invisibly.
+  recordUsage({
+    inputTokens: message.usage?.input_tokens ?? 0,
+    outputTokens: message.usage?.output_tokens ?? 0,
+  });
 
   return message.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")

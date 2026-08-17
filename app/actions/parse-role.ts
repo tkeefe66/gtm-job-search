@@ -2,7 +2,8 @@
 
 import { requireActor } from "@/lib/require-actor";
 
-import { callWithWebSearch, anthropic, MODEL, parseJson } from "@/lib/anthropic";
+import { callWithWebSearch, clientFor, MODEL, parseJson } from "@/lib/anthropic";
+import { recordUsage } from "@/lib/billing-context";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { buildFitPrompt, type FitPromptRole } from "@/lib/fit-prompt";
 import { loadScoringInputs } from "@/lib/search-criteria";
@@ -175,7 +176,12 @@ export async function scoreFit(
   await requireActor();
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
-    const message = await anthropic.messages.create({
+    // clientFor(), NOT the module-level `anthropic` client. scoreFit is the one
+    // call site that used the raw SDK, so a BYO tenant's scoring would have
+    // silently billed the platform key — the exact "never fall back silently"
+    // rule this design states elsewhere. recordUsage below is why its tokens
+    // reach the meter at all.
+    const message = await clientFor().messages.create({
       model: MODEL,
       max_tokens: 500,
       system:
@@ -189,6 +195,10 @@ export async function scoreFit(
     });
 
     report("gtm-job-search", MODEL, message.usage);
+    recordUsage({
+      inputTokens: message.usage?.input_tokens ?? 0,
+      outputTokens: message.usage?.output_tokens ?? 0,
+    });
 
     const raw = message.content
       .filter((b) => b.type === "text")
