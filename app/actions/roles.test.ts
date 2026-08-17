@@ -59,6 +59,15 @@ vi.mock("@/lib/supabase", () => ({
 vi.mock("@/lib/tenant", () => ({
   resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
 }));
+
+// The budget wrapper is bypassed: this suite is about cache-write reporting, and
+// withBudget reaches the database for tiers, ceilings and counters before any of
+// that runs. Passing fn straight through keeps the action's own behaviour under
+// test. Budget behaviour itself is pinned in lib/budget.test.ts, and the
+// reservation is proven against a real database.
+vi.mock("@/lib/metered", () => ({
+  withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
+}));
 vi.mock("@/lib/anthropic", () => ({
   callWithWebSearch: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),

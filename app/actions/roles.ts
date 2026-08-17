@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
@@ -26,9 +27,6 @@ export async function getAllSavedRoles(): Promise<{
   companies: SavedCompanyRoles[];
   error?: string;
 }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_roles")
     .select("company, roles, fetched_at")
@@ -40,7 +38,32 @@ export async function getAllSavedRoles(): Promise<{
   };
 }
 
-export async function findAndSaveRoles(
+/**
+ * Metered. The exported wrapper owns the session check and the budget; the inner
+ * function is the original body, untouched.
+ *
+ * The reservation is a FLOOR, not an estimate — reconciliation corrects it from
+ * the searches actually issued, and the budget-derived max_uses bounds how far
+ * one call can overshoot first.
+ */
+export async function findAndSaveRoles(startup: Startup,
+  force = false): Promise<RolesResult & { error?: string; cached?: boolean; cacheWarning?: string }> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "find-roles",
+    estimateCents: 25,
+    isAdmin: actor.isAdmin,
+    fn: () => findAndSaveRolesInner(startup, force),
+  });
+  // A cap is a REFUSAL, not a failure — shown as its own sentence rather than
+  // as "something went wrong".
+  if (budget.capped) return { roles: [], error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { roles: [], error: budget.error };
+  return budget.result!;
+}
+
+async function findAndSaveRolesInner(
   startup: Startup,
   force = false
 ): Promise<RolesResult & { error?: string; cached?: boolean; cacheWarning?: string }> {

@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
@@ -103,9 +104,6 @@ async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
 export async function getCachedRoleSearch(
   family: RoleSearchFamily
 ): Promise<RoleSearchResult> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   const { data, error } = await readCache(family);
   if (error) {
     return { matches: [], untrackedCompanies: [], fetchedAt: null, error: error.message };
@@ -120,7 +118,32 @@ export async function getCachedRoleSearch(
   };
 }
 
-export async function findRolesByCriteria(
+/**
+ * Metered. The exported wrapper owns the session check and the budget; the inner
+ * function is the original body, untouched.
+ *
+ * The reservation is a FLOOR, not an estimate — reconciliation corrects it from
+ * the searches actually issued, and the budget-derived max_uses bounds how far
+ * one call can overshoot first.
+ */
+export async function findRolesByCriteria(family: RoleSearchFamily,
+  force = false): Promise<RoleSearchResult> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "role-search",
+    estimateCents: 25,
+    isAdmin: actor.isAdmin,
+    fn: () => findRolesByCriteriaInner(family, force),
+  });
+  // A cap is a REFUSAL, not a failure — shown as its own sentence rather than
+  // as "something went wrong".
+  if (budget.capped) return { matches: [], untrackedCompanies: [], fetchedAt: null, error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { matches: [], untrackedCompanies: [], fetchedAt: null, error: budget.error };
+  return budget.result!;
+}
+
+async function findRolesByCriteriaInner(
   family: RoleSearchFamily,
   force = false
 ): Promise<RoleSearchResult> {

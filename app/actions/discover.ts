@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
@@ -38,9 +39,6 @@ export async function getAllDiscoveredStartups(): Promise<{
   fetchedAt: string | null;
   error?: string;
 }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_startups")
     .select("startups, fetched_at, date_range")
@@ -73,9 +71,6 @@ export async function getDiscoveredStartups(
   dateRange: DateRange,
   searchTerm?: string
 ): Promise<{ startups: Startup[]; fetchedAt: string | null; error?: string }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   const term = searchTerm ?? "";
   const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_startups")
@@ -94,7 +89,34 @@ export async function getDiscoveredStartups(
   };
 }
 
-export async function discoverStartups(
+/**
+ * Metered. The exported wrapper owns the session check and the budget; the inner
+ * function is the original body, untouched.
+ *
+ * The reservation is a FLOOR, not an estimate. estimateRunCost prices only the
+ * By Role grid and disclaims precision in its own header, so a fabricated number
+ * here would look authoritative and be wrong. Reconciliation corrects it from the
+ * searches actually issued, and the budget-derived max_uses bounds how far a
+ * single call can overshoot before that happens.
+ */
+export async function discoverStartups(searchTerm?: string,
+  dateRange: DateRange = "7d"): Promise<{ startups: Startup[]; error?: string }> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "discover",
+    estimateCents: 25,
+    isAdmin: actor.isAdmin,
+    fn: () => discoverStartupsInner(searchTerm, dateRange),
+  });
+  // A cap is a REFUSAL, not a failure — it is shown to the user as its own
+  // sentence rather than as "something went wrong".
+  if (budget.capped) return { startups: [], error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { startups: [], error: budget.error };
+  return budget.result!;
+}
+
+async function discoverStartupsInner(
   searchTerm?: string,
   dateRange: DateRange = "7d"
 ): Promise<{ startups: Startup[]; error?: string }> {
