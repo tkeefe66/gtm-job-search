@@ -11,17 +11,12 @@
 // database.
 
 import type { FitInputs } from "@/lib/fit-inputs";
-import {
-  DEFAULT_WEAK_FIT_TAIL,
-  DEFAULT_MODERATE_TAIL,
-  DEFAULT_STRONG_TAIL,
-  DEFAULT_TITLE_SCOPE,
-  DEFAULT_DOMAIN_BONUS,
-} from "@/lib/fit-prompt";
+import { profileToFitInputs } from "@/lib/profile";
 import {
   ceilingFrom,
   compFloorFrom,
   mergeSettings,
+  profileFrom,
   readAllSettings,
   type SettingRow,
 } from "@/lib/settings-store";
@@ -420,23 +415,31 @@ export async function loadScoringInputs(): Promise<FitInputs> {
  * Takes the already-merged criteria plus the rows they were merged from, so a
  * caller that needed the criteria anyway derives the fit inputs from the same
  * read rather than taking a second one. `compFloor` is NOT a `Criteria` field
- * — it is a scalar setting like the search ceiling — which is why the rows
- * have to come along.
+ * and the PROFILE is not one either — both are read straight off the rows,
+ * which is why the rows have to come along.
  *
- * Pure, so the pairing is testable: the whole failure mode here is reading the
- * fit brain from one snapshot and the floor from another, which no integration
- * test would catch and no log line would mention.
+ * Every career-specific field now comes from the tenant's profile
+ * (lib/profile.ts). This function used to hand `buildFitPrompt` five module
+ * constants; it hands it five stored values instead, and lib/profile-scoring.test.ts
+ * pins that a CHANGED value reaches the rendered prompt — the guard that a
+ * required parameter cannot provide.
+ *
+ * The fit brain has TWO sources and the precedence is deliberate: the
+ * `fitBrain` SETTING_KEYS row wins, and the profile's brain is the fallback.
+ * That row is the source of truth because it is what /settings displays and
+ * edits — if the profile won instead, a non-empty profile brain would
+ * permanently shadow every settings edit the user makes, since /settings only
+ * ever writes the row. The profile's brain is the fallback for a tenant whose
+ * profile predates a settings edit, or whose row has been reset. Onboarding
+ * writes both inside one transaction (see saveProfile), so they agree at
+ * birth.
  */
 export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitInputs {
-  return {
-    fitBrain: criteria.fitBrain,
-    compFloor: compFloorFrom(rows),
-    weakFitTail: DEFAULT_WEAK_FIT_TAIL,
-    moderateTail: DEFAULT_MODERATE_TAIL,
-    strongTail: DEFAULT_STRONG_TAIL,
-    titleScope: DEFAULT_TITLE_SCOPE,
-    domainBonus: DEFAULT_DOMAIN_BONUS,
-  };
+  const profile = profileFrom(rows);
+  return profileToFitInputs(
+    { ...profile, fitBrain: criteria.fitBrain || profile.fitBrain },
+    compFloorFrom(rows)
+  );
 }
 
 /**
