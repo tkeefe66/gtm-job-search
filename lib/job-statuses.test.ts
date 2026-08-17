@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVE_STATUSES, JOB_STATUSES, TERMINAL_STATUSES } from "./types";
 import {
   DEFAULT_STATUSES,
   SYSTEM_STATUS_KEYS,
@@ -17,14 +16,22 @@ import {
 const keys = (defs: JobStatusDef[]) => defs.map((d) => d.key);
 
 describe("DEFAULT_STATUSES", () => {
-  // Test 7 from the spec. Pinned against lib/types.ts rather than a hand-copied
-  // list, so the shipped config is provably a no-op. Task 8 deletes those arrays
-  // and this assertion with them — read the note in Task 8 before doing that.
-  it("reproduces today's list, order, and buckets exactly", () => {
-    expect(keys(DEFAULT_STATUSES)).toEqual(JOB_STATUSES);
-    expect(terminalKeys(DEFAULT_STATUSES).sort()).toEqual([...TERMINAL_STATUSES].sort());
-    const active = DEFAULT_STATUSES.filter((d) => d.bucket === "active").map((d) => d.key);
-    expect(active.sort()).toEqual([...ACTIVE_STATUSES, "New", "Offer"].sort());
+  // Frozen 2026-08-17. Until this commit these three lists were imported from
+  // lib/types.ts and compared against the real thing; that source is now gone,
+  // so this literal is the record of what the app did before statuses became
+  // editable. Do NOT regenerate it from DEFAULT_STATUSES — that would bless
+  // whatever the code currently emits, which is the whole point of the pin.
+  const SHIPPED_ORDER = [
+    "New", "Applied", "Recruiter Outreach", "Phone / Intro Screen",
+    "Hiring Manager", "Panel Interviews", "Exec Presentation",
+    "Reference Check", "Offer", "Not Interested", "Rejected", "Passed",
+    "Posting Closed",
+  ];
+  const SHIPPED_TERMINAL = ["Not Interested", "Rejected", "Passed", "Posting Closed"];
+
+  it("reproduces the pre-feature list, order, and buckets exactly", () => {
+    expect(keys(DEFAULT_STATUSES)).toEqual(SHIPPED_ORDER);
+    expect(terminalKeys(DEFAULT_STATUSES).sort()).toEqual([...SHIPPED_TERMINAL].sort());
   });
 
   it("labels every status as its own key", () => {

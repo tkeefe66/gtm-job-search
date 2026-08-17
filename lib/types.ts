@@ -1,50 +1,11 @@
-export type JobStatus =
-  | "New"
-  | "Applied"
-  | "Recruiter Outreach"
-  | "Phone / Intro Screen"
-  | "Hiring Manager"
-  | "Panel Interviews"
-  | "Exec Presentation"
-  | "Reference Check"
-  | "Offer"
-  | "Not Interested"
-  | "Rejected"
-  | "Passed"
-  | "Posting Closed";
+import type { SystemStatusKey } from "@/lib/job-statuses";
 
-export const JOB_STATUSES: JobStatus[] = [
-  "New",
-  "Applied",
-  "Recruiter Outreach",
-  "Phone / Intro Screen",
-  "Hiring Manager",
-  "Panel Interviews",
-  "Exec Presentation",
-  "Reference Check",
-  "Offer",
-  "Not Interested",
-  "Rejected",
-  "Passed",
-  "Posting Closed",
-];
-
-export const ACTIVE_STATUSES: JobStatus[] = [
-  "Applied",
-  "Recruiter Outreach",
-  "Phone / Intro Screen",
-  "Hiring Manager",
-  "Panel Interviews",
-  "Exec Presentation",
-  "Reference Check",
-];
-
-export const TERMINAL_STATUSES: JobStatus[] = [
-  "Not Interested",
-  "Rejected",
-  "Passed",
-  "Posting Closed",
-];
+/**
+ * The statuses code reads and writes BY NAME. No longer the full list — the
+ * user's list lives in app_settings and is resolved by lib/job-statuses.ts.
+ * `Job.status` below is `string` because it can hold any key the user defined.
+ */
+export type JobStatus = SystemStatusKey;
 
 // Legacy pipeline statuses for Tracker funnel view
 export type PipelineStatus = "Tracking" | "Applied" | "Interviewing" | "Offer" | "Passed";

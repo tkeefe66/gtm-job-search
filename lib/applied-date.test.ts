@@ -1,6 +1,8 @@
 import { describe, test, it, expect } from "vitest";
 import { appliedDatePatch, todayStamp } from "./applied-date";
-import { JOB_STATUSES } from "./types";
+import { DEFAULT_STATUSES } from "./job-statuses";
+
+const JOB_STATUSES = DEFAULT_STATUSES.map((d) => d.key);
 
 const TODAY = "2026-08-15";
 
@@ -11,13 +13,15 @@ describe("appliedDatePatch", () => {
     });
   });
 
-  // Driven off JOB_STATUSES rather than a hand-written list. The hand-written
-  // one contained "Take-home" — not a JobStatus and not in JOB_STATUSES — so
-  // the test asserted about a status that does not exist while leaving eight
-  // real ones, the whole interview ladder among them, uncovered. Typing the
-  // parameter as JobStatus now makes that particular mistake a compile error;
-  // deriving the list from the constant makes the coverage total and keeps it
-  // total when a status is added.
+  // Driven off DEFAULT_STATUSES (lib/job-statuses.ts) rather than a
+  // hand-written list. The hand-written one contained "Take-home" — not a
+  // JobStatus and not in the shipped list — so the test asserted about a
+  // status that does not exist while leaving eight real ones, the whole
+  // interview ladder among them, uncovered. Deriving the list from the
+  // constant makes the coverage total and keeps it total when a status is
+  // added. jobs.status now stores keys, and keys are what reaches
+  // appliedDatePatch, so DEFAULT_STATUSES' keys are the right source — not
+  // labels, which the user can freely rename on /settings.
   test("no status other than Applied stamps anything", () => {
     const others = JOB_STATUSES.filter((s) => s !== "Applied");
     expect(others).toHaveLength(JOB_STATUSES.length - 1);
