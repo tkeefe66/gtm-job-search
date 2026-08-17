@@ -64,7 +64,8 @@ export function titleMatchPatterns(titles: string[]): string[] {
  * without a database.
  */
 export const CRAWL_TITLE_MATCH_SQL = `select count(*) n from jobs
-      where source = 'Crawl'
+      where tenant_id = $2
+        and source = 'Crawl'
         and status = 'New'
         and role_title ilike any($1::text[])`;
 

@@ -47,7 +47,18 @@ const h = vi.hoisted(() => {
   return { state, makeBuilder };
 });
 
-vi.mock("@/lib/supabase", () => ({ supabase: { from: () => h.makeBuilder() } }));
+vi.mock("@/lib/supabase", () => ({
+  supabase: {
+    from: () => h.makeBuilder(),
+    // Same builder either way — this suite asserts what the ACTION does, not
+    // what the transport adds. That tenant tables are only reachable through
+    // forTenant is enforced in lib/supabase.ts and pinned in its own test.
+    forTenant: () => ({ from: () => h.makeBuilder() }),
+  },
+}));
+vi.mock("@/lib/tenant", () => ({
+  resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
+}));
 vi.mock("@/lib/anthropic", () => ({
   callWithWebSearch: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),

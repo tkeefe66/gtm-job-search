@@ -365,7 +365,7 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
 // assertion rather than something inferred from this string, so dropping the
 // column compiles clean and silently disables closure — hence the string test.
 export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles, finished_at from crawl_runs
-      where company = $1 and status in ('ok', 'empty')
+      where tenant_id = $2 and company = $1 and status in ('ok', 'empty')
       order by started_at desc
       limit 1`;
 
@@ -399,6 +399,7 @@ export function closureRunsFromRows(rows: TrustworthyRunRow[]): ClosureRun[] {
 async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
   const { data } = await rawQuery<TrustworthyRunRow>(LAST_TRUSTWORTHY_RUN_SQL, [
     company,
+    await resolveTenantId(),
   ]);
   return closureRunsFromRows(data ?? []);
 }
@@ -423,7 +424,8 @@ async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
 // Exported (rather than inlined in the query call) so the scoping decision
 // can be pinned by a string-content test without a database.
 export const STALE_POSTING_CANDIDATES_SQL = `select id, role_title from jobs
-      where company = $1
+      where tenant_id = $2
+        and company = $1
         and source = 'Crawl'
         and status = 'New'`;
 
@@ -470,7 +472,7 @@ async function closeStalePostings(
 ): Promise<void> {
   const { data } = await rawQuery<{ id: string; role_title: string }>(
     STALE_POSTING_CANDIDATES_SQL,
-    [company]
+    [company, await resolveTenantId()]
   );
 
   const active = (data ?? []).map((r) => ({
@@ -557,7 +559,7 @@ export async function crawlCompany(
   // orphaned "running" row behind.
   let runId: string | null = null;
   if (!dryRun) {
-    const { data: runRows, error: crawlRunInsertError } = await supabase
+    const { data: runRows, error: crawlRunInsertError } = await supabase.forTenant(await resolveTenantId())
       .from("crawl_runs")
       .insert({ company, status: "running" })
       .select()
@@ -689,7 +691,7 @@ export async function crawlCompany(
 
   if (!dryRun) {
     if (runId) {
-      const { error: crawlRunUpdateError } = await supabase
+      const { error: crawlRunUpdateError } = await supabase.forTenant(await resolveTenantId())
         .from("crawl_runs")
         .update({
           finished_at: new Date().toISOString(),
@@ -716,8 +718,8 @@ export async function crawlCompany(
               last_crawl_status = $3,
               last_crawl_error = $4,
               consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end
-        where company = $1`,
-      [company, learnedMethod, status, errorMessage ?? null, failed]
+        where company = $1 and tenant_id = $6`,
+      [company, learnedMethod, status, errorMessage ?? null, failed, await resolveTenantId()]
     );
     if (watchlistUpdateError) {
       // last_checked_at did not advance, so the batch scheduler will see this

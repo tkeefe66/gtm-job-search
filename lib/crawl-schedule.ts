@@ -19,7 +19,8 @@ export const DUE_COMPANIES_SQL = `
          consecutive_failures,
          last_checked_at
     from watchlist
-   where tracking_enabled = true
+   where tenant_id = $2
+     and tracking_enabled = true
      and (last_checked_at is null
           or last_checked_at <= now() - (crawl_interval_days || ' days')::interval)
    order by last_checked_at asc nulls first

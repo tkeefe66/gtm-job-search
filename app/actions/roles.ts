@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
@@ -28,7 +29,7 @@ export async function getAllSavedRoles(): Promise<{
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_roles")
     .select("company, roles, fetched_at")
     .order("fetched_at", { ascending: false });
@@ -48,7 +49,7 @@ export async function findAndSaveRoles(
   await requireActor();
   // Return cached result if available and not forcing a refresh.
   if (!force) {
-    const { data, error: cacheReadError } = await supabase
+    const { data, error: cacheReadError } = await supabase.forTenant(await resolveTenantId())
       .from("discovered_roles")
       .select("roles")
       .eq("company", startup.company)
@@ -116,13 +117,13 @@ If no qualifying roles are found, return a JSON object: {"roles": [], "message":
     // deploy without `node db/apply-schema.mjs` produced exactly that, with
     // nothing in the log connecting the two. Same treatment as
     // findRolesByCriteria's cache write.
-    const { error: cacheError } = await supabase.from("discovered_roles").upsert(
+    const { error: cacheError } = await supabase.forTenant(await resolveTenantId()).from("discovered_roles").upsert(
       {
         company: startup.company,
         roles,
         fetched_at: new Date().toISOString(),
       },
-      { onConflict: "company" }
+      { onConflict: "tenant_id,company" }
     );
 
     // Reported on its OWN key, not on `error`. Discover's handleFindRoles

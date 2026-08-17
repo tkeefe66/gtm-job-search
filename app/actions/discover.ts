@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
@@ -40,7 +41,7 @@ export async function getAllDiscoveredStartups(): Promise<{
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_startups")
     .select("startups, fetched_at, date_range")
     .order("fetched_at", { ascending: false });
@@ -76,7 +77,7 @@ export async function getDiscoveredStartups(
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
   const term = searchTerm ?? "";
-  const { data, error } = await supabase
+  const { data, error } = await supabase.forTenant(await resolveTenantId())
     .from("discovered_startups")
     .select("startups, fetched_at")
     .eq("date_range", dateRange)
@@ -125,14 +126,14 @@ export async function discoverStartups(
     // multiple searches to ensure completeness"), so a failed cache write that
     // nobody reports means every subsequent Discover click re-bills the whole
     // set with nothing in the log to say why.
-    const { error: cacheError } = await supabase.from("discovered_startups").upsert(
+    const { error: cacheError } = await supabase.forTenant(await resolveTenantId()).from("discovered_startups").upsert(
       {
         date_range: dateRange,
         search_term: searchTerm ?? "",
         startups: result,
         fetched_at: new Date().toISOString(),
       },
-      { onConflict: "date_range,search_term" }
+      { onConflict: "tenant_id,date_range,search_term" }
     );
 
     // Returned on `error`, unlike findAndSaveRoles' separate `cacheWarning`

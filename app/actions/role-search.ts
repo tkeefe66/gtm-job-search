@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
@@ -62,7 +63,7 @@ Return up to 25 roles. Deduplicate identical postings. Return ONLY the JSON arra
 }
 
 async function readCache(family: RoleSearchFamily) {
-  return supabase
+  return supabase.forTenant(await resolveTenantId())
     .from("role_searches")
     .select("roles, fetched_at")
     .eq("family", family)
@@ -184,9 +185,9 @@ export async function findRolesByCriteria(
     );
 
     const fetchedAt = new Date().toISOString();
-    const { error: cacheError } = await supabase.from("role_searches").upsert(
+    const { error: cacheError } = await supabase.forTenant(await resolveTenantId()).from("role_searches").upsert(
       { family, search_term: "", roles: matches, fetched_at: fetchedAt },
-      { onConflict: "family,search_term" }
+      { onConflict: "tenant_id,family,search_term" }
     );
 
     // A discarded error here is the most expensive silence in this file: the

@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { resolveTenantId } from "@/lib/tenant";
 
 import { revalidatePath } from "next/cache";
 import { updateJob } from "@/app/actions/jobs";
@@ -110,6 +111,7 @@ export async function countCrawlJobsMatchingTitles(
 
   const { data, error } = await rawQuery<{ n: string }>(CRAWL_TITLE_MATCH_SQL, [
     patterns,
+    await resolveTenantId(),
   ]);
   if (error) {
     // `|| UNDESCRIBED_DB_ERROR` for the same reason its sibling countScoredJobs
@@ -140,7 +142,15 @@ async function applySideEffects(key: SettingKey): Promise<void> {
   for (const table of cachesToClear(key)) {
     // Table names come from a closed, hard-coded map keyed by SettingKey —
     // never from user input — so interpolation here cannot be injected into.
-    const { error } = await rawQuery(`delete from ${table}`);
+    //
+    // SCOPED, and this is the important word. Unqualified, one tenant editing a
+    // setting truncated the cache for EVERY tenant, forcing all of them to
+    // re-bill their next search — a denial-of-wallet reachable from the ordinary
+    // settings form, with no exploit required. Migration 002 gave these tables a
+    // tenant_id; this is the predicate that uses it.
+    const { error } = await rawQuery(`delete from ${table} where tenant_id = $1`, [
+      await resolveTenantId(),
+    ]);
     if (error) {
       // Non-fatal: the setting itself is already saved. A surviving cache
       // serves stale results until it expires, which is worse than fresh but

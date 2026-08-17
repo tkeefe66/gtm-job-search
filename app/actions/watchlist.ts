@@ -453,6 +453,7 @@ export async function getDueCompanies(
 ): Promise<{ companies: string[]; error?: string }> {
   const { data, error } = await rawQuery<{ company: string }>(DUE_COMPANIES_SQL, [
     limit,
+    await resolveTenantId(),
   ]);
   if (error) return { companies: [], error: error.message };
   return { companies: (data ?? []).map((r) => r.company) };

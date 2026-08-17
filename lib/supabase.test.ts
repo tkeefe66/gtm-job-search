@@ -101,9 +101,13 @@ describe("tenant scoping", () => {
     }
   });
 
-  test("global tables are still reachable without a tenant", () => {
-    expect(() => supabase.from("discovered_startups")).not.toThrow();
-    expect(() => supabase.from("crawl_runs")).not.toThrow();
+  // After migration 002 every APP table is tenant-scoped — the caches moved too,
+  // because their contents were produced from one tenant's criteria. What is left
+  // global is the auth schema, which the builder does not touch. So this asserts
+  // the registry's shape rather than naming a table that might later join it.
+  test("an unregistered table is reachable without a tenant", () => {
+    expect(() => supabase.from("schema_migrations")).not.toThrow();
+    expect(isTenantTable("schema_migrations")).toBe(false);
   });
 
   // An empty string would build `tenant_id = ''`, which matches nothing and
