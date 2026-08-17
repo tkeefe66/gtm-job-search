@@ -1,12 +1,18 @@
 "use server";
 
-import Anthropic from "@anthropic-ai/sdk";
 import { requireActor } from "@/lib/require-actor";
 import { resolveTenantId } from "@/lib/tenant";
 import { rawQuery } from "@/lib/supabase";
 import { seal, lastFour } from "@/lib/secret-box";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/providers/anthropic-pricing";
+import { providerFor } from "@/lib/providers/registry";
+
+/**
+ * Step 1 ships one provider, so this is a constant rather than an argument.
+ * It is stored, bound into the AAD, and read back by lib/metered.ts, so adding
+ * a second one later is a form field — not a migration and not a re-seal.
+ */
+const PROVIDER = "anthropic";
 
 /**
  * Bring-your-own Anthropic key.
@@ -26,6 +32,8 @@ export interface ApiKeyStatus {
   lastFour?: string;
   addedAt?: string;
   status?: string;
+  provider?: string;
+  model?: string | null;
 }
 
 export async function getApiKeyStatus(): Promise<ApiKeyStatus & { error?: string }> {
@@ -35,8 +43,10 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus & { error?: string
     last_four: string;
     added_at: string;
     status: string;
+    provider: string;
+    model: string | null;
   }>(
-    `select last_four, added_at, status from tenant_api_keys where tenant_id = $1`,
+    `select last_four, added_at, status, provider, model from tenant_api_keys where tenant_id = $1`,
     [tenantId],
     tenantId
   );
@@ -51,6 +61,8 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus & { error?: string
     lastFour: data[0].last_four,
     addedAt: data[0].added_at,
     status: data[0].status,
+    provider: data[0].provider,
+    model: data[0].model,
   };
 }
 
@@ -66,14 +78,14 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus & { error?: string
  * attempt per minute makes it useless for that while remaining invisible to
  * someone pasting their own key once.
  */
-export async function saveApiKey(key: string): Promise<{ error?: string }> {
+export async function saveApiKey(
+  key: string,
+  opts: { model?: string } = {}
+): Promise<{ error?: string }> {
   await requireActor();
   const tenantId = await resolveTenantId();
   const trimmed = key.trim();
-
-  if (!trimmed.startsWith("sk-ant-")) {
-    return { error: "That does not look like an Anthropic API key (they start with sk-ant-)." };
-  }
+  const model = opts.model?.trim() || null;
 
   const { data: recent } = await rawQuery<{ recent: boolean }>(
     `select (last_verified_at > now() - interval '1 minute') as recent
@@ -85,39 +97,42 @@ export async function saveApiKey(key: string): Promise<{ error?: string }> {
     return { error: "Please wait a minute before trying another key." };
   }
 
-  try {
-    await new Anthropic({ apiKey: trimmed }).messages.create({
-      model: ANTHROPIC_DEFAULT_MODEL,
-      max_tokens: 1,
-      messages: [{ role: "user", content: "hi" }],
-    });
-  } catch {
-    // A closed-set message. The SDK's error text embeds request URLs and
-    // sometimes the key itself, and this string is rendered to a browser.
-    return { error: "Anthropic rejected that key. Check it and try again." };
+  // The adapter owns both checks: the shape of its keys and whether the vendor
+  // accepts this one. What comes back is a REASON, never the SDK's text — that
+  // embeds request URLs and sometimes the key itself, and this string is
+  // rendered to a browser.
+  const verdict = await providerFor(PROVIDER).validateKey(trimmed);
+  if (!verdict.ok) {
+    return {
+      error:
+        verdict.reason === "format"
+          ? "That does not look like an Anthropic API key (they start with sk-ant-)."
+          : "Anthropic rejected that key. Check it and try again.",
+    };
   }
 
-  const sealed = seal(trimmed, { tenantId, provider: "anthropic", model: null });
+  const sealed = seal(trimmed, { tenantId, provider: PROVIDER, model });
   const { error } = await rawQuery(
     `insert into tenant_api_keys
-       (tenant_id, key_id, ciphertext, nonce, auth_tag, last_four, status, last_verified_at, aad_version)
-     values ($1, $2, $3, $4, $5, $6, 'ok', now(), $7)
+       (tenant_id, key_id, aad_version, ciphertext, nonce, auth_tag, last_four,
+        provider, model, status, last_verified_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ok', now())
      on conflict (tenant_id) do update
        set key_id = excluded.key_id,
+           aad_version = excluded.aad_version,
            ciphertext = excluded.ciphertext,
            nonce = excluded.nonce,
            auth_tag = excluded.auth_tag,
            last_four = excluded.last_four,
+           provider = excluded.provider,
+           model = excluded.model,
            status = 'ok',
-           last_verified_at = now(),
-           aad_version = excluded.aad_version`,
-    [tenantId, sealed.keyId, sealed.ciphertext, sealed.nonce, sealed.authTag, lastFour(trimmed), sealed.aadVersion],
+           last_verified_at = now()`,
+    [tenantId, sealed.keyId, sealed.aadVersion, sealed.ciphertext, sealed.nonce,
+     sealed.authTag, lastFour(trimmed), PROVIDER, model],
     tenantId
   );
-  const described = describeWriteFailure(
-    error ? error.message : undefined,
-    "save your API key"
-  );
+  const described = describeWriteFailure(error ? error.message : undefined, "save your API key");
   return described !== undefined ? { error: described } : {};
 }
 

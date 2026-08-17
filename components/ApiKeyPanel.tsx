@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getApiKeyStatus, saveApiKey, removeApiKey, type ApiKeyStatus } from "@/app/actions/api-key";
+import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/providers/anthropic-pricing";
 import { Spinner } from "./ui";
 
 /**
@@ -14,6 +15,7 @@ import { Spinner } from "./ui";
 export default function ApiKeyPanel() {
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
   const [draft, setDraft] = useState("");
+  const [modelDraft, setModelDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -29,10 +31,10 @@ export default function ApiKeyPanel() {
 
   async function save() {
     setBusy(true); setSaved(false);
-    const res = await saveApiKey(draft);
+    const res = await saveApiKey(draft, { model: modelDraft });
     setError(res.error !== undefined ? res.error : null);
     setBusy(false);
-    if (res.error === undefined) { setDraft(""); setSaved(true); await load(); }
+    if (res.error === undefined) { setDraft(""); setModelDraft(""); setSaved(true); await load(); }
   }
 
   async function remove() {
@@ -83,6 +85,8 @@ export default function ApiKeyPanel() {
           <span className="text-xs text-ink/50">
             added {status.addedAt?.slice(0, 10)}
             {status.status !== "ok" && ` · ${status.status}`}
+            {status.provider && ` · ${status.provider}`}
+            {` · ${status.model ?? ANTHROPIC_DEFAULT_MODEL}`}
           </span>
           <button
             disabled={busy}
@@ -93,22 +97,37 @@ export default function ApiKeyPanel() {
           </button>
         </div>
       ) : (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <input
-            type="password"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="sk-ant-…"
-            autoComplete="off"
-            className="w-80 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
-          />
-          <button
-            disabled={busy || draft.trim().length === 0}
-            onClick={() => void save()}
-            className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
-          >
-            {busy ? "Verifying…" : "Save key"}
-          </button>
+        <div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <input
+              type="password"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="sk-ant-…"
+              autoComplete="off"
+              className="w-80 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+            />
+            <input
+              type="text"
+              value={modelDraft}
+              onChange={(e) => setModelDraft(e.target.value)}
+              placeholder={ANTHROPIC_DEFAULT_MODEL}
+              autoComplete="off"
+              className="w-56 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+            />
+            <button
+              disabled={busy || draft.trim().length === 0}
+              onClick={() => void save()}
+              className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {busy ? "Verifying…" : "Save key"}
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-ink/60">
+            Optional. Leave blank for the default, {ANTHROPIC_DEFAULT_MODEL}. Changing the model
+            re-saves the key, so you will need to paste it again — the stored key is bound
+            to the model it runs on and is never read back.
+          </p>
         </div>
       )}
     </section>
