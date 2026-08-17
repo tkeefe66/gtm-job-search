@@ -1,6 +1,6 @@
 # Prompt generalisation as a provable no-op — design
 
-**Status:** revision 2, 2026-08-17. Not yet implemented.
+**Status:** revision 3, 2026-08-17. Not yet implemented. Revision 2 was reviewed: all 13 of its corrections landed and all five constants verified character-exact, but two blocking gaps remained — see "Revision corrections (2 → 3)".
 
 **Phase 1 of three.** The parent design
 (`2026-08-17-career-agnostic-onboarding-design.md`) opens this app to any career.
@@ -79,11 +79,18 @@ unconditionally.
 **Resolved:** the heading moves into a `titleScopeBlock()` helper, exactly as
 `compScoringClause` already does. It renders
 `"\n\nTITLE SCOPE SIGNALS (use these to adjust score):\n" + bullets` when
-`titleScope` is non-empty and `""` when it is not. The bullets themselves carry
-no leading or trailing newline — both blank lines belong to the wrapper. The
-heading stays *in code*; it just stops being in the literal.
+`titleScope` is non-empty and `""` when it is not.
 
-Same wrapper shape for `domainBonus`, which owns `\n\n` on the leading side only.
+**Only the LEADING blank line belongs to the wrapper.** The `\n\n` before
+`FINANCIAL SIGNALS` stays in the template literal. Moving it into the wrapper too
+would render `…more senior.FINANCIAL SIGNALS` in the empty case — and no proposed
+test catches a *missing* blank line, since the doubled-blank-line guard only looks
+for extra ones. Revision 2 said "both blank lines belong to the wrapper", which
+contradicted the formula printed beside it.
+
+The bullets carry no leading or trailing newline. The heading stays *in code*; it
+just stops being in the literal. Same wrapper shape for `domainBonus`, which also
+owns its leading `\n\n` only.
 
 ### A3. The comp carve-out
 
@@ -108,7 +115,7 @@ constant carrying its exact current text:
 | Constant | Verbatim text today | Sites |
 |---|---|---|
 | `SEARCH_SUBJECT` | `go-to-market and revenue operations` | `lib/search-criteria.ts:59-60` (`ROLE_SEARCH_SYSTEM`, **split across a concatenation** — see below), `app/actions/roles.ts:108`, `lib/crawler.ts:346` |
-| `SEARCH_SUBJECT_SLASHED` | `go-to-market / revenue operations` | `app/actions/role-search.ts:39` — a slash, not "and" |
+| `STACK_FAMILY_INTRO` | the **whole** `FAMILY_INTRO.stack` string | `app/actions/role-search.ts:38-39` — see below |
 | `CANDIDATE_PERSONA` | `GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder` | `lib/search-criteria.ts:93` (`fit_signal`) |
 | `BUILDING_CONCEPT` | `building GTM systems and agentic AI workflows` (and `no systems/AI-building upside`) | `lib/search-criteria.ts:94` (`ic_flag`) |
 | `QUERY_SUBJECT` | `revenue operations` | `lib/search-criteria.ts:139` (`stackQueries`) |
@@ -130,6 +137,26 @@ find-and-replace across the repo silently misses this one, and an implementer
 working from a grep would conclude the site does not exist. The concatenation has
 to be restructured, not substituted.
 
+**`role-search.ts:39` needs the whole string, not four words.** Revision 2
+extracted `go-to-market / revenue operations` and left behind the rest of the same
+sentence:
+
+```
+"Search job boards and company careers pages for currently-open go-to-market /
+revenue operations roles that mention these tools. Titles vary — include Business
+Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the
+obvious RevOps titles. Use these searches"
+```
+
+Three named GTM job titles and "the obvious RevOps titles" are as career-specific
+as the four words in front of them. Extracting only the subject means the no-op
+holds in phase 1 and the prompt breaks in phase 2 — coherent for half a sentence,
+then naming RevOps roles at a mechanical engineer. So the constant is
+`STACK_FAMILY_INTRO`, the entire string.
+
+`FAMILY_INTRO.title` (`:36-37`) is career-agnostic as written and is not
+extracted.
+
 `QUERY_SUBJECT` is a **search query** term, not prose. `stackQueries` builds
 `` `"${tool}" revenue operations hiring ${place}` ``; a five-word phrase there
 yields `"Salesforce" go-to-market and revenue operations hiring Denver`.
@@ -145,15 +172,43 @@ is an **input to the score on every row**, from all three ingest paths.
 `app/actions/role-search.ts:60`, `lib/crawler.ts:82` (the HTML crawl tier, which
 per CLAUDE.md is the primary crawl path), `lib/crawler.ts:348`.
 
-Revision 1 argued for a defaulted parameter to keep one test unedited. That trades
-one line of test churn for **four sites that silently emit GTM text in phase 2**
-if any forgets to pass the tenant value. Take the compile errors — that is the
-direction this codebase prefers, and `lib/rescore-scope.ts:186-191` is an essay on
-exactly this trade.
+Revision 1 argued for a defaulted parameter to keep one test unedited. Take the
+compile errors instead.
+
+**But not for the reason revision 2 gave.** It claimed required parameters protect
+against four sites silently emitting GTM text in phase 2. They do not: required
+parameters catch *omission*, and omission happens in phase 1 when the constants
+are introduced. A phase-2 site that forgets to switch its argument keeps passing
+`CANDIDATE_PERSONA`, which compiles, type-checks, and ships GTM text to a nurse.
+
+The real argument is narrower and still sufficient: a required parameter makes the
+phase-1 transcription exhaustive by construction — you cannot miss a call site,
+because the build stops. Phase 2's risk is different and needs its own guard,
+which is one reason the golden tests in Testing item 5 assert that a *changed*
+value reaches the output.
 
 Same for `ROLE_SEARCH_SYSTEM` → `roleSearchSystem(subject)`: **four** call sites,
 not the one revision 1 implied — `roles.ts:115`, `role-search.ts:195`,
-`crawler.ts:331`, `crawler.ts:345`.
+`crawler.ts:331`, `crawler.ts:345`. Deleting the constant also breaks three import
+statements (`roles.ts:14`, `role-search.ts:13`, `crawler.ts:9`).
+
+**`buildExtractionPrompt` must be widened, and revision 2 did not say so.** One of
+`roleExtractionSchema`'s four call sites (`lib/crawler.ts:82`) sits *inside*
+`buildExtractionPrompt(company, page, criteria)` (`:67-71`), which is exported and
+has its own callers: `crawler.ts:332` in production and five in
+`lib/crawler.test.ts` (`:59`, `:65`, `:69`, `:75`, `:90`).
+
+There are two ways through and revision 2 picked neither:
+
+- **Widen the signature** to `(company, page, criteria, persona, buildingConcept)`
+  — six more edits, and the compile-error discipline reaches the HTML crawl tier.
+- Hardcode the constants inside the function body — no edits, but it exempts what
+  CLAUDE.md calls the primary crawl path from the exhaustiveness the required
+  parameter exists to buy.
+
+**Take the widening.** Exempting the primary crawl path from the discipline is how
+phase 2 ends up shipping a mechanical engineer a RevOps extraction schema through
+the one code path that runs nightly without anybody watching.
 
 ## What this phase does NOT do
 
@@ -209,6 +264,10 @@ the handed-value property. Neither goal is sacrificed and neither fixture lies.
    covered"; they are not, which is why two of its three broken splices would have
    shipped green. `app/actions/role-search.ts:39` has no test file at all.
 6. Fixtures 2-4 join the doubled-blank-line loop at `lib/fit-prompt.test.ts:431`.
+7. **The regeneration command in the `lib/fit-prompt.test.ts:351-358` docblock
+   gains the new fixtures.** It currently writes exactly two files. Left alone, the
+   next regeneration refreshes two of five and leaves three stale — the same
+   "blesses whatever the code emits" hazard CLAUDE.md warns about, one level up.
 
 ### The test-edit list — ~13 red, 3 silent
 
@@ -239,11 +298,21 @@ second parameter on `scoreFit` — is what `lib/fit-inputs.ts`'s own header reje
 Update the count and keep the comment's intent; do not delete the test.
 
 **From `roleSearchSystem` becoming a function:** `app/actions/roles.test.ts:77`
-plus four production call sites.
+plus four production call sites and three imports. Note this one fails at
+*runtime*, not compile time: `vi.mock(path, factory)` is untyped in vitest 2.1.9,
+so nothing inside that factory is checked.
 
-**Silent — no error, no red:** `lib/ingest-roles.test.ts:49` (`{} as never`),
-`app/actions/roles.test.ts:80` (`fitInputs: {}` in a mock factory). Both on ingest
-paths. Test 5 is what covers the Part B sites that would otherwise be silent.
+**From `roleExtractionSchema` gaining required parameters:**
+`lib/search-criteria.test.ts:348` calls it with no arguments — a compile error
+revision 2 omitted from a list whose whole purpose is that "the list is the
+guarantee". Plus the `buildExtractionPrompt` chain: `lib/crawler.ts:332` and
+`lib/crawler.test.ts:59,:65,:69,:75,:90`.
+
+**Silent — no error, no red (three):** `lib/ingest-roles.test.ts:49`
+(`{} as never`), `app/actions/roles.test.ts:80` (`fitInputs: {}` in a mock
+factory), and `app/actions/roles.test.ts:82`
+(`roleExtractionSchema: () => "schema"`, also unchecked). Revision 2 advertised
+three and listed two. Test 5 is what covers the Part B sites that would otherwise be silent.
 
 ### What has no compile-time protection
 
@@ -268,6 +337,31 @@ stay silent. There is no type-level guarantee; the list is the guarantee.
   decision reopens.
 - CLAUDE.md gains a sentence about the extracted fragments. Its "tuned to Tom
   Keefe's profile" opening stays accurate until phase 2.
+
+## Revision corrections (2 → 3)
+
+Review confirmed all 13 of revision 2's corrections landed, all five Part B
+constants are character-exact at all nine sites, and both wrappers' whitespace
+arithmetic reproduces today's output. Two blocking gaps and four smaller ones:
+
+1. **`buildExtractionPrompt` threading was unspecified.** Required parameters on
+   `roleExtractionSchema` cannot stop at its four call sites — one is inside an
+   exported three-argument function with six callers of its own. Resolved: widen
+   the signature.
+2. **`role-search.ts:39` was under-scoped.** The extracted subject was four words
+   of a sentence that goes on to name three GTM job titles. Resolved: extract the
+   whole `FAMILY_INTRO.stack`.
+3. **"Both blank lines belong to the wrapper" contradicted its own formula.** Only
+   the leading one does; moving the trailing `\n\n` deletes the separator before
+   `FINANCIAL SIGNALS` in the empty case, which no test would catch.
+4. **The required-parameter argument was wrong**, though its conclusion stands.
+   Required parameters catch omission in phase 1; they do nothing about a phase-2
+   site that keeps passing the default.
+5. **`lib/search-criteria.test.ts:348` was missing from the test list**, as was the
+   `buildExtractionPrompt` chain. Revision 2 also advertised three silent sites and
+   listed two.
+6. **The fixture regeneration command was not updated**, so the proof would have
+   decayed to two files of five.
 
 ## Revision corrections (1 → 2)
 
