@@ -135,9 +135,11 @@ export const CANDIDATE_PERSONA =
  * (An earlier revision of this file drove both fragments off this single
  * constant with reworded connective text around the second occurrence; the
  * rendered sentence was no longer byte-identical to the source, which is
- * exactly the failure this task exists to prevent. Splitting per
- * grammatical form is the same pattern `SEARCH_SUBJECT_SLASHED` and
- * `QUERY_SUBJECT` use elsewhere in this file's design for `SEARCH_SUBJECT`.)
+ * exactly the failure this task exists to prevent. Splitting per grammatical
+ * form is the same choice `QUERY_SUBJECT` makes against `SEARCH_SUBJECT`, and
+ * the same reason `STACK_FAMILY_INTRO` holds a whole sentence rather than a
+ * subject: where a form is not reachable by substitution, it gets its own
+ * constant.)
  */
 export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
 
@@ -220,7 +222,7 @@ export function titleQueries(criteria: Criteria): string[] {
 /**
  * The field term used inside a SEARCH QUERY, which is why it is short.
  *
- * Two words where SEARCH_SUBJECT is five. A query is not a sentence: the longer
+ * Two words where SEARCH_SUBJECT is four. A query is not a sentence: the longer
  * phrase makes the query worse, not more precise. Phase 2 should not assume one
  * generated value serves both this and the prose sites.
  */
