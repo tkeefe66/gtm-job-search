@@ -106,6 +106,33 @@ describe("reserveVerdict", () => {
     expect(v).toEqual({ allow: true, maxSearches: 25 });
   });
 
+  // Gemini bills per grounded REQUEST, so an adapter whose per-search cost
+  // rounds to zero is a real shape, not a hypothetical. `remaining / 0` is
+  // Infinity — a number, so it passes mustRefuseSearch, becomes
+  // `max_uses: Infinity`, and serialises to JSON as `null`. Silently uncapped
+  // is the one outcome the cap exists to prevent, so the call is refused.
+  test("a search priced at zero refuses the metered call rather than uncapping it", () => {
+    const v = reserveVerdict({
+      tier: "admin",
+      daily: open,
+      monthly: open,
+      estimateCents: 1,
+      centsPerSearch: 0,
+    });
+    expect(v).toEqual({ allow: false, reason: "unpriceable" });
+  });
+
+  test("an unpriceable search does not refuse BYO, who are recorded rather than rationed", () => {
+    const v = reserveVerdict({
+      tier: "byo",
+      daily: open,
+      monthly: open,
+      estimateCents: 1,
+      centsPerSearch: 0,
+    });
+    expect(v).toEqual({ allow: true, maxSearches: null });
+  });
+
   test("the DAILY window can block while the monthly one is wide open", () => {
     const v = reserveVerdict({
       tier: "admin",

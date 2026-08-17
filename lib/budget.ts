@@ -93,7 +93,8 @@ export interface Window {
 
 export type ReserveVerdict =
   | { allow: true; maxSearches: number | null }
-  | { allow: false; reason: "daily" | "monthly"; window: Window };
+  | { allow: false; reason: "daily" | "monthly"; window: Window }
+  | { allow: false; reason: "unpriceable" };
 
 /**
  * Decide whether a call may start, and with what search cap.
@@ -119,6 +120,28 @@ export function reserveVerdict(input: {
   centsPerSearch: number;
 }): ReserveVerdict {
   if (!isMetered(input.tier)) return { allow: true, maxSearches: null };
+
+  // A search this provider prices at zero (or below) is not a cheap search, it
+  // is an UNPRICEABLE one, and the metered call is refused rather than run.
+  //
+  // Without this, `remaining / 0` is Infinity: it is a number, so it passes
+  // mustRefuseSearch, becomes `max_uses: Infinity`, and serialises to JSON as
+  // `null` — silently uncapped, which is the exact outcome searchCapEnforcement
+  // exists to make impossible. Not hypothetical: Gemini bills per grounded
+  // REQUEST, so a per-search cost of zero is what that adapter will produce.
+  //
+  // Refused rather than treated as an unenforceable cap, and the two are the
+  // same decision anyway — mustRefuseSearch already refuses a metered call whose
+  // ceiling cannot be enforced in-request, and a ceiling that cannot be
+  // converted into a number of searches is unenforceable in exactly that sense.
+  // It refuses metered calls that would never have searched, too: that is
+  // deliberate. This layer cannot know whether `fn` will search, and the same
+  // zero flows into reconcileSpend, so searches would be recorded at no cost
+  // either — the meter is broken for the whole call, not just its search half.
+  //
+  // Written `!(x > 0)` rather than `x <= 0` so a NaN price — an adapter that
+  // returned nothing usable at all — is refused rather than compared false.
+  if (!(input.centsPerSearch > 0)) return { allow: false, reason: "unpriceable" };
 
   for (const [reason, w] of [
     ["daily", input.daily],
@@ -157,6 +180,21 @@ export function cappedMessage(input: {
   return (
     `You've hit your $${dollars} ${input.reason} limit ${window}. ` +
     `Raise it on the Accounts page, or wait until ${input.resetsOn}.`
+  );
+}
+
+/**
+ * What a tenant is told when the resolved provider prices a search at zero.
+ *
+ * Not a limit they have hit and not something they can raise, so it does not
+ * borrow cappedMessage's wording — it is a routing fault, and the only way out
+ * is a different model. Rendered as a refusal (`capped`), not an error, because
+ * nothing failed: the call was never started.
+ */
+export function unpriceableSearchMessage(): string {
+  return (
+    "This app cannot meter searches on the model this account is routed to, " +
+    "so the request was not started. Choose a different model in Settings."
   );
 }
 

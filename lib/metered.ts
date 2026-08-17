@@ -10,6 +10,7 @@ import {
   reserveVerdict,
   resetsOn,
   resolveTier,
+  unpriceableSearchMessage,
   type Tier,
 } from "@/lib/budget";
 import { providerFor } from "@/lib/providers/registry";
@@ -142,6 +143,15 @@ export async function withBudget<T>(opts: {
 
   const verdict = reserveVerdict({ tier, daily, monthly, estimateCents: opts.estimateCents, centsPerSearch });
   if (!verdict.allow) {
+    // A search this provider prices at zero cannot be rationed at all, so the
+    // call is refused before it starts rather than run with a cap derived from
+    // a division by zero. Not a ceiling the tenant has hit, so not cappedMessage.
+    if (verdict.reason === "unpriceable") {
+      console.error(
+        `metered: ${config.providerId}/${config.model} prices a search at ${centsPerSearch}c — refusing the metered call`
+      );
+      return { capped: unpriceableSearchMessage() };
+    }
     return {
       capped: cappedMessage({
         tier,
