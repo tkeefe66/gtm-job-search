@@ -97,11 +97,11 @@ export async function saveApiKey(key: string): Promise<{ error?: string }> {
     return { error: "Anthropic rejected that key. Check it and try again." };
   }
 
-  const sealed = seal(trimmed, tenantId);
+  const sealed = seal(trimmed, { tenantId, provider: "anthropic", model: null });
   const { error } = await rawQuery(
     `insert into tenant_api_keys
-       (tenant_id, key_id, ciphertext, nonce, auth_tag, last_four, status, last_verified_at)
-     values ($1, $2, $3, $4, $5, $6, 'ok', now())
+       (tenant_id, key_id, ciphertext, nonce, auth_tag, last_four, status, last_verified_at, aad_version)
+     values ($1, $2, $3, $4, $5, $6, 'ok', now(), $7)
      on conflict (tenant_id) do update
        set key_id = excluded.key_id,
            ciphertext = excluded.ciphertext,
@@ -109,8 +109,9 @@ export async function saveApiKey(key: string): Promise<{ error?: string }> {
            auth_tag = excluded.auth_tag,
            last_four = excluded.last_four,
            status = 'ok',
-           last_verified_at = now()`,
-    [tenantId, sealed.keyId, sealed.ciphertext, sealed.nonce, sealed.authTag, lastFour(trimmed)],
+           last_verified_at = now(),
+           aad_version = excluded.aad_version`,
+    [tenantId, sealed.keyId, sealed.ciphertext, sealed.nonce, sealed.authTag, lastFour(trimmed), sealed.aadVersion],
     tenantId
   );
   const described = describeWriteFailure(

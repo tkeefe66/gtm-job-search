@@ -3,7 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 /**
  * Authenticated encryption for tenant-supplied API keys.
  *
- * Four decisions here, each closing a specific hole:
+ * Five decisions here, each closing a specific hole:
  *
  * 1. AES-256-GCM, not a bare cipher. Without an auth tag, ciphertext can be
  *    modified undetectably.
@@ -22,13 +22,28 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  *    also carries a unique index on it, so a bug that repeated one fails loudly
  *    rather than silently weakening every row.
  *
+ * 5. The AAD is VERSIONED, per row. Binding `provider` and `model` into it (so
+ *    the routing config cannot be swapped independently of the ciphertext it
+ *    routes) changes the AAD of every row written before that binding existed.
+ *    Those rows would stop opening, and a failed open is indistinguishable from
+ *    "this tenant stored no key" — a total, silent loss behind a plausible
+ *    screen. So each row records which AAD it was sealed under.
+ *
  * The key itself lives ONLY in an environment variable, never in Postgres.
  * Backups contain these ciphertexts; if the key were a row in a settings table,
  * one leaked backup would be every tenant's Anthropic account.
  */
 
+export interface Aad {
+  tenantId: string;
+  provider: string;
+  /** Null means "the provider's default model" and is bound as an empty string. */
+  model: string | null;
+}
+
 export interface SealedSecret {
   keyId: string;
+  aadVersion: number;
   ciphertext: string;
   nonce: string;
   authTag: string;
@@ -36,6 +51,13 @@ export interface SealedSecret {
 
 /** Names the key material in use, so rotation can tell rows apart. */
 export const CURRENT_KEY_ID = "v1";
+export const CURRENT_AAD_VERSION = 2;
+
+function aadBytes(version: number, aad: Aad): Buffer {
+  // v1: the tenant alone, as written before migration 007.
+  if (version === 1) return Buffer.from(aad.tenantId, "utf8");
+  return Buffer.from(`${aad.tenantId}|${aad.provider}|${aad.model ?? ""}`, "utf8");
+}
 
 function keyBytes(): Buffer {
   const raw = process.env.APP_ENCRYPTION_KEY ?? "";
@@ -51,13 +73,14 @@ function keyBytes(): Buffer {
   return buf;
 }
 
-export function seal(plaintext: string, tenantId: string): SealedSecret {
+export function seal(plaintext: string, aad: Aad): SealedSecret {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyBytes(), nonce);
-  cipher.setAAD(Buffer.from(tenantId, "utf8"));
+  cipher.setAAD(aadBytes(CURRENT_AAD_VERSION, aad));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   return {
     keyId: CURRENT_KEY_ID,
+    aadVersion: CURRENT_AAD_VERSION,
     ciphertext: ciphertext.toString("base64"),
     nonce: nonce.toString("base64"),
     authTag: cipher.getAuthTag().toString("base64"),
@@ -67,19 +90,20 @@ export function seal(plaintext: string, tenantId: string): SealedSecret {
 /**
  * Returns null rather than throwing on a failed open.
  *
- * A failure here means the row was tampered with, moved between tenants, or was
- * written under a key that no longer exists — all of which are "this tenant has
- * no usable key", not "the request crashed". The CALLER decides what to do, and
- * must never fall back to the platform key silently.
+ * A failure here means the row was tampered with, moved between tenants, was
+ * re-routed to a different provider or model, or was written under a key that
+ * no longer exists — all of which are "this tenant has no usable key", not "the
+ * request crashed". The CALLER decides what to do, and must never fall back to
+ * the platform key silently.
  */
-export function open(sealed: SealedSecret, tenantId: string): string | null {
+export function open(sealed: SealedSecret, aad: Aad): string | null {
   try {
     const decipher = createDecipheriv(
       "aes-256-gcm",
       keyBytes(),
       Buffer.from(sealed.nonce, "base64")
     );
-    decipher.setAAD(Buffer.from(tenantId, "utf8"));
+    decipher.setAAD(aadBytes(sealed.aadVersion, aad));
     decipher.setAuthTag(Buffer.from(sealed.authTag, "base64"));
     return Buffer.concat([
       decipher.update(Buffer.from(sealed.ciphertext, "base64")),

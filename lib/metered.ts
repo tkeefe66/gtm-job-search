@@ -181,8 +181,9 @@ async function loadTenantKey(tenantId: string): Promise<string | null> {
     ciphertext: string;
     nonce: string;
     auth_tag: string;
+    aad_version: number;
   }>(
-    `select key_id, ciphertext, nonce, auth_tag
+    `select key_id, ciphertext, nonce, auth_tag, aad_version
        from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
     [tenantId],
     tenantId
@@ -192,11 +193,12 @@ async function loadTenantKey(tenantId: string): Promise<string | null> {
   const plain = open(
     {
       keyId: data[0].key_id,
+      aadVersion: data[0].aad_version,
       ciphertext: data[0].ciphertext,
       nonce: data[0].nonce,
       authTag: data[0].auth_tag,
     },
-    tenantId
+    { tenantId, provider: "anthropic", model: null }
   );
   if (plain === null) {
     // Loud, because this is not a normal state: the row exists and cannot be
