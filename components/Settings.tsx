@@ -32,6 +32,7 @@ import {
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 import ApiKeyPanel from "./ApiKeyPanel";
+import StatusEditor from "./StatusEditor";
 
 // Setting keys are written as literals rather than imported from
 // lib/settings-store.ts on purpose: that module imports lib/supabase, which
@@ -777,6 +778,19 @@ export default function Settings() {
           resetLabel="Turn off"
         />
       </SectionCard>
+
+      {/*
+        Its own component, not a Section: Draft is all string/boolean and can't
+        hold a JobStatusDef[], and adding a Section member here would be a
+        compile error in syncSection's exhaustive switch. Guarded on `view`
+        (not `loading`) because the load effect can finish with `view` still
+        null on a thrown error, and StatusEditor requires initial: JobStatusDef[].
+      */}
+      {view && (
+        <div className="mb-4">
+          <StatusEditor initial={view.statuses} />
+        </div>
+      )}
 
       {/*
         ONE panel for the whole tenant. It was previously mounted inside
