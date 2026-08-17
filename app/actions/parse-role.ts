@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { withBudget } from "@/lib/metered";
 
 import { callWithWebSearch, clientFor, MODEL, parseJson } from "@/lib/anthropic";
 import { recordUsage } from "@/lib/billing-context";
@@ -31,12 +32,32 @@ export interface ParsedRole {
   recruiter_company: string;
 }
 
-export async function parseRecruiterText(
+/**
+ * Metered. This was billing the PLATFORM key, uncapped and unrecorded — it calls
+ * Claude and was never wrapped, so "the platform pays for nothing" was untrue
+ * before any provider work started.
+ *
+ * withBudget runs the inner function directly when a scope is already active, so
+ * wrapping this does not double-charge the paths that reach it from inside an
+ * already-metered action.
+ */
+export async function parseRecruiterText(text: string): Promise<{ role?: ParsedRole; error?: string }> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "parse-recruiter",
+    estimateCents: 10,
+    isAdmin: actor.isAdmin,
+    fn: () => parseRecruiterTextInner(text),
+  });
+  if (budget.capped) return { error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { error: budget.error };
+  return budget.result!;
+}
+
+async function parseRecruiterTextInner(
   text: string
 ): Promise<{ role?: ParsedRole; error?: string }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   try {
     const raw = await callWithWebSearch({
       system:
@@ -85,12 +106,32 @@ ${text}`,
   }
 }
 
-export async function parseJobUrl(
+/**
+ * Metered. This was billing the PLATFORM key, uncapped and unrecorded — it calls
+ * Claude and was never wrapped, so "the platform pays for nothing" was untrue
+ * before any provider work started.
+ *
+ * withBudget runs the inner function directly when a scope is already active, so
+ * wrapping this does not double-charge the paths that reach it from inside an
+ * already-metered action.
+ */
+export async function parseJobUrl(url: string): Promise<{ role?: ParsedRole; error?: string }> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "parse-job-url",
+    estimateCents: 10,
+    isAdmin: actor.isAdmin,
+    fn: () => parseJobUrlInner(url),
+  });
+  if (budget.capped) return { error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { error: budget.error };
+  return budget.result!;
+}
+
+async function parseJobUrlInner(
   url: string
 ): Promise<{ role?: ParsedRole; error?: string }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   try {
     const raw = await callWithWebSearch({
       system:
@@ -168,12 +209,32 @@ Return ONLY the JSON object.`,
  * exact: a field added to the prompt shape breaks `scoringArgsFor` at compile
  * time instead of silently scoring rescored rows blind.
  */
-export async function scoreFit(
+/**
+ * Metered. This was billing the PLATFORM key, uncapped and unrecorded — it calls
+ * Claude and was never wrapped, so "the platform pays for nothing" was untrue
+ * before any provider work started.
+ *
+ * withBudget runs the inner function directly when a scope is already active, so
+ * wrapping this does not double-charge the paths that reach it from inside an
+ * already-metered action.
+ */
+export async function scoreFit(opts: FitPromptRole & { fitInputs: FitInputs | null }): Promise<{ score: number; rationale: string; error?: string }> {
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "score-fit",
+    estimateCents: 2,
+    isAdmin: actor.isAdmin,
+    fn: () => scoreFitInner(opts),
+  });
+  if (budget.capped) return { score: 0, rationale: "", error: budget.capped };
+  // Presence, not truthiness: an unreachable database reports an empty message.
+  if (budget.error !== undefined) return { score: 0, rationale: "", error: budget.error };
+  return budget.result!;
+}
+
+async function scoreFitInner(
   opts: FitPromptRole & { fitInputs: FitInputs | null }
 ): Promise<{ score: number; rationale: string; error?: string }> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
     // clientFor(), NOT the module-level `anthropic` client. scoreFit is the one

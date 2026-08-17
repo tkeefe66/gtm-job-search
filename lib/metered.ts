@@ -1,7 +1,7 @@
 import { rawQuery } from "@/lib/supabase";
 import { open } from "@/lib/secret-box";
 import { resolveTenantId } from "@/lib/tenant";
-import { runWithBilling, type BillingScope } from "@/lib/billing-context";
+import { runWithBilling, billingScope, type BillingScope } from "@/lib/billing-context";
 import { reserveSpend, reconcileSpend } from "@/lib/usage-store";
 import {
   CENTS_PER_SEARCH,
@@ -82,6 +82,18 @@ export async function withBudget<T>(opts: {
   isAdmin: boolean;
   fn: () => Promise<T>;
 }): Promise<MeteredResult<T>> {
+  // NESTED CALLS RUN DIRECTLY. scoreFit is metered in its own right — it is
+  // callable straight from the client — but it also runs inside ingestRoles,
+  // which is already inside a metered action. Without this guard the inner call
+  // would reserve a second time against the same budget and record a second
+  // event, double-charging every role a search finds.
+  //
+  // The outer scope still collects the inner call's usage, because
+  // recordUsage writes to whichever scope is active.
+  if (billingScope() !== null) {
+    return { result: await opts.fn() };
+  }
+
   const tenantId = await resolveTenantId();
   const now = new Date();
 

@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// The budget wrapper is bypassed: this suite asserts that a FAILED parse always
+// carries a message, and withBudget reaches the database for tiers and counters
+// before the parse runs. Budget behaviour is pinned in lib/budget.test.ts.
+vi.mock("@/lib/metered", () => ({
+  withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
+}));
+
+
 // The session guard is mocked, not exercised: these tests are about each
 // action's own failure reporting, and requireActor() would otherwise throw
 // before any of that ran. That the guard EXISTS on every action is asserted
