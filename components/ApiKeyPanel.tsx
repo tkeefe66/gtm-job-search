@@ -77,7 +77,7 @@ export default function ApiKeyPanel() {
         <p className="mt-3 text-sm text-[#166534]">Key verified with Anthropic and saved.</p>
       )}
 
-      {status.present ? (
+      {status.present && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <span className="rounded border border-slate px-2 py-1 font-mono text-sm text-ink/70">
             sk-ant-…{status.lastFour}
@@ -96,40 +96,54 @@ export default function ApiKeyPanel() {
             Remove
           </button>
         </div>
-      ) : (
-        <div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <input
-              type="password"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="sk-ant-…"
-              autoComplete="off"
-              className="w-80 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
-            />
-            <input
-              type="text"
-              value={modelDraft}
-              onChange={(e) => setModelDraft(e.target.value)}
-              placeholder={ANTHROPIC_DEFAULT_MODEL}
-              autoComplete="off"
-              className="w-56 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
-            />
-            <button
-              disabled={busy || draft.trim().length === 0}
-              onClick={() => void save()}
-              className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
-            >
-              {busy ? "Verifying…" : "Save key"}
-            </button>
-          </div>
-          <p className="mt-2 text-sm text-ink/60">
-            Optional. Leave blank for the default, {ANTHROPIC_DEFAULT_MODEL}. Changing the model
-            re-saves the key, so you will need to paste it again — the stored key is bound
-            to the model it runs on and is never read back.
-          </p>
-        </div>
       )}
+
+      {/*
+        The form renders in BOTH states, model field included. It used to render
+        only when no key was stored, which meant a tenant with a key could not
+        change their model without removing the key first — and the sentence
+        explaining that a model change costs you a re-paste appeared at the one
+        moment there was nothing to re-paste, and was hidden at the moment it
+        applied. Only the copy differs now.
+      */}
+      <div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            type="password"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="sk-ant-…"
+            autoComplete="off"
+            className="w-80 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+          />
+          <input
+            type="text"
+            value={modelDraft}
+            onChange={(e) => setModelDraft(e.target.value)}
+            placeholder={status.model ?? ANTHROPIC_DEFAULT_MODEL}
+            autoComplete="off"
+            className="w-56 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+          />
+          <button
+            disabled={busy || draft.trim().length === 0}
+            onClick={() => void save()}
+            className="rounded-lg bg-ink px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+          >
+            {busy ? "Verifying…" : status.present ? "Replace key" : "Save key"}
+          </button>
+        </div>
+        <p className="mt-2 text-sm text-ink/60">
+          {status.present ? (
+            <>
+              To change the model, type it here and paste your key again. There is no way
+              around the re-paste: the stored key is bound to the model it runs on and is
+              never read back, so it cannot be re-sealed against a new model on its own.
+            </>
+          ) : (
+            <>Optional. Leave blank for the default, {ANTHROPIC_DEFAULT_MODEL}.</>
+          )}
+        </p>
+      </div>
     </section>
   );
 }
