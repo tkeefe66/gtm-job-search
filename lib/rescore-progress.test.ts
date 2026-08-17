@@ -5,6 +5,7 @@ import {
   compRescoreOffer,
   fitBrainRescoreOffer,
   maxRescoreBatches,
+  onboardingRescoreOffer,
   passDrained,
   rescoreCostDollars,
   rescoreErrorText,
@@ -16,6 +17,7 @@ import {
   UNDESCRIBED_RESCORE_ERROR,
   type CompRescoreOfferInput,
   type FitBrainRescoreOfferInput,
+  type OnboardingRescoreOfferInput,
   type RescoreBatchResult,
   type RescoreOfferSession,
   type RescoreOfferView,
@@ -454,6 +456,19 @@ const COMP_SCORING = () => reasonFrom({}, {}, "compensation");
 const EDIT = () => reasonFrom({}, { floorEditedThisSession: true }, "compensation");
 const FIT_BRAIN = () => reasonFrom({ fitBrainOverridden: true }, {}, "fitBrain");
 
+// onboardingRescoreOffer is not one of rescoreOffers' two sections, so it
+// needs its own lazy constructor rather than reasonFrom.
+function ONBOARDING(overrides: Partial<OnboardingRescoreOfferInput> = {}) {
+  const value = onboardingRescoreOffer({
+    scoredJobCount: 26,
+    wasAlreadyOnboarded: true,
+    dismissed: false,
+    ...overrides,
+  });
+  if (value === null) throw new Error("no onboarding offer for this input");
+  return value;
+}
+
 describe("rescorePromptQuestion", () => {
   test("the day-one wording claims nothing it cannot know", () => {
     const s = rescorePromptQuestion(COMP_SCORING(), 26);
@@ -494,6 +509,23 @@ describe("rescorePromptQuestion", () => {
     const s = rescorePromptQuestion(EDIT(), 26);
     expect(s).toContain("Saved.");
     expect(s).toContain("this edit");
+  });
+
+  test("the onboarding wording says a save happened and is its own string", () => {
+    // A re-run's Finish button really did just call saveProfile, so — unlike
+    // the day-one comp-scoring and fit-brain wordings — this one may claim it.
+    const s = rescorePromptQuestion(ONBOARDING(), 26);
+    expect(s).toContain("Saved.");
+    expect(s).toContain("this edit");
+    expect(s).not.toEqual(rescorePromptQuestion(EDIT(), 26));
+    expect(
+      new Set([
+        rescorePromptQuestion(COMP_SCORING(), 26),
+        rescorePromptQuestion(FIT_BRAIN(), 26),
+        rescorePromptQuestion(EDIT(), 26),
+        s,
+      ]).size
+    ).toBe(4);
   });
 
   test("every wording quotes the figure the pass actually bills", () => {
@@ -641,6 +673,35 @@ describe("fitBrainRescoreOffer", () => {
   test("dismissal and an empty pipeline each suppress it", () => {
     expect(fitBrainRescoreOffer({ ...BARE_LOAD, dismissed: true })).toBeNull();
     expect(fitBrainRescoreOffer({ ...BARE_LOAD, scoredJobCount: 0 })).toBeNull();
+  });
+});
+
+describe("onboardingRescoreOffer", () => {
+  const RE_RUN: OnboardingRescoreOfferInput = {
+    scoredJobCount: 26,
+    wasAlreadyOnboarded: true,
+    dismissed: false,
+  };
+
+  test("a re-run with scored rows offers a rescore", () => {
+    expect(onboardingRescoreOffer(RE_RUN)).toBe("onboarding");
+  });
+
+  test("a FIRST run never offers — there is nothing to rescore yet", () => {
+    // The guard this function exists to encode: without it, a brand-new
+    // tenant with zero scored rows would still pass scoredJobCount <= 0 and
+    // return null today, but a future caller that seeds scoredJobCount from
+    // the wrong snapshot must not be able to offer a rescore before a first
+    // profile has ever produced a score.
+    expect(onboardingRescoreOffer({ ...RE_RUN, wasAlreadyOnboarded: false })).toBeNull();
+  });
+
+  test("nothing scored yet offers nothing, even on a re-run", () => {
+    expect(onboardingRescoreOffer({ ...RE_RUN, scoredJobCount: 0 })).toBeNull();
+  });
+
+  test("dismissal suppresses it", () => {
+    expect(onboardingRescoreOffer({ ...RE_RUN, dismissed: true })).toBeNull();
   });
 });
 

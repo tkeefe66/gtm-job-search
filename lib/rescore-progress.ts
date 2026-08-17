@@ -48,8 +48,15 @@ export function rescoreCostDollars(count: number): number {
  *   DEPLOY, and the offer is firing on a bare page load.
  * - "fit-brain": nobody saved anything this session either, but a customized
  *   fit brain is stored, so the scores may not match it.
+ * - "onboarding": a RE-RUN of onboarding just replaced the fit brain, its
+ *   tails, title scope and domain bonus wholesale — every row scored under
+ *   the previous career is now stale. Unlike the other three this one has no
+ *   server stamp: components/Onboarding.tsx unmounts the moment Finish
+ *   navigates to /discover, so there is no later page load for a stamp to
+ *   gate — the offer either fires now, in the same render that knows a save
+ *   just happened, or never.
  */
-type RescoreReasonKind = "edit" | "comp-scoring" | "fit-brain";
+type RescoreReasonKind = "edit" | "comp-scoring" | "fit-brain" | "onboarding";
 
 declare const REASON_BRAND: unique symbol;
 
@@ -144,6 +151,38 @@ export function fitBrainRescoreOffer(
   if (input.scoredJobCount <= 0) return null;
   if (input.fitBrainEditedThisSession) return reason("edit");
   return input.fitBrainOverridden ? reason("fit-brain") : null;
+}
+
+export interface OnboardingRescoreOfferInput {
+  /** Rows carrying a fit score, read fresh after saveProfile commits. */
+  scoredJobCount: number;
+  /**
+   * Was this tenant already onboarded when THIS run started? A first run has
+   * nothing to rescore — every job that could be stale does not exist yet,
+   * because nothing could be scored before a profile existed at all.
+   */
+  wasAlreadyOnboarded: boolean;
+  dismissed: boolean;
+}
+
+/**
+ * Whether to offer a rescore right after Finish saves a re-run.
+ *
+ * Out here for the usual reason: this repo does not unit-test React, and the
+ * `wasAlreadyOnboarded` guard is exactly the kind of clause that is invisible
+ * from inside a component and easy to drop by accident — dropping it would
+ * offer to rescore zero rows on every first-time onboarding, which is
+ * harmless but wrong, or worse, would be the only thing standing between a
+ * correct gate and one that fires before saveProfile's own commit is even
+ * read back.
+ */
+export function onboardingRescoreOffer(
+  input: OnboardingRescoreOfferInput
+): RescoreReason | null {
+  if (input.dismissed) return null;
+  if (!input.wasAlreadyOnboarded) return null;
+  if (input.scoredJobCount <= 0) return null;
+  return reason("onboarding");
 }
 
 /**
@@ -241,6 +280,13 @@ export function rescorePromptQuestion(why: RescoreReason, count: number): string
     return (
       `Your fit brain is customized. ${roles} ` +
       `${count === 1 ? "has a score" : "have scores"} that may not reflect it. ` +
+      `Rescore ${them} for about $${dollars}?`
+    );
+  }
+  if (why === "onboarding") {
+    return (
+      `Saved. Your profile changed, and ${roles} ` +
+      `${count === 1 ? "carries a score" : "carry scores"} from before this edit. ` +
       `Rescore ${them} for about $${dollars}?`
     );
   }

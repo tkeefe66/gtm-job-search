@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { answersAreComplete, cachesOnboardingClears, generationFailure } from "./onboarding-rules";
+import { answersAreComplete, generationFailure, sampleRoleFor } from "./onboarding-rules";
 import { DEFAULT_PROFILE } from "./profile";
 
 describe("answersAreComplete", () => {
@@ -54,26 +54,39 @@ describe("answersAreComplete", () => {
   });
 });
 
-describe("cachesOnboardingClears", () => {
-  test("clears every cache the criteria keys it writes would clear", () => {
-    // Derived from lib/settings-effects.ts, never hand-listed: a new cache
-    // added to CACHES_TO_CLEAR must reach onboarding too, and a hand-copy is
-    // how the two drift.
-    expect(cachesOnboardingClears()).toEqual(
-      expect.arrayContaining(["role_searches", "discovered_roles"])
-    );
-  });
-
-  test("never clears jobs — that is the user's pipeline, not a cache", () => {
-    expect(cachesOnboardingClears()).not.toContain("jobs");
-  });
-});
-
 describe("generationFailure", () => {
   test("does not name the database — the failure is Claude or the parse", () => {
     // UNDESCRIBED_DB_ERROR names the database and would be a false sentence
     // here. Same ruling scoreFit's catch follows.
     expect(generationFailure()).not.toMatch(/database/i);
     expect(generationFailure().length).toBeGreaterThan(0);
+  });
+});
+
+describe("sampleRoleFor", () => {
+  test("uses the first non-blank title and location", () => {
+    const role = sampleRoleFor({
+      titles: ["", "  ", "CNC Programmer", "Machinist"],
+      locations: ["", "Denver"],
+    });
+    expect(role.role_title).toBe("CNC Programmer");
+    expect(role.location).toBe("Denver");
+  });
+
+  test("falls back to a generic title and an empty location when neither is given", () => {
+    const role = sampleRoleFor({ titles: [], locations: [] });
+    expect(role.role_title.length).toBeGreaterThan(0);
+    expect(role.location).toBe("");
+  });
+
+  test("invents nothing beyond title and location — every other field is empty", () => {
+    // The whole point of the sample is to sanity-check the fit brain and
+    // title scope, not to see how the model reacts to a fabricated company.
+    const role = sampleRoleFor({ titles: ["Charge Nurse"], locations: ["Austin"] });
+    expect(role.company_description).toBe("");
+    expect(role.key_skills).toBe("");
+    expect(role.fit_summary).toBe("");
+    expect(role.department).toBe("");
+    expect(role.salary_range).toBe("");
   });
 });

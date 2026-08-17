@@ -34,7 +34,8 @@ import {
   type Profile,
 } from "@/lib/profile";
 import { validateList } from "@/lib/criteria-validation";
-import { answersAreComplete, cachesOnboardingClears, generationFailure } from "@/lib/onboarding-rules";
+import { answersAreComplete, generationFailure } from "@/lib/onboarding-rules";
+import { cachesOnboardingClears } from "@/lib/onboarding-caches";
 import {
   CRITERIA_CHANGED_AT_KEY,
   ONBOARDED_AT_KEY,
