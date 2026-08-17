@@ -1,0 +1,59 @@
+Score how well this role fits this candidate on a scale of 1-5. Be ruthless.
+
+CANDIDATE:
+A candidate who does GTM systems.
+- Targets roles paying at least $180,000 base. Below that is a weaker fit unless the equity or building opportunity is exceptional.
+
+ROLE:
+Company: Acme
+Company description: B2B SaaS for widgets
+Title: Head of RevOps
+Department: Revenue
+Location: Denver, CO
+Posted compensation: $210,000 - $240,000
+ARR: $380M+ ARR
+Backer / investor: Centerbridge Partners
+Exit signal: PE exit planned
+Key skills required: Salesforce, Marketo
+Summary: Broad GTM systems ownership
+
+SCORING GUIDE:
+1 = Poor fit — wrong industry, no relevant overlap, or clearly too junior/unrelated
+2 = Weak fit — some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope
+3 = Moderate fit — relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside
+4 = Strong fit — clear domain alignment AND scope at or near the level the candidate says they are targeting (broad ownership of their stated stack, hands-on systems + AI/agentic building, or explicit cross-functional leadership even without the matching title)
+5 = Exceptional fit — almost tailor-made: the function, the level, and the company type the candidate states they are targeting, all at once
+
+COMPENSATION (the candidate stated a minimum base above — apply it):
+- Posted base clearly below that minimum = cap the score at 3 no matter how strong the rest of the fit is, and say so in the rationale. Do not drop it below what the rest of the fit earns; a below-floor role is a real role the candidate may still want to see.
+- Posted base range whose TOP only reaches that minimum = treat it as below too, and cap at 3 the same way. Reaching the number would take negotiating to the absolute ceiling of the band, which is not meeting a minimum.
+- Posted base above the minimum, meaning the top of the range clears it outright = no adjustment. Do not reward pay above the floor.
+- No base published, or an OTE / on-target figure only = no adjustment either way. OTE bundles commission and is not a base figure — never treat it as one, and never guess a base from it.
+
+SENIORITY IS RELATIVE TO THE CANDIDATE, NEVER ABSOLUTE: judge level against what
+the candidate says they want, not against a fixed ladder. A hands-on IC role is a
+5 for someone who states they want to stay hands-on, and a 2 for someone
+targeting a VP seat. Do NOT deduct for a role being "only" IC or manager level
+unless the candidate asked for something more senior.
+
+FINANCIAL SIGNALS — UPWARD ONLY, and only if the candidate cares:
+These describe company stage, equity and liquidity. Apply them ONLY to the extent
+the candidate's own words reference caring about company stage, equity, growth or
+exit. If the candidate never mentions those things, treat company financials as
+NEUTRAL and score on function, level and domain alone.
+- High ARR ($100M+) with a clear exit signal (PE exit, IPO path) = strong upward signal — equity likely meaningful, role has real scope
+- PE-backed with exit planned = structured liquidity event coming, high upside if the fit is there — bump score +0.5 if other signals are strong
+- Top-tier backer (a16z, Sequoia, Benchmark, General Catalyst, etc.) = legitimacy signal, bump slightly
+- Very high ARR ($500M+) at a PE-backed company heading to exit = rare opportunity signal, weight positively
+- ABSENCE OF THIS DATA IS NOT A DEDUCTION. Unknown backer, unknown ARR, unlisted
+  stage, or no AI/transformation mandate must NEVER lower a score or cap it below
+  what the function, level and domain fit earn on their own. Most postings do not
+  publish financials; treating silence as a negative would cap every role at a
+  company that simply did not say. Say nothing about it in the rationale rather
+  than citing it as a reason.
+
+Return a JSON object with:
+- score (integer 1-5)
+- rationale (string, 1-2 blunt sentences explaining the score)
+
+Return ONLY the JSON object.

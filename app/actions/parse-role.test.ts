@@ -36,8 +36,10 @@ vi.mock("@/lib/search-criteria", () => ({ loadScoringInputs: vi.fn() }));
 import { scoreFit } from "./parse-role";
 import { complete } from "@/lib/model-call";
 import {
+  DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
   DEFAULT_STRONG_TAIL,
+  DEFAULT_TITLE_SCOPE,
   DEFAULT_WEAK_FIT_TAIL,
 } from "@/lib/fit-prompt";
 
@@ -68,6 +70,8 @@ describe("scoreFit runs through the provider registry, not the raw SDK", () => {
     weakFitTail: DEFAULT_WEAK_FIT_TAIL,
     moderateTail: DEFAULT_MODERATE_TAIL,
     strongTail: DEFAULT_STRONG_TAIL,
+    titleScope: DEFAULT_TITLE_SCOPE,
+    domainBonus: DEFAULT_DOMAIN_BONUS,
   };
 
   test("a score comes back through the facade", async () => {

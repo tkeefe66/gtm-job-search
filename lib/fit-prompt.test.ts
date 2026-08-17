@@ -7,13 +7,16 @@ import {
   buildFitPrompt,
   compFloorLine,
   compScoringClause,
+  DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
   DEFAULT_STRONG_TAIL,
+  DEFAULT_TITLE_SCOPE,
   DEFAULT_WEAK_FIT_TAIL,
   formatDollars,
 } from "./fit-prompt";
 import {
   FIXTURE_BRAIN,
+  FIXTURE_EMPTY_BLOCKS,
   FIXTURE_NO_FLOOR,
   FIXTURE_ROLE,
   FIXTURE_WITH_FLOOR,
@@ -27,6 +30,7 @@ const ROLE = FIXTURE_ROLE;
 const BRAIN = FIXTURE_BRAIN;
 const NO_FLOOR: FitInputs = FIXTURE_NO_FLOOR;
 const WITH_FLOOR: FitInputs = FIXTURE_WITH_FLOOR;
+const EMPTY_BLOCKS: FitInputs = FIXTURE_EMPTY_BLOCKS;
 
 /** The section of the prompt between two headings, for position assertions. */
 function between(prompt: string, from: string, to: string): string {
@@ -256,6 +260,8 @@ describe("buildFitPrompt", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
     expect(prompt).toContain("Chief Waffle Officer.");
     expect(prompt).not.toContain("Tom Keefe");
@@ -283,6 +289,8 @@ describe("buildFitPrompt", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     };
     buildFitPrompt(ROLE, inputs);
     expect(inputs.fitBrain).toBe(BRAIN);
@@ -365,12 +373,14 @@ describe("buildFitPrompt", () => {
  *
  *   npx tsx -e 'import {writeFileSync} from "fs";
  *     import {buildFitPrompt} from "./lib/fit-prompt";
- *     import {FIXTURE_ROLE, FIXTURE_NO_FLOOR, FIXTURE_WITH_FLOOR}
+ *     import {FIXTURE_ROLE, FIXTURE_NO_FLOOR, FIXTURE_WITH_FLOOR, FIXTURE_EMPTY_BLOCKS}
  *       from "./lib/__fixtures__/fit-prompt-inputs";
  *     writeFileSync("lib/__fixtures__/fit-prompt.no-floor.txt",
  *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_NO_FLOOR));
  *     writeFileSync("lib/__fixtures__/fit-prompt.with-floor.txt",
- *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_WITH_FLOOR));'
+ *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_WITH_FLOOR));
+ *     writeFileSync("lib/__fixtures__/fit-prompt.empty-blocks.txt",
+ *       buildFitPrompt(FIXTURE_ROLE, FIXTURE_EMPTY_BLOCKS));'
  *
  * Deliberately not a snapshot library: `toMatchSnapshot` writes a missing
  * snapshot on first run and `-u` rewrites a failing one, so the guard can be
@@ -414,6 +424,17 @@ describe("the rendered prompt, against its fixture", () => {
     expect(changedLines(actual, fixture)).toEqual([]);
   });
 
+  test("with titleScope and domainBonus both empty, matches fit-prompt.empty-blocks.txt exactly", () => {
+    // titleScopeBlock and domainBonusBlock both return "" here — the proof
+    // that both blocks vanish cleanly (no bare heading, no dangling carve-out,
+    // no doubled blank line) rather than merely that a non-empty default
+    // renders correctly.
+    const fixture = read("fit-prompt.empty-blocks.txt");
+    const actual = buildFitPrompt(ROLE, EMPTY_BLOCKS);
+    expect(actual.split("\n").length).toBe(fixture.split("\n").length);
+    expect(changedLines(actual, fixture)).toEqual([]);
+  });
+
   test("the two fixtures differ ONLY by the three compensation splices", () => {
     // Guards the fixtures themselves. Two files that had drifted apart for an
     // unrelated reason would still each match their own rendering, and both
@@ -443,10 +464,32 @@ describe("the rendered prompt, against its fixture", () => {
     // to a model, but it is the visible symptom of a seam that assumed its
     // fragment was always non-empty — worth failing on rather than absorbing
     // into the fixture.
-    for (const name of ["fit-prompt.no-floor.txt", "fit-prompt.with-floor.txt"]) {
+    for (const name of [
+      "fit-prompt.no-floor.txt",
+      "fit-prompt.with-floor.txt",
+      "fit-prompt.empty-blocks.txt",
+    ]) {
       const lines = read(name).split("\n");
       expect(lines.length).toBeGreaterThan(0);
       expect(lines.every((l, i) => !(l === "" && lines[i - 1] === ""))).toBe(true);
     }
+  });
+
+  test("renders titleScope and domainBonus it is HANDED, never a module default", () => {
+    // Same property pinned for fitBrain above: an implementation that ignored
+    // inputs.titleScope/domainBonus and rendered DEFAULT_TITLE_SCOPE /
+    // DEFAULT_DOMAIN_BONUS instead would pass every fixture test above (they
+    // ARE the defaults) while ignoring a tenant's own text entirely. No .txt
+    // fixture for this one — an inline assertion is enough and it cannot drift.
+    const inputs: FitInputs = {
+      ...WITH_FLOOR,
+      titleScope: "- SYNTHETIC TITLE SCOPE",
+      domainBonus: "SYNTHETIC DOMAIN BONUS",
+    };
+    const prompt = buildFitPrompt(ROLE, inputs);
+    expect(prompt).toContain("- SYNTHETIC TITLE SCOPE");
+    expect(prompt).toContain("SYNTHETIC DOMAIN BONUS");
+    expect(prompt).not.toContain(DEFAULT_TITLE_SCOPE);
+    expect(prompt).not.toContain(DEFAULT_DOMAIN_BONUS);
   });
 });

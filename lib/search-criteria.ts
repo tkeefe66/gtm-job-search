@@ -15,6 +15,8 @@ import {
   DEFAULT_WEAK_FIT_TAIL,
   DEFAULT_MODERATE_TAIL,
   DEFAULT_STRONG_TAIL,
+  DEFAULT_TITLE_SCOPE,
+  DEFAULT_DOMAIN_BONUS,
 } from "@/lib/fit-prompt";
 import {
   ceilingFrom,
@@ -332,6 +334,8 @@ export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitIn
     weakFitTail: DEFAULT_WEAK_FIT_TAIL,
     moderateTail: DEFAULT_MODERATE_TAIL,
     strongTail: DEFAULT_STRONG_TAIL,
+    titleScope: DEFAULT_TITLE_SCOPE,
+    domainBonus: DEFAULT_DOMAIN_BONUS,
   };
 }
 

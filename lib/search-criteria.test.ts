@@ -34,8 +34,10 @@ import {
 } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
 import {
+  DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
   DEFAULT_STRONG_TAIL,
+  DEFAULT_TITLE_SCOPE,
   DEFAULT_WEAK_FIT_TAIL,
 } from "@/lib/fit-prompt";
 
@@ -402,6 +404,8 @@ describe("scoringInputsFrom", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
   });
 
@@ -436,19 +440,22 @@ describe("scoringInputsFrom", () => {
     expect(scoringInputsFrom(SMALL, ROWS).fitBrain).not.toBe("stored brain");
   });
 
-  test("carries nothing beyond the five scoring inputs", () => {
+  test("carries nothing beyond the seven scoring inputs", () => {
     // FitInputs is deliberately narrow: it is handed down every batch path,
     // and anything extra here would widen what the crawler and the role search
     // carry around. The keys are the contract. The three tails (weakFitTail,
-    // moderateTail, strongTail) belong here for the same reason fitBrain and
-    // compFloor do: they are scoring inputs, not extraction-time settings.
+    // moderateTail, strongTail) and the two blocks (titleScope, domainBonus)
+    // belong here for the same reason fitBrain and compFloor do: they are
+    // scoring inputs, not extraction-time settings.
     const keys = Object.keys(scoringInputsFrom(SMALL, ROWS));
-    expect(keys.length).toBe(5);
+    expect(keys.length).toBe(7);
     expect(keys.sort()).toEqual([
       "compFloor",
+      "domainBonus",
       "fitBrain",
       "moderateTail",
       "strongTail",
+      "titleScope",
       "weakFitTail",
     ]);
   });
@@ -475,6 +482,8 @@ describe("the settings loaders", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
   });
 
@@ -495,6 +504,8 @@ describe("the settings loaders", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
     // The crawl run context and the Discover ingest hand these two around
     // together; a fit brain that disagreed with the criteria object would
@@ -513,6 +524,8 @@ describe("the settings loaders", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
   });
 
@@ -524,6 +537,8 @@ describe("the settings loaders", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
     expect((await loadCriteriaAndScoringInputs()).fitInputs.compFloor).toBeNull();
     expect((await loadSearchInputs()).fitInputs.compFloor).toBeNull();
@@ -540,6 +555,8 @@ describe("the settings loaders", () => {
       weakFitTail: DEFAULT_WEAK_FIT_TAIL,
       moderateTail: DEFAULT_MODERATE_TAIL,
       strongTail: DEFAULT_STRONG_TAIL,
+      titleScope: DEFAULT_TITLE_SCOPE,
+      domainBonus: DEFAULT_DOMAIN_BONUS,
     });
     err.mockRestore();
   });

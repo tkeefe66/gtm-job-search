@@ -137,6 +137,38 @@ export function aiGtmCompCarveOut(compFloor: number | null): string {
 }
 
 /**
+ * The TITLE SCOPE SIGNALS block, heading included.
+ *
+ * The heading lives HERE and not in the template literal, because a heading in
+ * the literal renders whether or not there are bullets under it — and an empty
+ * `titleScope` would then produce a bare heading over a blank line. That is the
+ * same seam defect aiGtmCompCarveOut had, and the same shape compScoringClause
+ * already solves by owning its own leading newlines.
+ *
+ * The bullets carry no leading or trailing newline: both blank lines around the
+ * block belong to this wrapper.
+ */
+export function titleScopeBlock(titleScope: string): string {
+  if (!titleScope) return "";
+  return `\n\nTITLE SCOPE SIGNALS (use these to adjust score):\n${titleScope}`;
+}
+
+/**
+ * The domain-bonus block, with the compensation carve-out that belongs to it.
+ *
+ * The carve-out renders ONLY when there is a rule for it to override. Its text
+ * says the floor "overrides this one" — with no rule, "this one" has no
+ * referent, and every tenant with a comp floor and no domain bonus would get a
+ * dangling pronoun in the prompt that scores their every role.
+ *
+ * Behaviour is unchanged today, when the bonus is always present.
+ */
+export function domainBonusBlock(domainBonus: string, compFloor: number | null): string {
+  if (!domainBonus) return "";
+  return `\n\n${domainBonus}${aiGtmCompCarveOut(compFloor)}`;
+}
+
+/**
  * The default tails of the 2/3/4 scoring-guide clauses — see the field doc on
  * `FitInputs.weakFitTail` in lib/fit-inputs.ts for why there are three and why
  * the 1 and 5 clauses aren't here. This is today's one career hardcoded as the
@@ -148,6 +180,22 @@ export const DEFAULT_MODERATE_TAIL =
   "relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside";
 export const DEFAULT_STRONG_TAIL =
   "clear domain alignment AND scope at or near the level the candidate says they are targeting (broad ownership of their stated stack, hands-on systems + AI/agentic building, or explicit cross-functional leadership even without the matching title)";
+
+/**
+ * The default TITLE SCOPE SIGNALS bullets — the heading is owned by
+ * titleScopeBlock, not this constant. See the field doc on
+ * FitInputs.titleScope in lib/fit-inputs.ts for why this is a block rather
+ * than a clause tail like the three above.
+ */
+export const DEFAULT_TITLE_SCOPE = "- \"Head of\", \"VP\", \"Director\" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches\n- \"GTM Engineer\", \"GTM Systems\", \"AI Operations\", \"AI Ops\", \"Revenue Systems\", \"Marketing Ops Architect\", \"Agentic / Automation\" in the title = a direct match IF that is the positioning the candidate describes; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point\n- IC / practitioner builder roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) or hyper-growth B2B SaaS (Series B+) where hands-on GTM systems + agentic AI is the mandate = eligible for 4-5 regardless of title — the building, equity, learning, and impact outweigh the title\n- A narrowly-scoped role at a generic small company with no building mandate = cap at 2-3, UNLESS narrow-and-hands-on is what the candidate says they want\n- Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower";
+
+/**
+ * The default AI-DRIVEN GTM TRANSFORMATION RULE block, heading included, up
+ * to but excluding the aiGtmCompCarveOut() interpolation — domainBonusBlock
+ * appends that separately so the carve-out still gates on compFloor even
+ * when a tenant's domain bonus text is a full replacement of this one.
+ */
+export const DEFAULT_DOMAIN_BONUS = "AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):\n1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)\n2. The role is explicitly framed as leading an AI transformation of GTM, RevOps, or Marketing Operations — building AI/agentic workflows into the revenue engine, not just \"uses AI\"\n3. The domain is within 1 degree of THE CANDIDATE's background as stated above (adjacent industry, adjacent function, or any vertical where the experience they describe transfers)\n→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the kind of mandate the candidate describes wanting.\n→ If the domain requires deep vertical expertise the candidate does not claim (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — they would spend year 1 learning the domain rather than building.";
 
 /**
  * The full user-turn prompt for one fit score.
@@ -186,14 +234,7 @@ SENIORITY IS RELATIVE TO THE CANDIDATE, NEVER ABSOLUTE: judge level against what
 the candidate says they want, not against a fixed ladder. A hands-on IC role is a
 5 for someone who states they want to stay hands-on, and a 2 for someone
 targeting a VP seat. Do NOT deduct for a role being "only" IC or manager level
-unless the candidate asked for something more senior.
-
-TITLE SCOPE SIGNALS (use these to adjust score):
-- "Head of", "VP", "Director" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches
-- "GTM Engineer", "GTM Systems", "AI Operations", "AI Ops", "Revenue Systems", "Marketing Ops Architect", "Agentic / Automation" in the title = a direct match IF that is the positioning the candidate describes; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point
-- IC / practitioner builder roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) or hyper-growth B2B SaaS (Series B+) where hands-on GTM systems + agentic AI is the mandate = eligible for 4-5 regardless of title — the building, equity, learning, and impact outweigh the title
-- A narrowly-scoped role at a generic small company with no building mandate = cap at 2-3, UNLESS narrow-and-hands-on is what the candidate says they want
-- Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower
+unless the candidate asked for something more senior.${titleScopeBlock(inputs.titleScope)}
 
 FINANCIAL SIGNALS — UPWARD ONLY, and only if the candidate cares:
 These describe company stage, equity and liquidity. Apply them ONLY to the extent
@@ -209,14 +250,7 @@ NEUTRAL and score on function, level and domain alone.
   what the function, level and domain fit earn on their own. Most postings do not
   publish financials; treating silence as a negative would cap every role at a
   company that simply did not say. Say nothing about it in the rationale rather
-  than citing it as a reason.
-
-AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):
-1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)
-2. The role is explicitly framed as leading an AI transformation of GTM, RevOps, or Marketing Operations — building AI/agentic workflows into the revenue engine, not just "uses AI"
-3. The domain is within 1 degree of THE CANDIDATE's background as stated above (adjacent industry, adjacent function, or any vertical where the experience they describe transfers)
-→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the kind of mandate the candidate describes wanting.
-→ If the domain requires deep vertical expertise the candidate does not claim (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — they would spend year 1 learning the domain rather than building.${aiGtmCompCarveOut(inputs.compFloor)}
+  than citing it as a reason.${domainBonusBlock(inputs.domainBonus, inputs.compFloor)}
 
 Return a JSON object with:
 - score (integer 1-5)

@@ -15,6 +15,8 @@ import {
   DEFAULT_WEAK_FIT_TAIL,
   DEFAULT_MODERATE_TAIL,
   DEFAULT_STRONG_TAIL,
+  DEFAULT_TITLE_SCOPE,
+  DEFAULT_DOMAIN_BONUS,
 } from "@/lib/fit-prompt";
 
 export const FIXTURE_BRAIN = "A candidate who does GTM systems.";
@@ -39,6 +41,8 @@ export const FIXTURE_NO_FLOOR: FitInputs = {
   weakFitTail: DEFAULT_WEAK_FIT_TAIL,
   moderateTail: DEFAULT_MODERATE_TAIL,
   strongTail: DEFAULT_STRONG_TAIL,
+  titleScope: DEFAULT_TITLE_SCOPE,
+  domainBonus: DEFAULT_DOMAIN_BONUS,
 };
 
 // 180000, not 180 or 1800: the rendered figure has to cross a thousands
@@ -49,4 +53,19 @@ export const FIXTURE_WITH_FLOOR: FitInputs = {
   weakFitTail: DEFAULT_WEAK_FIT_TAIL,
   moderateTail: DEFAULT_MODERATE_TAIL,
   strongTail: DEFAULT_STRONG_TAIL,
+  titleScope: DEFAULT_TITLE_SCOPE,
+  domainBonus: DEFAULT_DOMAIN_BONUS,
+};
+
+// Task 2: titleScope/domainBonus stripped, everything else matching
+// FIXTURE_WITH_FLOOR — proves both blocks vanish cleanly (no bare heading, no
+// dangling carve-out) when a tenant supplies no text for them.
+export const FIXTURE_EMPTY_BLOCKS: FitInputs = {
+  fitBrain: FIXTURE_BRAIN,
+  compFloor: 180000,
+  weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+  moderateTail: DEFAULT_MODERATE_TAIL,
+  strongTail: DEFAULT_STRONG_TAIL,
+  titleScope: "",
+  domainBonus: "",
 };
