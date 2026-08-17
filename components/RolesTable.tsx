@@ -684,7 +684,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   className="ml-2 rounded border border-slate bg-white px-2 py-1 text-xs text-ink disabled:opacity-50"
                 >
                   <option value="">Set status…</option>
-                  {optionsFor(statuses, "").map((d) => (
+                  {/* NOT optionsFor here, deliberately. optionsFor injects the
+                      current value so a <select> can never render a status the
+                      row doesn't hold — but this select's value is always "",
+                      reset after every pick so re-picking the same status still
+                      fires onChange, and the placeholder above already covers
+                      the empty value. Passing "" as optionsFor's `current` would
+                      inject a second, blank option alongside it. */}
+                  {statuses.filter((d) => !d.hidden).map((d) => (
                     <option key={d.key} value={d.key}>{d.label}</option>
                   ))}
                 </select>
