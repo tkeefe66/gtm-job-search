@@ -11,8 +11,15 @@ const TABS = [
   { label: "Settings", href: "/settings" },
 ];
 
-export default function Nav() {
+/**
+ * `isAdmin` is passed in from the layout (a server component) rather than read
+ * here. Nav is a client component and cannot see the session — and hiding the
+ * link would not be a control anyway: /admin and every action behind it check
+ * the role SERVER-SIDE. This only decides whether the tab is worth showing.
+ */
+export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const tabs = isAdmin ? [...TABS, { label: "Accounts", href: "/admin" }] : TABS;
 
   return (
     <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
@@ -25,7 +32,7 @@ export default function Nav() {
         </p>
       </div>
       <nav className="flex gap-1 border-b border-slate">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <Link
             key={t.href}
             href={t.href}
