@@ -163,6 +163,29 @@ export function isTenantTable(table: string): boolean {
  * what stops the value leaking to the next request that borrows this pooled
  * connection.
  */
+export async function tenantTransaction<R>(
+  tenantId: string,
+  run: (q: (text: string, values?: unknown[]) => Promise<{ rows: Row[] }>) => Promise<R>
+): Promise<R> {
+  return withTenant(tenantId, async (client) => {
+    return run((text, values = []) =>
+      client.query(text, values) as unknown as Promise<{ rows: Row[] }>
+    );
+  });
+}
+
+/**
+ * The narrow multi-statement exception.
+ *
+ * Everything else is statement-scoped on purpose — a transaction held across a
+ * request caps concurrency at the pool size and sits idle across 60-120s Claude
+ * calls. This exists for the one place that genuinely needs two writes to
+ * succeed or fail together: reserving against a daily AND a monthly budget,
+ * where committing one without the other would let a burst through or charge for
+ * a call that never ran.
+ *
+ * Keep the block SHORT and never put an external API call inside it.
+ */
 async function withTenant<R>(
   tenantId: string,
   run: (client: import("pg").PoolClient) => Promise<R>

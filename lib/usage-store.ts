@@ -1,5 +1,5 @@
-import { rawQuery } from "@/lib/supabase";
-import { billingPeriod } from "@/lib/budget";
+import { rawQuery, tenantTransaction } from "@/lib/supabase";
+import { billingPeriod, dailyPeriod } from "@/lib/budget";
 
 /**
  * The atomic reservation.
@@ -49,23 +49,46 @@ export interface ReserveResult {
 export async function reserveSpend(input: {
   tenantId: string;
   estimateCents: number;
-  ceilingCents: number;
+  dailyCeilingCents: number;
+  monthlyCeilingCents: number;
   now: Date;
 }): Promise<ReserveResult> {
-  const { data, error } = await rawQuery<{ spent_cents: number }>(
-    RESERVE_SQL,
-    [
-      input.tenantId,
-      billingPeriod(input.now),
-      input.estimateCents,
-      input.ceilingCents,
-    ],
-    input.tenantId
-  );
-  if (error) return { ok: false, spentCents: 0, error: error.message };
-  if (data.length === 0) return { ok: false, spentCents: input.ceilingCents };
-  return { ok: true, spentCents: data[0].spent_cents };
+  try {
+    return await tenantTransaction(input.tenantId, async (q) => {
+      // BOTH windows in ONE transaction. Reserving them separately could commit
+      // the daily debit and then fail the monthly one, charging a tenant for a
+      // call that never ran — or, in the other order, let a burst through.
+      const windows = [
+        { period: dailyPeriod(input.now), ceiling: input.dailyCeilingCents },
+        { period: billingPeriod(input.now), ceiling: input.monthlyCeilingCents },
+      ];
+      for (const w of windows) {
+        const r = await q(RESERVE_SQL, [
+          input.tenantId,
+          w.period,
+          input.estimateCents,
+          w.ceiling,
+        ]);
+        // Zero rows means the ceiling guard refused. Throwing rolls back
+        // whichever window was already debited in this transaction.
+        if (r.rows.length === 0) throw new BudgetRefused();
+      }
+      return { ok: true, spentCents: input.estimateCents };
+    });
+  } catch (e) {
+    if (e instanceof BudgetRefused) return { ok: false, spentCents: 0 };
+    return {
+      ok: false,
+      spentCents: 0,
+      // Verbatim, empty message included — presence is what callers branch on.
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
+
+/** Not an error condition — a refusal. Carried as a throw only so the
+ *  transaction above rolls back the window it already debited. */
+class BudgetRefused extends Error {}
 
 /**
  * Reconcile an estimate against what a call actually cost, and record the event.
@@ -93,14 +116,18 @@ export async function reconcileSpend(input: {
   const delta = input.actualCents - input.estimateCents;
 
   if (delta !== 0) {
-    const { error } = await rawQuery(
-      `update usage_counters
-          set spent_cents = greatest(0, spent_cents + $3), updated_at = now()
-        where tenant_id = $1 and period = $2`,
-      [input.tenantId, billingPeriod(input.now), delta],
-      input.tenantId
-    );
-    if (error) return { error: error.message };
+    // Both windows, or they drift apart: the daily counter would carry the
+    // estimate forever while the monthly one carried the truth.
+    for (const period of [dailyPeriod(input.now), billingPeriod(input.now)]) {
+      const { error } = await rawQuery(
+        `update usage_counters
+            set spent_cents = greatest(0, spent_cents + $3), updated_at = now()
+          where tenant_id = $1 and period = $2`,
+        [input.tenantId, period, delta],
+        input.tenantId
+      );
+      if (error) return { error: error.message };
+    }
   }
 
   const { error } = await rawQuery(
@@ -124,11 +151,12 @@ export async function reconcileSpend(input: {
 /** This period's spend, or null when the read failed — never a drained zero. */
 export async function readSpent(
   tenantId: string,
-  now: Date
+  now: Date,
+  window: "daily" | "monthly" = "monthly"
 ): Promise<{ spentCents: number | null; error?: string }> {
   const { data, error } = await rawQuery<{ spent_cents: number }>(
     `select spent_cents from usage_counters where tenant_id = $1 and period = $2`,
-    [tenantId, billingPeriod(now)],
+    [tenantId, window === "daily" ? dailyPeriod(now) : billingPeriod(now)],
     tenantId
   );
   // A failed read must NOT read as 0 — that would unlock a spent budget, which
