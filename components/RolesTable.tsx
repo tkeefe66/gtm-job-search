@@ -89,10 +89,30 @@ function Picker({ label, children }: { label: string; children: React.ReactNode 
 }
 
 /**
- * An on/off filter, sized to sit in the picker row without pretending to be a
- * picker. Same height, border and radius as PICKER_CLS so the row keeps one
- * baseline; `aria-pressed` rather than a checkbox role because it filters the
- * list immediately rather than staging a value for submission.
+ * A labelled group for controls that label themselves.
+ *
+ * A div, not the `<label>` Picker uses: its children are `<label>`s of their
+ * own, and nesting labels is invalid and makes the click target ambiguous.
+ */
+function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-xs font-medium uppercase tracking-wide text-ink/45">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * An on/off filter, in the same white bordered chassis as the pickers beside it.
+ *
+ * A real checkbox rather than a filled button: the ON state has to be legible
+ * without becoming the loudest thing on the page. A solid ink fill — which is
+ * what the old pill used, and which read fine as one chip among fifteen — sits
+ * next to four white controls here and announces itself as a primary action
+ * instead of an engaged filter. The checkbox carries the state at the size the
+ * state deserves, and `accent-ink` matches the select-all checkbox this table
+ * already uses.
  */
 function Toggle({
   on,
@@ -106,18 +126,20 @@ function Toggle({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
+    <label
       title={title}
-      aria-pressed={on}
-      className={`rounded-md border px-2.5 py-2 text-sm transition ${
-        on
-          ? "border-ink bg-ink text-white"
-          : "border-slate bg-white text-ink/70 hover:border-ink hover:text-ink"
+      className={`flex cursor-pointer items-center gap-2 rounded-md border bg-white px-2.5 py-2 text-sm transition ${
+        on ? "border-ink text-ink" : "border-slate text-ink/70 hover:border-ink hover:text-ink"
       }`}
     >
+      <input
+        type="checkbox"
+        checked={on}
+        onChange={onClick}
+        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
+      />
       {children}
-    </button>
+    </label>
   );
 }
 
@@ -825,7 +847,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
               take the pickers' height, border and label so the row still reads
               as one group; the shape difference is what says "these two are
               answered separately". */}
-          <Picker label="Pay">
+          <FieldGroup label="Pay">
             <div className="flex items-center gap-1.5">
               {/* Hidden entirely when no floor is set: with nothing to compare
                   against it would be a control that visibly does nothing. */}
@@ -846,7 +868,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                 Hide no range listed
               </Toggle>
             </div>
-          </Picker>
+          </FieldGroup>
         </div>
       </div>
 
