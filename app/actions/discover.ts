@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
@@ -35,6 +37,9 @@ export async function getAllDiscoveredStartups(): Promise<{
   fetchedAt: string | null;
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await supabase
     .from("discovered_startups")
     .select("startups, fetched_at, date_range")
@@ -67,6 +72,9 @@ export async function getDiscoveredStartups(
   dateRange: DateRange,
   searchTerm?: string
 ): Promise<{ startups: Startup[]; fetchedAt: string | null; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const term = searchTerm ?? "";
   const { data, error } = await supabase
     .from("discovered_startups")
@@ -89,6 +97,9 @@ export async function discoverStartups(
   searchTerm?: string,
   dateRange: DateRange = "7d"
 ): Promise<{ startups: Startup[]; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   try {
     const criteria = await loadCriteria();
     const focus = searchTerm

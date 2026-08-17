@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { revalidatePath } from "next/cache";
 import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
@@ -38,6 +40,9 @@ import { buildSettingsView, type SettingsView } from "@/lib/settings-view";
 import { rawQuery } from "@/lib/supabase";
 
 export async function getSettings(): Promise<SettingsView> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   // ONE read of app_settings, then derive everything from those rows.
   // loadCriteria() would read it a second time, and layering readCeiling() on
   // top would make it three — three snapshots a concurrent save could split
@@ -94,6 +99,9 @@ async function countScoredJobs(): Promise<{ count: number; error?: string }> {
 export async function countCrawlJobsMatchingTitles(
   titles: string[]
 ): Promise<{ count: number; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const patterns = titleMatchPatterns(titles);
   // No patterns means nothing is being removed. `ilike any('{}')` matches zero
   // rows and would answer 0 correctly, but spending a round trip to learn that
@@ -163,6 +171,9 @@ export async function saveCriteriaList(
   label: string,
   items: string[]
 ): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const result = validateList(items, label);
   if (!result.ok) return { error: result.error };
 
@@ -191,6 +202,9 @@ export async function saveCriteriaText(
   label: string,
   text: string
 ): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const trimmed = text.trim();
   if (!trimmed) return { error: `${label} cannot be empty.` };
 
@@ -211,6 +225,9 @@ export async function saveCriteriaText(
 }
 
 export async function saveCeiling(n: number | null): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   if (n !== null && (!Number.isInteger(n) || n < 1)) {
     return {
       error: "The search ceiling must be a whole number of at least 1, or off.",
@@ -256,6 +273,9 @@ export async function saveCeiling(n: number | null): Promise<{ error?: string }>
  * lib/settings-store.ts).
  */
 export async function saveCompFloor(n: number | null): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   if (n !== null && (!Number.isInteger(n) || n < 1)) {
     return {
       error: "The minimum base must be a whole number of at least 1, or off.",
@@ -283,6 +303,9 @@ export async function saveCompFloor(n: number | null): Promise<{ error?: string 
 
 /** Deletes the stored override, so the shipped default takes over again. */
 export async function resetSetting(key: SettingKey): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { error } = await deleteSetting(key);
   // Presence, not truthiness — see saveCriteriaList. A reset is a change to
   // the effective criteria exactly as much as a save is, so a swallowed
@@ -306,6 +329,9 @@ export async function resetSetting(key: SettingKey): Promise<{ error?: string }>
 
 /** When the crawler-relevant criteria were last edited, or null if never. */
 export async function getCriteriaChangedAt(): Promise<string | null> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   return readCriteriaChangedAt();
 }
 
@@ -339,6 +365,9 @@ export async function markCompScoringRescored(pass: {
   remaining: number | null;
   error?: string;
 }): Promise<{ error?: string; stamped: boolean }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   if (!passDrained(pass)) {
     console.warn(
       `settings: refusing to stamp the compensation rescore — the pass did not ` +
@@ -416,6 +445,9 @@ export async function rescoreAll(opts?: {
   limit?: number;
   passStartedAt?: string;
 }): Promise<RescoreResult> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   // Taken before the first write, so `remaining` counts rows THE PASS has not
   // touched. updateJob stamps updated_at, which is also what moves finished
   // rows to the back of SCORED_JOBS_SQL's ordering.

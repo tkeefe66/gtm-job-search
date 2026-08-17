@@ -1,5 +1,20 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// The session guard is mocked, not exercised: these tests are about each
+// action's own failure reporting, and requireActor() would otherwise throw
+// before any of that ran. That the guard EXISTS on every action is asserted
+// separately, in app/actions/auth-required.test.ts — mocking it here would
+// otherwise quietly delete that coverage.
+vi.mock("@/lib/require-actor", () => ({
+  requireActor: async () => ({
+    userId: "test-user",
+    tenantId: "test-user",
+    email: "test@example.com",
+    isAdmin: false,
+  }),
+}));
+
+
 // Everything in this action's graph that reaches the network, replaced. What is
 // left is the decision-making, which is the whole point: this module was
 // written off as untestable because it is `"use server"`, and that was wrong.

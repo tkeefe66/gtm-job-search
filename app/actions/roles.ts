@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
@@ -23,6 +25,9 @@ export async function getAllSavedRoles(): Promise<{
   companies: SavedCompanyRoles[];
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await supabase
     .from("discovered_roles")
     .select("company, roles, fetched_at")
@@ -38,6 +43,9 @@ export async function findAndSaveRoles(
   startup: Startup,
   force = false
 ): Promise<RolesResult & { error?: string; cached?: boolean; cacheWarning?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   // Return cached result if available and not forcing a refresh.
   if (!force) {
     const { data, error: cacheReadError } = await supabase

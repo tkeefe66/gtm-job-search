@@ -1,5 +1,6 @@
 import RolesTable from "@/components/RolesTable";
 import { readCompFloor } from "@/lib/settings-store";
+import { requireActorPage } from "@/lib/require-actor";
 
 // Rendered per request, not prerendered. This page now reads a setting, and a
 // statically generated page would bake in whatever the BUILD saw — null, since
@@ -11,5 +12,6 @@ export const dynamic = "force-dynamic";
 // round trip to RolesTable's own load(). RolesTable stays a client component;
 // it just receives the number.
 export default async function RolesPage() {
+  await requireActorPage();
   return <RolesTable compFloor={await readCompFloor()} />;
 }

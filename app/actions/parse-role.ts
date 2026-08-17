@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { callWithWebSearch, anthropic, MODEL, parseJson } from "@/lib/anthropic";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { buildFitPrompt, type FitPromptRole } from "@/lib/fit-prompt";
@@ -31,6 +33,9 @@ export interface ParsedRole {
 export async function parseRecruiterText(
   text: string
 ): Promise<{ role?: ParsedRole; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   try {
     const raw = await callWithWebSearch({
       system:
@@ -82,6 +87,9 @@ ${text}`,
 export async function parseJobUrl(
   url: string
 ): Promise<{ role?: ParsedRole; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   try {
     const raw = await callWithWebSearch({
       system:
@@ -162,6 +170,9 @@ Return ONLY the JSON object.`,
 export async function scoreFit(
   opts: FitPromptRole & { fitInputs: FitInputs | null }
 ): Promise<{ score: number; rationale: string; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
     const message = await anthropic.messages.create({

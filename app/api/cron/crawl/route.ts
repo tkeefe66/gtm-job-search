@@ -4,6 +4,7 @@ import { crawlCompany, loadRunContext, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
 import { getDueCompanies } from "@/app/actions/watchlist";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
+import { runAsPlatform } from "@/lib/platform-context";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
 // typo in the cron command) selects every due company and crawls them all
@@ -39,6 +40,19 @@ export async function GET(req: Request) {
     return new NextResponse(null, { status: 401 });
   }
 
+  // Everything past the secret check runs as the PLATFORM. This route has no
+  // browser session, but its call chain reaches server actions three levels down
+  // (crawlCompany → ingestRoles → addJob / updateJob / scoreFit) and those
+  // require one. Without this wrapper every scheduled crawl throws on every role
+  // it tries to save — and because outcomes are reported per company rather than
+  // thrown, it would read as a clean run that found nothing.
+  //
+  // Deliberately INSIDE the authorization check: the platform identity is
+  // granted by CRON_SECRET, never by reaching this file.
+  return runAsPlatform(() => handleCrawl(req));
+}
+
+async function handleCrawl(req: Request) {
   const url = new URL(req.url);
   // Any presence of `dry` means dry-run unless explicitly disabled — a flag
   // whose whole purpose is safety must fail toward *not* writing when the

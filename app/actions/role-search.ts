@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
@@ -100,6 +102,9 @@ async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
 export async function getCachedRoleSearch(
   family: RoleSearchFamily
 ): Promise<RoleSearchResult> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await readCache(family);
   if (error) {
     return { matches: [], untrackedCompanies: [], fetchedAt: null, error: error.message };
@@ -118,6 +123,9 @@ export async function findRolesByCriteria(
   family: RoleSearchFamily,
   force = false
 ): Promise<RoleSearchResult> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   if (!force) {
     const cached = await getCachedRoleSearch(family);
     // Row presence (fetchedAt set), not match count — a genuine zero-result

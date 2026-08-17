@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
@@ -153,6 +155,9 @@ export interface WatchlistEntry extends Startup {
 }
 
 export async function getWatchlist(): Promise<{ entries: WatchlistEntry[]; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await supabase
     .from("watchlist")
     .select("*")
@@ -162,6 +167,9 @@ export async function getWatchlist(): Promise<{ entries: WatchlistEntry[]; error
 }
 
 export async function addToWatchlist(startup: Startup): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   // "not found" is the normal case here (a company Discover has never seen
   // tracked before) — this is an upsert, so `found` is irrelevant and only
   // `row` is used.
@@ -224,6 +232,9 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
 // soft-disable everything else uses — see its comment). Currently has no
 // caller in the app; kept available for a future "remove entirely" action.
 export async function removeFromWatchlist(company: string): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
   const { error } = await supabase.from("watchlist").delete().eq("company", target.company);
@@ -234,6 +245,9 @@ export async function removeFromWatchlist(company: string): Promise<{ error?: st
 // last_checked_at themselves as part of a full crawl). Kept exported for a
 // lighter-weight "mark seen without crawling" action.
 export async function markChecked(company: string): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
   const { error } = await supabase
@@ -248,6 +262,9 @@ export async function getWatchedCompanyKeys(): Promise<{
   /** Present (empty string included) when the lookup failed. Presence, not truthiness. */
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   // Only rows still actively tracked count as "watched" — a company the user
   // stopped tracking (tracking_enabled = false) must be able to show up
   // un-starred in Discover again, not read as permanently claimed.
@@ -293,6 +310,9 @@ export async function getTrackedCompanies(): Promise<{
   companies: TrackedCompany[];
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await supabase
     .from("watchlist")
     .select("*")
@@ -309,6 +329,9 @@ export async function getTrackedCompanies(): Promise<{
 export async function trackCompanyByName(
   name: string
 ): Promise<{ outcome?: CrawlOutcome; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const trimmed = name.trim();
   if (!trimmed) return { error: "Enter a company name." };
 
@@ -372,6 +395,9 @@ export async function setTracking(
   company: string,
   enabled: boolean
 ): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
@@ -387,6 +413,9 @@ export async function setCareersUrl(
   company: string,
   url: string
 ): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const trimmed = url.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
     return { error: "Enter a full URL starting with http:// or https://" };
@@ -412,6 +441,9 @@ export async function setCareersUrl(
 }
 
 export async function checkCompanyNow(company: string): Promise<CrawlOutcome> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   return crawlCompany(company);
 }
 

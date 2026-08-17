@@ -1,5 +1,7 @@
 "use server";
 
+import { requireActor } from "@/lib/require-actor";
+
 import { callWithWebSearch, parseJson } from "@/lib/anthropic";
 import { cacheWriteWarning } from "@/lib/cache-write-warning";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
@@ -14,6 +16,9 @@ export async function getCachedInsights(): Promise<{
   fetchedAt?: string;
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   const { data, error } = await supabase
     .from("insights_cache")
     .select("insights, fetched_at")
@@ -30,6 +35,9 @@ export async function analyzePipeline(): Promise<{
   insights?: Insights;
   error?: string;
 }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
   try {
     const { data, error } = await supabase
       .from("jobs")
