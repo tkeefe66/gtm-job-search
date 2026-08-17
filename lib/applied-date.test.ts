@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, it, expect } from "vitest";
 import { appliedDatePatch, todayStamp } from "./applied-date";
 import { JOB_STATUSES } from "./types";
 
@@ -56,6 +56,18 @@ describe("appliedDatePatch", () => {
   test("the no-op result has no keys to spread", () => {
     expect(Object.keys(appliedDatePatch("Applied", "2026-07-01", TODAY))).toHaveLength(0);
     expect(Object.keys(appliedDatePatch("New", null, TODAY))).toHaveLength(0);
+  });
+
+  it("still stamps when Applied has been renamed, because the KEY is what is stored", () => {
+    // The user renamed "Applied" to "Submitted" on /settings. The label changed;
+    // the key did not, and the key is what reaches this function.
+    expect(appliedDatePatch("Applied", null, "2026-08-17")).toEqual({
+      applied_date: "2026-08-17",
+    });
+  });
+
+  it("does not stamp for a custom status the user added", () => {
+    expect(appliedDatePatch("take-home", null, "2026-08-17")).toEqual({});
   });
 });
 

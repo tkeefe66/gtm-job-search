@@ -1,9 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getJobs, updateJob, deleteJob, addJob } from "@/app/actions/jobs";
+import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
 import { parseJobUrl, scoreFit } from "@/app/actions/parse-role";
-import { JOB_STATUSES, ACTIVE_STATUSES, TERMINAL_STATUSES, type Job, type JobStatus } from "@/lib/types";
+import { type Job } from "@/lib/types";
+import {
+  DEFAULT_STATUSES,
+  bucketFor,
+  compareByConfig,
+  labelFor,
+  optionsFor,
+  tileCounts,
+  type JobStatusDef,
+} from "@/lib/job-statuses";
 import {
   COMP_BUCKET_TAGS,
   bucketPasses,
@@ -51,12 +60,21 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
+type StatusFilter =
+  | { kind: "sentinel"; key: "All" | "Open" | "Out" }
+  | { kind: "status"; key: string };
+
 export default function RolesTable({ compFloor }: { compFloor: number | null }) {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [statuses, setStatuses] = useState<JobStatusDef[]>(DEFAULT_STATUSES);
+  const [statusError, setStatusError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "All" | "Active" | "Out" | "Open">("Open");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>({
+    kind: "sentinel",
+    key: "Open",
+  });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showRecruiter, setShowRecruiter] = useState(false);
@@ -103,6 +121,13 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       // first for the second.
       failure = describeWriteFailure(res.error, "load your roles") ?? null;
       setJobs(res.jobs);
+
+      const cfg = await getJobStatuses();
+      setStatuses(cfg.statuses);
+      // Presence, not truthiness: the message can be empty.
+      setStatusError(cfg.error !== undefined
+        ? describeWriteFailure(cfg.error, "load your status settings")
+        : undefined);
     } catch (err) {
       failure = describeWriteFailure(
         err instanceof Error ? err.message : String(err),
@@ -180,16 +205,10 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
   useEffect(() => { void load(); }, []);
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { New: 0, Active: 0, Offer: 0, Out: 0 };
-    for (const j of jobs) {
-      if (j.status === "New") c.New++;
-      else if (ACTIVE_STATUSES.includes(j.status as JobStatus)) c.Active++;
-      else if (j.status === "Offer") c.Offer++;
-      else if (TERMINAL_STATUSES.includes(j.status as JobStatus)) c.Out++;
-    }
-    return c;
-  }, [jobs]);
+  const counts = useMemo(
+    () => tileCounts(statuses, jobs.map((j) => j.status)),
+    [jobs, statuses]
+  );
 
   /**
    * Each job's compensation bucket, computed ONCE per (jobs, compFloor) pair.
@@ -209,11 +228,9 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     return (j: Job): SalaryBucket => byId.get(j.id) ?? salaryBucketFor(j, compFloor);
   }, [jobs, compFloor]);
 
-  const FUNNEL = [
-    { label: "New", key: "New", filter: ["New"] as JobStatus[] },
-    { label: "Active", key: "Active", filter: ACTIVE_STATUSES },
-    { label: "Offer", key: "Offer", filter: ["Offer"] as JobStatus[] },
-    { label: "Out", key: "Out", filter: TERMINAL_STATUSES },
+  const FUNNEL: { label: string; key: "Open" | "Out"; count: number }[] = [
+    { label: "Open", key: "Open", count: counts.open },
+    { label: "Out", key: "Out", count: counts.out },
   ];
 
   function toggleSort(key: SortKey) {
@@ -223,15 +240,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
   const filtered = useMemo(() => {
     let list = jobs.filter((j) => {
-      if (statusFilter === "All") {
-        // show everything
-      } else if (statusFilter === "Open") {
-        if (TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
-      } else if (statusFilter === "Active") {
-        if (!ACTIVE_STATUSES.includes(j.status as JobStatus)) return false;
-      } else if (statusFilter === "Out") {
-        if (!TERMINAL_STATUSES.includes(j.status as JobStatus)) return false;
-      } else if (j.status !== statusFilter) return false;
+      if (statusFilter.kind === "status") {
+        if (j.status !== statusFilter.key) return false;
+      } else if (statusFilter.key === "Open") {
+        if (bucketFor(statuses, j.status) === "terminal") return false;
+      } else if (statusFilter.key === "Out") {
+        if (bucketFor(statuses, j.status) !== "terminal") return false;
+      }
+      // "All" falls through and shows everything.
       if (!bucketPasses(bucketOf(j), { meetsOnly, hideNoRange })) return false;
       if (search) {
         const q = search.toLowerCase();
@@ -252,6 +268,10 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         bv = b.fit_score ?? 0;
         return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
       }
+      if (sortKey === "status") {
+        const cmp = compareByConfig(statuses)(a.status, b.status);
+        return sortDir === "asc" ? cmp : -cmp;
+      }
       av = ((a[sortKey as keyof Job] as string | null) ?? "").toLowerCase();
       bv = ((b[sortKey as keyof Job] as string | null) ?? "").toLowerCase();
       if (av < bv) return sortDir === "asc" ? -1 : 1;
@@ -265,20 +285,21 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     // toggle again. compFloor reaches this list THROUGH bucketOf, which is
     // memoized on [jobs, compFloor] — a new floor makes a new bucketOf, which
     // invalidates this memo. Listing compFloor as well would be a dependency
-    // this callback no longer reads.
-  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf]);
+    // this callback no longer reads. statuses is read directly (bucketFor,
+    // compareByConfig), not just through bucketOf, so it needs its own entry.
+  }, [jobs, search, statusFilter, sortKey, sortDir, meetsOnly, hideNoRange, bucketOf, statuses]);
 
   // Counted against what is ON SCREEN, so narrowing the filter with rows ticked
   // shrinks the count instead of promising to write rows that scrolled out of
   // existence. The Set keeps the hidden ids, so widening it again restores them.
   const selectedCount = selectionInView(filtered, selected).length;
 
-  async function handleStatus(job: Job, status: JobStatus) {
+  async function handleStatus(job: Job, status: string) {
     // appliedDatePatch, not a bare { status }: the column is rendered below and
     // was written by nothing until this call site started sending it.
     const patch = { status, ...appliedDatePatch(status, job.applied_date, todayStamp()) };
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, ...patch } : j)));
-    await commitWrite(`move ${job.company} to "${status}"`, () =>
+    await commitWrite(`move ${job.company} to "${labelFor(statuses, status)}"`, () =>
       updateJob(job.id, patch)
     );
   }
@@ -327,7 +348,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
    * N reloads and one surviving sentence out of N identical ones. Here the
    * batch fails once, reloads once, and says once how much of it landed.
    */
-  async function handleBulkStatus(status: JobStatus) {
+  async function handleBulkStatus(status: string) {
     const targets = selectionInView(filtered, selected);
     if (targets.length === 0) return;
     const ids = new Set(targets.map((j) => j.id));
@@ -362,7 +383,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       setApplying(false);
     }
 
-    const failure = summarizeBulkStatus(results, status);
+    const failure = summarizeBulkStatus(results, labelFor(statuses, status));
     if (failure === null) {
       setSelected(new Set());
       return;
@@ -499,7 +520,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                 <button
                   onClick={() => {
                     setSelected(new Set(linkReport.unclear.map((r) => r.id)));
-                    setStatusFilter("Open");
+                    setStatusFilter({ kind: "sentinel", key: "Open" });
                   }}
                   className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
                 >
@@ -527,16 +548,24 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       )}
 
       {/* Funnel summary */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3">
         {FUNNEL.map((f) => (
           <button
             key={f.key}
-            onClick={() => setStatusFilter(statusFilter === f.key ? "Open" : f.key as JobStatus | "All" | "Active" | "Out")}
+            onClick={() =>
+              setStatusFilter(
+                statusFilter.kind === "sentinel" && statusFilter.key === f.key
+                  ? { kind: "sentinel", key: "Open" }
+                  : { kind: "sentinel", key: f.key }
+              )
+            }
             className={`rounded-lg border p-4 text-left transition ${
-              statusFilter === f.key ? "border-ink" : "border-slate hover:border-ink/30"
+              statusFilter.kind === "sentinel" && statusFilter.key === f.key
+                ? "border-ink"
+                : "border-slate hover:border-ink/30"
             } bg-white`}
           >
-            <div className="text-2xl font-heading font-semibold">{counts[f.key] ?? 0}</div>
+            <div className="text-2xl font-heading font-semibold">{f.count}</div>
             <div className="text-xs text-ink/60">{f.label}</div>
           </button>
         ))}
@@ -551,19 +580,21 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           className="w-full rounded-md border border-slate bg-white px-3 py-2 text-sm outline-none focus:border-ink sm:max-w-xs"
         />
         <div className="flex flex-wrap gap-2">
-          {(["Open", "All", ...JOB_STATUSES] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-                statusFilter === s
-                  ? "border-ink bg-ink text-white"
-                  : "border-slate bg-white hover:border-ink"
-              }`}
-            >
-              {s}
-            </button>
-          ))}
+          {([{ kind: "sentinel", key: "Open" }, { kind: "sentinel", key: "All" }] as StatusFilter[])
+            .concat(statuses.filter((d) => !d.hidden).map((d) => ({ kind: "status", key: d.key })))
+            .map((f) => (
+              <button
+                key={`${f.kind}:${f.key}`}
+                onClick={() => setStatusFilter(f)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                  statusFilter.kind === f.kind && statusFilter.key === f.key
+                    ? "border-ink bg-ink text-white"
+                    : "border-slate bg-white hover:border-ink"
+                }`}
+              >
+                {f.kind === "sentinel" ? f.key : labelFor(statuses, f.key)}
+              </button>
+            ))}
         </div>
       </div>
 
@@ -597,6 +628,9 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       {loading && <div className="py-12"><Spinner label="Loading roles…" /></div>}
       {error && !loading && (
         <div className="rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">{error}</div>
+      )}
+      {statusError !== undefined && !loading && (
+        <div className="mt-2 rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">{statusError}</div>
       )}
       {!loading && !error && filtered.length === 0 && (
         <div className="rounded-md border border-dashed border-slate p-12 text-center text-sm text-ink/50">
@@ -643,15 +677,15 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   value=""
                   disabled={applying}
                   onChange={(e) => {
-                    const next = e.target.value as JobStatus | "";
+                    const next = e.target.value;
                     e.target.value = "";
                     if (next) void handleBulkStatus(next);
                   }}
                   className="ml-2 rounded border border-slate bg-white px-2 py-1 text-xs text-ink disabled:opacity-50"
                 >
                   <option value="">Set status…</option>
-                  {JOB_STATUSES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
+                  {optionsFor(statuses, "").map((d) => (
+                    <option key={d.key} value={d.key}>{d.label}</option>
                   ))}
                 </select>
                 <button
@@ -742,7 +776,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     </span>
                   )}
                   <ProvenanceBadge source={job.source} />
-                  <StatusSelect value={job.status as JobStatus} onChange={(s) => handleStatus(job, s)} />
+                  <StatusSelect value={job.status} statuses={statuses} onChange={(s) => handleStatus(job, s)} />
                 </div>
               </div>
 
@@ -834,7 +868,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
       )}
 
       {showAdd && (
-        <AddPanel onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); void load(); }} />
+        <AddPanel statuses={statuses} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); void load(); }} />
       )}
       {showRecruiter && (
         <RecruiterPanel onClose={() => setShowRecruiter(false)} onAdded={() => { setShowRecruiter(false); void load(); }} />
@@ -975,15 +1009,25 @@ function StageBadge({ stage }: { stage: string }) {
   );
 }
 
-function StatusSelect({ value, onChange }: { value: JobStatus; onChange: (s: JobStatus) => void }) {
+function StatusSelect({
+  value,
+  statuses,
+  onChange,
+}: {
+  value: string;
+  statuses: JobStatusDef[];
+  onChange: (s: string) => void;
+}) {
   const style = STATUS_STYLES[value] ?? "bg-[#F3F4F6] text-[#6B7280]";
   return (
     <select
       value={value}
-      onChange={(e) => onChange(e.target.value as JobStatus)}
+      onChange={(e) => onChange(e.target.value)}
       className={`rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none cursor-pointer ${style}`}
     >
-      {JOB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+      {optionsFor(statuses, value).map((d) => (
+        <option key={d.key} value={d.key}>{d.label}</option>
+      ))}
     </select>
   );
 }
@@ -1029,20 +1073,22 @@ function InlineEdit({ value, onSave, placeholder }: { value: string; onSave: (v:
   );
 }
 
-const EMPTY_FORM = {
-  company: "", role_title: "", status: "New" as JobStatus,
-  seniority: "", location: "", job_url: "", careers_url: "",
-  category: "", salary_range: "", source: "", department: "", stage: "",
-};
-
 const EMPTY_ADD = {
   company: "", role_title: "", location: "", salary_range: "", department: "",
   job_url: "", company_url: "", company_description: "", stage: "", category: "",
   arr: "", exit_signal: "", backer: "", fit_summary: "", key_skills: "",
-  ic_flag: false, status: "New" as JobStatus,
+  ic_flag: false, status: "New",
 };
 
-function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+function AddPanel({
+  statuses,
+  onClose,
+  onAdded,
+}: {
+  statuses: JobStatusDef[];
+  onClose: () => void;
+  onAdded: () => void;
+}) {
   const [step, setStep] = useState<"url" | "review">("url");
   const [url, setUrl] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -1202,7 +1248,9 @@ function AddPanel({ onClose, onAdded }: { onClose: () => void; onAdded: () => vo
                     onChange={(e) => set("status", e.target.value)}
                     className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
                   >
-                    {JOB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {optionsFor(statuses, form.status).map((d) => (
+                      <option key={d.key} value={d.key}>{d.label}</option>
+                    ))}
                   </select>
                 </label>
               </div>

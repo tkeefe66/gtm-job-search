@@ -1,4 +1,4 @@
-import type { JobStatus } from "@/lib/types";
+import type { SystemStatusKey } from "@/lib/job-statuses";
 
 /**
  * When moving a role to "Applied" should stamp `jobs.applied_date`.
@@ -19,18 +19,18 @@ import type { JobStatus } from "@/lib/types";
 /**
  * The status this rule keys on, named rather than inlined.
  *
- * `status` is typed `JobStatus` and compared against a constant of that type,
- * so renaming the union member in lib/types.ts is a COMPILE error here. With a
- * bare `status !== "Applied"` against a `string` parameter, that rename left the
- * build green, updated the dropdown, and silently stopped stamping the column
- * forever — which is the exact failure this module was written to fix, reached
- * through the door the fix left open. CLAUDE.md's "status machinery is
- * constant-driven" applies to this file too.
+ * The PARAMETER is now `string`, because the user can add statuses and this
+ * function must be reachable with any of their keys. The safety did not move
+ * far: `APPLIED` is still typed, now as SystemStatusKey, so dropping "Applied"
+ * from the system set is still a compile error here. And the hazard the old
+ * `JobStatus` parameter guarded — a RENAME silently stopping the stamp — cannot
+ * happen any more by construction: renaming edits the label, never the key, and
+ * the key is what jobs.status stores and what arrives here.
  */
-const APPLIED: JobStatus = "Applied";
+const APPLIED: SystemStatusKey = "Applied";
 
 export function appliedDatePatch(
-  status: JobStatus,
+  status: string,
   existing: string | null,
   today: string
 ): { applied_date?: string } {
