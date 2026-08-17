@@ -1,7 +1,8 @@
 # User-editable job statuses — design
 
-**Status:** revision 3, 2026-08-15. Not yet implemented. Not yet approved —
-revision 3 changes visible UI (the tile row) and needs a decision on that.
+**Status:** revision 4, 2026-08-17. Not yet implemented. **The tile-row decision
+that blocked revision 3 is made: two tiles, Open / Out** (§"The tile row becomes
+config-driven"). Ready for implementation planning.
 
 Revision 2 went to three independent adversarial reviews and did not survive
 them. Four findings were structural rather than cosmetic, and one was
@@ -10,7 +11,13 @@ site,"* and revision 2 cited a different dead write site in the same table. Its
 line numbers were also stale throughout, computed against code that `5502b41` had
 already moved — while its own preamble asserted every citation held.
 
-**Every `file:line` in revision 3 was re-derived against `HEAD` after `5425bb7`.**
+Revision 3 asserted the same discipline and then decayed the same way: two days
+of commits moved nearly every site it cited, by 1 to 6 lines, and two of its
+claims about tenant scoping went stale because the defects were fixed.
+
+**Every `file:line` in revision 4 was re-derived against `e8b6b1b`.** A citation
+here is worth exactly as much as the date on this line — re-derive before
+implementing, do not trust this file's numbers on sight.
 
 ## Problem
 
@@ -22,17 +29,25 @@ The list is a TypeScript union at `lib/types.ts:1-14`, mirrored into three array
 drive the dropdown, the filter chips, the count tiles, and — less obviously —
 which roles the link-health pass re-verifies.
 
-**Scale check, production 2026-08-15:** 73 rows. `Posting Closed` 29, `New` 23,
-`Not Interested` 21. That sums to 73, so **every other status has zero rows —
-including `Applied`**. The entire application-pipeline half of this app has never
-been used.
+**Scale check, production 2026-08-15 — NOW STALE, re-run before implementing:**
+73 rows. `Posting Closed` 29, `New` 23, `Not Interested` 21. That sums to 73, so
+**every other status had zero rows — including `Applied`**. The entire
+application-pipeline half of this app had never been used.
+
+Two nightly crawls and any manual triage have happened since. The number matters
+to two decisions below — whether a data migration is needed, and whether the
+delete guard will ever fire in practice — so re-run it rather than quoting it:
+
+```sql
+select status, count(*) from jobs group by status order by count(*) desc;
+```
 
 Two reviewers argued from that number that the honest feature is deleting the ten
 unused statuses — one line, no new files — and that add/rename/delete is
 machinery for a pipeline with no observed use. **That argument is recorded and
 was overruled deliberately:** the feature is wanted, and a prune cannot add
-"Take-home". But it sets the bar for complexity. Revision 3 removes every
-mechanism that is not load-bearing, and the reviewers' count of incidental
+"Take-home". But it sets the bar for complexity. This design keeps only
+mechanism that is load-bearing, and the reviewers' count of incidental
 machinery is why.
 
 ## What the user asked for
@@ -47,9 +62,16 @@ no error anywhere.
 
 | Key | Touched at | Consequence if it stops existing |
 |---|---|---|
-| `New` | Written: `lib/ingest-roles.ts:142`, `components/RolesTable.tsx:1044` (`EMPTY_ADD`), `components/RecruiterPanel.tsx:37`. **Read in raw SQL**: `lib/crawler.ts:427` (`STALE_POSTING_CANDIDATES_SQL`), `lib/removed-titles.ts:68` (`CRAWL_TITLE_MATCH_SQL`). **Column default**: `db/schema.sql:14` | Ingest has nowhere to put a role; stale-posting closure stops matching |
-| `Posting Closed` | `lib/ingest-roles.ts:142`, `app/actions/link-health.ts:139,163`, `lib/crawler.ts:490` | Link repair and the crawler write a phantom status |
-| `Applied` | `lib/applied-date.ts` via `handleStatus`, `handleBulkStatus`, `AddPanel`, and `RecruiterPanel` — **four** paths as of `5425bb7`, not two | `applied_date` stops being stamped |
+| `New` | Written: `lib/ingest-roles.ts:145`, `components/RolesTable.tsx:1038` (`EMPTY_ADD`), `components/RecruiterPanel.tsx:37`. **Read in raw SQL**: `lib/crawler.ts:430` (`STALE_POSTING_CANDIDATES_SQL`), `lib/removed-titles.ts:69` (`CRAWL_TITLE_MATCH_SQL`). **Column default**: `db/schema.sql:14` | Ingest has nowhere to put a role; stale-posting closure stops matching |
+| `Posting Closed` | `lib/ingest-roles.ts:145`, `app/actions/link-health.ts:140,164`, `lib/crawler.ts:494` | Link repair and the crawler write a phantom status |
+| `Applied` | `lib/applied-date.ts` via `handleStatus`, `handleBulkStatus`, `AddPanel`, and `RecruiterPanel` — **four** paths, not two | `applied_date` stops being stamped |
+
+The two raw-SQL sites are why labels cannot be what `jobs.status` stores. Both
+interpolate nothing and match `status = 'New'` literally, and neither is
+reachable from `/settings`; a rename that rewrote rows would leave these two
+queries matching a status no row holds any more, silently disabling
+stale-posting closure with no error anywhere. `db/schema.sql:14`'s column
+default is a third site with the same property.
 
 **`Offer` is no longer on this list.** Revision 2 protected it because
 `RolesTable` hardcodes an Offer count tile. That is circular — a status made
@@ -62,7 +84,7 @@ is now enumerated and its size stated once.
 
 `ACTIVE_STATUSES` / `TERMINAL_STATUSES` are not cosmetic groupings:
 
-- `app/actions/link-health.ts:78` skips terminal roles, so the terminal set
+- `app/actions/link-health.ts:79` skips terminal roles, so the terminal set
   decides **which roles cost a liveness check**.
 - `components/RolesTable.tsx:228` — the default `"Open"` filter hides terminal
   rows, so the terminal set decides **what you see on load**.
@@ -70,8 +92,14 @@ is now enumerated and its size stated once.
 ## Storage is already free-form
 
 `db/schema.sql:14` is `status text not null default 'New'` — no CHECK, no enum.
-`Job.status` (`lib/types.ts:94`) is already `JobStatus | string`. All 73 rows hold
-one of the shipped thirteen, so **no data migration is required**.
+`Job.status` (`lib/types.ts:94`) is already `JobStatus | string`.
+
+Because built-in keys are exactly today's stored strings, **no data migration is
+required for any row holding one of the shipped thirteen** — which was every row
+as of 2026-08-15. That is a claim about data, not about code, so it expires: the
+re-run in §Problem is what confirms it still holds. A row holding anything else
+(a hand-edit, a value from the previous owner's era) resolves to no config entry
+and must render through the unknown-key path rather than being rewritten.
 
 ## Design
 
@@ -104,9 +132,9 @@ seven in `ACTIVE_STATUSES`, plus `New` and `Offer`. **`terminal` is the four in
 config is a no-op by construction, and a test pins it against `lib/types.ts`
 rather than a hand-copied list.
 
-### The tile row becomes config-driven — a visible change needing approval
+### The tile row becomes config-driven — DECIDED 2026-08-17: two tiles
 
-`RolesTable.tsx:183-210` counts into four hardcoded buckets and `:212-217` renders
+`RolesTable.tsx:186-189` counts into four hardcoded buckets and `:213-216` renders
 four tiles with hardcoded labels, comparing status by **string literal**:
 
 ```ts
@@ -119,17 +147,19 @@ Rename `New` to `Fresh` and the row above the table still reads "New", counting
 on a literal the user can no longer see. Revision 2 never touched this, so rename
 would have shipped visibly half-done.
 
-**Proposed:** two tiles — **Open** (bucket `active`) and **Out** (bucket
+**Decided:** two tiles — **Open** (bucket `active`) and **Out** (bucket
 `terminal`) — plus the per-status chip row that already exists at
-`RolesTable.tsx:552-567` and is config-driven by construction. Every job lands in
+`RolesTable.tsx:554` and is config-driven by construction. Every job lands in
 exactly one tile, so the sum invariant is true by definition rather than by test,
 and the `Other` chip, the hardcoded literals, and the branch-order hazard all
 disappear together.
 
-**This changes what you see.** New/Active/Offer/Out becomes Open/Out. Flagged
-rather than assumed — if four tiles are wanted, the alternative is a
-`pinned: boolean` on `JobStatusDef` with `New` and `Offer` pinned by default,
-which keeps four tiles at the cost of one more field and its ordering rules.
+**This changes what you see:** New/Active/Offer/Out becomes Open/Out. The New and
+Offer counts are not lost — both remain in the per-status chip row, which is
+where a count that follows a rename belongs. The rejected alternative was a
+`pinned: boolean` on `JobStatusDef` keeping four tiles; it was declined because it
+reintroduces ordering rules, a "what happens when a pinned status is deleted"
+case, and the sum-invariant test that two tiles make unnecessary.
 
 ### Keys are immutable; labels are presentation
 
@@ -159,7 +189,7 @@ hazard twice, at `components/Settings.tsx:35-39` and `lib/bulk-status.ts:1-6`.
 
 - **`lib/job-statuses.ts`** — pure, no supabase import, safe in the client bundle.
   Exports `JobStatusDef`, `StatusBucket`, `SystemStatusKey`, `SYSTEM_STATUS_KEYS`,
-  `DEFAULT_STATUSES`, `STATUS_STYLES`, `resolveStatuses`, `slugify`, `labelFor`,
+  `DEFAULT_STATUSES`, `resolveStatuses`, `slugify`, `labelFor`,
   `activeKeys`, `terminalKeys`, **`optionsFor`**, **`tileCounts`**,
   **`compareByConfig`**.
 - **The read** lives in `lib/settings-store.ts`, which already imports supabase,
@@ -168,6 +198,25 @@ hazard twice, at `components/Settings.tsx:35-39` and `lib/bulk-status.ts:1-6`.
 The last three exports are new and exist so the tests below can be written in
 `environment: "node"` — see Testing.
 
+**`STATUS_STYLES` must NOT move to `lib/`, and revision 3 had it there.**
+`tailwind.config.ts:4-7` scans `./app/**` and `./components/**` only — `lib/` is
+not a content root. The badge classes are Tailwind 3 arbitrary values
+(`bg-[#DBEAFE] text-[#1E40AF]`) that exist in the compiled CSS *solely* because
+they appear as literal strings in `components/RolesTable.tsx:22-36`. Move that map
+into `lib/job-statuses.ts` and the JIT scanner never sees them: the file compiles,
+the types check, `npm run build` is green, and every status badge in the app
+renders with no background and no color. Nothing in the test suite would catch it,
+because the map's *values* would still be the correct strings.
+
+The map stays under `components/`. Adding `./lib/**` to the content globs is the
+alternative and is worse: it makes any string in any lib module a potential class
+name and grows the CSS scan surface to serve one constant.
+
+This is also why per-status colors for custom statuses are out of scope (below).
+A user-chosen hex could never generate a class no source file contains — it would
+need either a safelist of every permitted value or an inline `style` attribute,
+and the neutral-grey fallback avoids both.
+
 ### Where it is stored
 
 One `app_settings` row under a **standalone `JOB_STATUSES_KEY` constant**, not a
@@ -175,7 +224,7 @@ member of `SETTING_KEYS`.
 
 Revision 2 added a fourth shape group, `JSON_SETTING_KEYS`, and consequently had
 to edit two green tests. Its stated reason was that `SettingKeysAreFullyClassified`
-(`lib/settings-store.ts:55-57`) rejects an array-of-objects — but that assertion
+(`lib/settings-store.ts:56`) rejects an array-of-objects — but that assertion
 only constrains keys that are *in* `SETTING_KEYS`, so the compile error was a
 consequence of revision 2's own choice, not a reason for it. The repo already has
 the right precedent: `CRITERIA_CHANGED_AT_KEY` and `COMP_SCORING_RESCORED_AT_KEY`
@@ -209,12 +258,12 @@ Blocked while rows hold it, with the count shown and a reassign picker.
 **Reassignment targets are guarded.** Revision 2 guarded `New → terminal` and
 `Posting Closed → active` as "silent footguns" and left a strictly larger one
 open: **reassigning rows *into* `New` hands them back to the automation.**
-`lib/crawler.ts:414-427` is explicit that a row the user moved out of `New` is
+`lib/crawler.ts` is explicit that a row the user moved out of `New` is
 theirs and no automated process may touch it; `STALE_POSTING_CANDIDATES_SQL`
-(`:427`) and `CRAWL_TITLE_MATCH_SQL` (`lib/removed-titles.ts:68`) both key on
-`status = 'New'`. Reassigning 21 `Not Interested` rows into `New` re-arms
+(`:430`) and `CRAWL_TITLE_MATCH_SQL` (`lib/removed-titles.ts:69`) both key on
+`status = 'New'`. Reassigning the `Not Interested` rows into `New` re-arms
 stale-posting closure against them. Reassigning any terminal status into an active
-one also re-arms the liveness billing at `app/actions/link-health.ts:78`.
+one also re-arms the liveness billing at `app/actions/link-health.ts:79`.
 
 Rule: **`New` is never a reassignment target**, and terminal → active warns inline
 with the row count and the billing consequence.
@@ -247,16 +296,22 @@ and every caller branches on presence via
   from "the database is unreachable" — the same argument `RolesTable.tsx:104`
   already applies to `getJobs()`.
 
-**Tenant safety, now rather than later.** The sibling spec
-`2026-08-15-multi-tenant-auth-design.md` adds `tenant_id` to `jobs`.
-`reassignStatus` as specified is `UPDATE jobs SET status = ... WHERE status = ...`
-with no row-owner predicate — it would rewrite **every tenant's** rows, the same
-defect class as `applySideEffects`'s unqualified
-`` rawQuery(`delete from ${table}`) `` at `app/actions/settings.ts:135`, which four
-reviews flagged. `countJobsByStatus()` would count the platform. Neither goes
-through `QueryBuilder`, so a tenant-table registry would not see them. Write both
-with an explicit owner predicate from the start: a no-op filter today, the
-difference between a scoped update and a platform-wide one later.
+**Tenant safety — the ground has shifted since revision 3, and the requirement is
+now narrower but not gone.** Multi-tenancy has since landed: `db/migrations/001_tenant_id.sql`
+put `tenant_id` on `jobs`, `watchlist`, `app_settings` and `insights_cache`,
+`db/migrations/003_rls.sql` added a `tenant_isolation` policy, and the two defects
+revision 3 cited as precedent are **fixed** — `applySideEffects`' delete is
+`` `delete from ${table} where tenant_id = $1` `` at `app/actions/settings.ts:157`,
+and both raw-SQL status reads now carry `tenant_id = $2`.
+
+The requirement on this feature is therefore not "anticipate tenancy" but "match
+what the codebase already does". `reassignStatus` and `countJobsByStatus` are raw
+SQL, so `QueryBuilder`'s tenant-table registry does not see them; they must pass a
+`tenantId` to `rawQuery` explicitly, whose own docstring says that parameter "is
+the only thing that puts a policy in front of it". RLS is a second line of defence,
+not a substitute — `lib/supabase.ts` documents that an RLS denial returns **zero
+rows rather than an error**, so an unscoped `UPDATE` that the policy blocks would
+report success having moved nothing.
 
 **Concurrency:** whole-array replace, last-write-wins across tabs. Accepted.
 
@@ -266,13 +321,13 @@ A hidden status leaves the dropdown, **but the currently selected value is alway
 injected as an option**. `StatusSelect` (`RolesTable.tsx:978-989`) is the row
 renderer as well as the editor — a `<select value={v}>` whose `value` matches no
 `<option>` renders the *first* option instead, so hiding `Not Interested` would
-make all 21 rows holding it display something else while the database disagrees.
-Same at `RecruiterPanel.tsx:266` and the add form at `RolesTable.tsx:1198`.
+make every row holding it display something else while the database disagrees.
+Same at `RecruiterPanel.tsx:266` and the add form at `RolesTable.tsx:1205`.
 
 **System statuses cannot be hidden.** Revision 2 guarded their *buckets* and left
 hiding open, which is worse: `db/schema.sql:14` still defaults to `New`,
-`lib/ingest-roles.ts:142` still writes it, and the two form defaults
-(`RolesTable.tsx:1044`, `RecruiterPanel.tsx:37`) still seed `"New"` in state. The
+`lib/ingest-roles.ts:145` still writes it, and the two form defaults
+(`RolesTable.tsx:1038`, `RecruiterPanel.tsx:37`) still seed `"New"` in state. The
 form would *display* the first visible option while `form.status` stayed `"New"`,
 saving a status the user never selected. The injection rule covers row rendering;
 it does not cover a form default that was never a selection.
@@ -290,30 +345,44 @@ re-appended with its default; duplicate keys — first wins; unknown bucket →
 `active`; empty label → the key; system bucket violations reset; `hidden` forced
 false on system keys. A repaired config is used, not written back.
 
+**A job holding a key that is in no config entry** is a separate case, and
+revision 3 left it undefined while asserting (Testing #9) that every job lands in
+exactly one tile *for any config* — which that case falsifies. It arises from a
+hand-edited row, a legacy value, or a delete whose reassignment partly failed.
+
+Rule: **an unknown key is displayed verbatim, bucketed `active`, and never
+rewritten.** `active` rather than `terminal` because the default `"Open"` filter
+hides terminal rows — bucketing it the other way would make a row the user can
+still see in the database vanish from the table with no indication why. Not
+rewritten because `jobs.status` is the only user-authored column in this app and
+the app has no backups. `labelFor` returns the raw key, so the row reads as
+whatever it actually holds. Testing #9 is restated accordingly: every job lands in
+exactly one tile for any config **and any stored status value**.
+
 ## Components
 
 | File | Change |
 |---|---|
-| `lib/job-statuses.ts` | NEW, pure. Exports listed above |
+| `lib/job-statuses.ts` | NEW, pure. Exports listed above. **No `STATUS_STYLES`** — see the Tailwind constraint |
 | `lib/job-statuses.test.ts` | NEW |
-| `lib/types.ts` | `JobStatus` narrows to `SystemStatusKey`; the three arrays deleted after `DEFAULT_STATUSES` is derived from them |
+| `lib/types.ts` | `JobStatus` narrows to `SystemStatusKey` (`:1-14`); the three arrays (`:16`, `:32`, `:42`) deleted after `DEFAULT_STATUSES` is derived from them. `Job.status` at `:94` is already `JobStatus \| string` and is unaffected |
 | `lib/settings-store.ts` | Standalone `JOB_STATUSES_KEY`; raw read |
 | `lib/settings-effects.ts` | Two `[]` entries |
 | `lib/settings-view.ts` | `statuses` added to `SettingsView` (`:21`) |
-| `app/actions/settings.ts` | `saveJobStatuses`, `countJobsByStatus`, `reassignStatus` |
-| `app/actions/jobs.ts` | `getJobStatuses()` with an error channel; also drop the unused `JobStatus` import at `:4` |
+| `app/actions/settings.ts` | `saveJobStatuses`, `countJobsByStatus`, `reassignStatus` — the last two raw SQL with an explicit `tenantId` |
+| `app/actions/jobs.ts` | `getJobStatuses()` with an error channel; also drop the now-unused `JobStatus` import at `:7` |
 | `components/Settings.tsx` | New editor — see below |
-| `components/RolesTable.tsx` | Fetch; tagged filter state; config-driven tiles; sort by config index; injected option; **delete dead `EMPTY_FORM` at `:1032`**; label in the `handleStatus` banner at `:281` |
-| `components/RecruiterPanel.tsx` | Fetch; injected option |
-| `components/ui.tsx` | Delete `StatusBadge` + its map — and `SeniorityBadge` (`:26`) and `Stars` (`:52`), also unimported |
+| `components/RolesTable.tsx` | Fetch; tagged filter state (`:59`); two config-driven tiles replacing the counts at `:186-189` and the tiles at `:213-216`; sort by config index; injected option at the three `<select>` sites `:653`, `:986`, `:1205`; keep `STATUS_STYLES` (`:22-36`) here; **delete dead `EMPTY_FORM` at `:1032`**; label in the `handleStatus` banner |
+| `components/RecruiterPanel.tsx` | Fetch; injected option (`:266`); form default (`:37`) |
+| `components/ui.tsx` | Delete `StatusBadge` + its map. **Re-verified at `e8b6b1b`: zero callers repo-wide**, and its map is stale besides — it lists `Reviewing`, which is not a `JobStatus`, and gives different colors than `RolesTable` for the same names. `SeniorityBadge` and `Stars` are also unimported and go with it |
 | `lib/bulk-status.ts` | **No change.** `summarizeBulkStatus(results, status: string)` is already `string`; the label belongs at the two call sites |
-| `app/actions/link-health.ts` | Terminal set from config |
+| `app/actions/link-health.ts` | Terminal set from config (`:79`) |
 | `lib/crawler.ts`, `lib/ingest-roles.ts` | No change — they write system keys |
 
 ### `components/Settings.tsx` has no slot for this
 
 Revision 2 said "new 'Pipeline statuses' section" and estimated ~15 files.
-`Settings.tsx` is **842 lines** built on a section-keyed model — `Section` union,
+`Settings.tsx` is **852 lines** built on a section-keyed model — `Section` union,
 `LABELS`, `Draft`, `EMPTY_DRAFT`, `draftFrom`, and `syncSection`'s exhaustive
 switch with no `default`, so a new member is a compile error. `Draft` is all
 `string`/`boolean`; a `JobStatusDef[]` does not fit it.
@@ -326,12 +395,15 @@ dependency**, so reorder is up/down buttons — not drag — unless one is added
 ### `JobStatus` narrowing is a type break, not a soft loss
 
 Revision 2 framed it as losing exhaustiveness. `RolesTable.tsx` annotates
-`JobStatus` at `:59, :213, :215, :276, :330, :646, :745, :978, :983, :1033, :1042`
-— including `handleStatus(job, status: JobStatus)` and `StatusSelect`'s props,
-both of which must accept arbitrary config keys afterward. Each needs retyping to
-`string`. Note `lib/applied-date.ts` deliberately went the *other* way in
-`5425bb7`, typing `status: JobStatus` so a rename is a compile error; it stays
-`SystemStatusKey`-typed, which is correct and unaffected.
+`JobStatus` at `:59, :187, :189, :213, :215, :229, :231, :233, :276, :330, :534,
+:646, :745, :978, :983, :1033, :1042` — including `handleStatus(job, status:
+JobStatus)` and `StatusSelect`'s props, both of which must accept arbitrary config
+keys afterward. Each needs retyping to `string`. Note `lib/applied-date.ts`
+deliberately went the *other* way, typing `status: JobStatus` so a rename is a
+compile error, and documenting at `:22-29` that a bare `string` comparison is
+exactly how `applied_date` silently stopped being stamped once before. It stays
+`SystemStatusKey`-typed, which is correct and unaffected — and it is the reason
+keys, not labels, are what `jobs.status` stores.
 
 ## Testing
 
@@ -351,8 +423,13 @@ That is why `optionsFor`, `tileCounts`, and `compareByConfig` are now exports.
 7. **`DEFAULT_STATUSES` buckets match `ACTIVE_STATUSES` / `TERMINAL_STATUSES` plus
    `New`/`Offer` as active** — pinned against `lib/types.ts`, not a copy.
 8. `optionsFor(config, current)` contains `current` even when hidden.
-9. `tileCounts` — every job lands in exactly one tile, for any config.
+9. `tileCounts` — every job lands in exactly one tile, for any config **and any
+   stored status value, including one in no config entry** (which counts as Open).
 10. `compareByConfig` orders by config index, not by label or key.
+11. **No file under `lib/` contains a Tailwind arbitrary-value class** (`/bg-\[#/`).
+    A grep-style guard, in the spirit of the existing SQL string tests: it is the
+    only mechanical way to catch the JIT failure above, which is invisible to
+    `tsc`, to `npm run build`, and to every value-level assertion.
 
 Dropped as unwritable without a DOM stack, and stated rather than silently
 omitted: direct assertions on the three `<select>` render sites, covered
@@ -366,20 +443,54 @@ active and terminal sets" cannot be violated when `bucket` is a single field, an
 
 ## Consequences worth accepting
 
-- The compiler's status guard weakens at the 11 annotations listed above.
+- The compiler's status guard weakens at the 17 annotations listed above.
   `Job.status` is already `JobStatus | string` and
   `updateJob(id, patch: Partial<Job>)` already accepts a typo today, so the loss
   is narrower than revision 1 claimed — but it is a real break, not a soft one.
 - **CLAUDE.md's "Status/filter machinery is constant-driven" paragraph becomes
   wrong**, including its "to add a status: extend the union + arrays" instruction.
-- The tile row changes shape, pending the decision above.
+  That paragraph must be rewritten in the same commit, not afterward — it is the
+  instruction a future session will follow.
+- The tile row changes shape: New/Active/Offer/Out becomes Open/Out.
 
 ## Out of scope
 
-- Per-status colors for custom statuses (neutral grey fallback).
+- Per-status colors for custom statuses (neutral grey fallback) — forced by the
+  Tailwind JIT constraint above, not merely deferred.
 - `PipelineStatus` (`lib/types.ts:50`) — verified **zero** consumers repo-wide.
 - Making the two config writes atomic; ordering plus an explicit warning covers it.
 - Drag-to-reorder.
+
+## Review corrections (revision 3 → 4)
+
+1. **`STATUS_STYLES` was placed in `lib/job-statuses.ts`, which would have shipped
+   every status badge unstyled.** `tailwind.config.ts:4-7` does not scan `lib/`,
+   and the badge classes are arbitrary values that exist only where they are
+   written literally. Green build, green tests, broken UI. The map stays in
+   `components/`; a grep guard test (Testing #11) now pins it.
+2. **The tile-row decision is made** — two tiles, Open/Out. Revision 3 could not be
+   approved without it. The `pinned: boolean` alternative is recorded as declined.
+3. **Every line number was stale again**, by 1–6 lines, two days after revision 3
+   asserted they were all re-derived. Re-derived at `e8b6b1b`, and the header now
+   says plainly that these numbers rot and must be re-checked rather than trusted.
+4. **The tenant-safety section described defects that have since been fixed.**
+   Multi-tenancy landed (`db/migrations/001_tenant_id.sql`, `003_rls.sql`);
+   `app/actions/settings.ts:157` is tenant-qualified and both raw-SQL status reads
+   carry `tenant_id = $2`. The requirement is narrowed to "pass `tenantId` to
+   `rawQuery` explicitly", with the reason RLS is not a substitute stated: a
+   policy denial returns zero rows, not an error.
+5. **The 73-row scale check is stale** and two nightly crawls have run since. It
+   is now marked as needing a re-run, with the query, rather than quoted as fact —
+   it underpins both the "no data migration" claim and the delete guard's value.
+6. **The `JobStatus` annotation list was incomplete** — 11 sites listed, 17 in the
+   file. The filter predicates at `:229-233` and the chip handler at `:534` were
+   missing.
+7. **A job holding a key in no config entry was undefined**, while Testing #9
+   asserted every job tiles for *any* config. Now specified: displayed verbatim,
+   bucketed active, never rewritten.
+8. **`ui.tsx`'s dead map is also wrong**, not just unused: it lists `Reviewing`,
+   which is not a `JobStatus`, and disagrees with `RolesTable` on shared names.
+   Recorded so the deletion is not mistaken for a lossy simplification.
 
 ## Review corrections (revision 2 → 3)
 
