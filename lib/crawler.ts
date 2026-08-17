@@ -397,10 +397,10 @@ export function closureRunsFromRows(rows: TrustworthyRunRow[]): ClosureRun[] {
  * currently listed" signal (status 'ok' or 'empty'), or [] if there is none.
  */
 async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
-  const { data } = await rawQuery<TrustworthyRunRow>(LAST_TRUSTWORTHY_RUN_SQL, [
-    company,
-    await resolveTenantId(),
-  ]);
+  const { data } = await rawQuery<TrustworthyRunRow>(LAST_TRUSTWORTHY_RUN_SQL,
+    [company, await resolveTenantId()],
+    await resolveTenantId()
+  );
   return closureRunsFromRows(data ?? []);
 }
 
@@ -472,7 +472,8 @@ async function closeStalePostings(
 ): Promise<void> {
   const { data } = await rawQuery<{ id: string; role_title: string }>(
     STALE_POSTING_CANDIDATES_SQL,
-    [company, await resolveTenantId()]
+    [company, await resolveTenantId()],
+    await resolveTenantId()
   );
 
   const active = (data ?? []).map((r) => ({
@@ -719,7 +720,8 @@ export async function crawlCompany(
               last_crawl_error = $4,
               consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end
         where company = $1 and tenant_id = $6`,
-      [company, learnedMethod, status, errorMessage ?? null, failed, await resolveTenantId()]
+      [company, learnedMethod, status, errorMessage ?? null, failed, await resolveTenantId()],
+      await resolveTenantId()
     );
     if (watchlistUpdateError) {
       // last_checked_at did not advance, so the batch scheduler will see this

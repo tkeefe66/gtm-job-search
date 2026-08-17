@@ -22,6 +22,9 @@ vi.mock("@/app/actions/jobs", () => ({
 vi.mock("@/app/actions/parse-role", () => ({
   scoreFit: vi.fn(async () => ({ score: 4, rationale: "fits" })),
 }));
+vi.mock("@/lib/tenant", () => ({
+  resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
+}));
 vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => "alive") }));
 
 import { ingestRoles } from "./ingest-roles";

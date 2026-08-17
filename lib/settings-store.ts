@@ -249,7 +249,8 @@ export async function readAllSettingsResult(): Promise<{
 }> {
   const { data, error } = await rawQuery<{ key: string; value: unknown }>(
     `select key, value from app_settings where tenant_id = $1`,
-    [await resolveTenantId()]
+    [await resolveTenantId()],
+    await resolveTenantId()
   );
   // The message is passed through verbatim, empty string included: the key
   // being PRESENT is the failure signal. See UNDESCRIBED_DB_ERROR.
@@ -306,7 +307,8 @@ export const CRITERIA_CHANGED_AT_SQL = `select value #>> '{}' as value
 export async function readCriteriaChangedAt(): Promise<string | null> {
   const { data, error } = await rawQuery<{ value: string | null }>(
     CRITERIA_CHANGED_AT_SQL,
-    [CRITERIA_CHANGED_AT_KEY, await resolveTenantId()]
+    [CRITERIA_CHANGED_AT_KEY, await resolveTenantId()],
+    await resolveTenantId()
   );
   if (error) {
     // `error` is an object here, so the branch is already presence-based; only
@@ -340,7 +342,8 @@ async function upsertSetting(
     `insert into app_settings (tenant_id, key, value, updated_at)
      values ($1, $2, $3::jsonb, now())
      on conflict (tenant_id, key) do update set value = excluded.value, updated_at = now()`,
-    [tenantId, key, JSON.stringify(value)]
+    [tenantId, key, JSON.stringify(value)],
+    tenantId
   );
   return { error: error?.message };
 }
@@ -395,7 +398,8 @@ export async function deleteSetting(key: SettingKey): Promise<{ error?: string }
   // the same defect class as applySideEffects' unqualified cache wipe.
   const { error } = await rawQuery(
     `delete from app_settings where tenant_id = $2 and key = $1`,
-    [key, await resolveTenantId()]
+    [key, await resolveTenantId()],
+    await resolveTenantId()
   );
   return { error: error?.message };
 }

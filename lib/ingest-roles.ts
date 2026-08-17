@@ -1,4 +1,5 @@
 import { rawQuery } from "@/lib/supabase";
+import { resolveTenantId } from "@/lib/tenant";
 import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import type { FitInputs } from "@/lib/fit-inputs";
@@ -81,8 +82,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
     role_title: string;
     job_url: string | null;
   }>(
-    `select role_title, job_url from jobs where ${NORMALIZED_COMPANY_SQL} = $1`,
-    [normalizeCompanyName(company)]
+    `select role_title, job_url from jobs
+      where tenant_id = $2 and ${NORMALIZED_COMPANY_SQL} = $1`,
+    [normalizeCompanyName(company), await resolveTenantId()],
+    await resolveTenantId()
   );
 
   if (error) {

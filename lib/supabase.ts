@@ -142,6 +142,66 @@ export function isTenantTable(table: string): boolean {
   return (TENANT_TABLES as readonly string[]).includes(table);
 }
 
+
+/**
+ * Runs one statement with `app.tenant_id` set for exactly that statement.
+ *
+ * STATEMENT-SCOPED, not request-scoped, and the difference is load-bearing. A
+ * transaction held for a whole request would:
+ *   - cap the app at `max` concurrent users (5), because each holds a connection;
+ *   - sit `idle in transaction` across 60-120s Claude calls in the crawl and
+ *     ingest paths;
+ *   - serialise the `Promise.all` fan-outs those paths are built on, since a
+ *     single pg client queues statements;
+ *   - and convert this codebase's log-and-continue error model into 25P02
+ *     cascades, where one failed row aborts every statement after it.
+ * The cost is two extra round trips per query. That is the right trade here.
+ *
+ * `SET LOCAL` cannot take a bind parameter, so the naive version interpolates a
+ * tenant id into the one statement that decides isolation. `set_config(..., true)`
+ * is the parameterised form — `true` meaning local to this transaction, which is
+ * what stops the value leaking to the next request that borrows this pooled
+ * connection.
+ */
+async function withTenant<R>(
+  tenantId: string,
+  run: (client: import("pg").PoolClient) => Promise<R>
+): Promise<R> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+
+    // THE ASSERTION. An RLS denial is not an error — the query succeeds and
+    // returns zero rows, which is a plausible answer for a new tenant. Every
+    // detection mechanism in this codebase (describeWriteFailure, the
+    // presence-not-truthiness rule) finds failures that were REPORTED, and this
+    // one reports nothing. Reading the GUC back converts the entire
+    // silent-empty class into the loud-error class the rest of the code already
+    // handles.
+    const { rows } = await client.query<{ v: string | null }>(
+      "select nullif(current_setting('app.tenant_id', true), '') as v"
+    );
+    if (rows[0]?.v !== tenantId) {
+      throw new Error(
+        `tenant scope did not take effect (wanted ${tenantId}, got ${rows[0]?.v ?? "unset"}) — ` +
+          `refusing to run a query that would silently return no rows`
+      );
+    }
+
+    const result = await run(client);
+    await client.query("commit");
+    return result;
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    // Always released, including on the assertion above. A leaked client is a
+    // permanent loss of 1/5th of the pool.
+    client.release();
+  }
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
   private op: Op = "select";
@@ -293,7 +353,11 @@ class QueryBuilder<T = any> implements PromiseLike<Result<T>> {
   private async execute(): Promise<Result<T>> {
     try {
       const { text, values } = this.build();
-      const res = await getPool().query(text, values);
+      // A tenant-scoped query runs with the GUC set so Postgres policies apply;
+      // a global one goes straight to the pool, unchanged.
+      const res = this.tenantId
+        ? await withTenant(this.tenantId, (c) => c.query(text, values))
+        : await getPool().query(text, values);
       if (this.rowMode === "single") {
         if (res.rows.length === 0) {
           return { data: null as T, error: { message: "No rows returned" } };
@@ -346,12 +410,23 @@ export const supabase = {
  * arithmetic, IN lists, ORDER BY ... NULLS FIRST). Returns the same
  * { data, error } shape as the builder so callers handle errors identically.
  */
+/**
+ * Escape hatch for SQL the builder cannot express.
+ *
+ * `tenantId` is OPTIONAL only because the auth adapter and the migration ledger
+ * genuinely have no tenant. Every call that touches an app table must pass one:
+ * raw SQL is invisible to the builder's registry, so this parameter is the only
+ * thing that puts a policy in front of it.
+ */
 export async function rawQuery<T = Row>(
   text: string,
-  values: unknown[] = []
+  values: unknown[] = [],
+  tenantId?: string
 ): Promise<{ data: T[]; error: { message: string } | null }> {
   try {
-    const res = await getPool().query(text, values);
+    const res = tenantId
+      ? await withTenant(tenantId, (c) => c.query(text, values))
+      : await getPool().query(text, values);
     return { data: res.rows as T[], error: null };
   } catch (e) {
     return { data: [], error: describeThrown(e) };

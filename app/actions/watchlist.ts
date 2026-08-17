@@ -66,7 +66,9 @@ interface ResolvedCompany {
 async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
   const trimmed = name.trim();
   const { data, error } = await rawQuery<ExistingCompanyRow>(
-    `select company, careers_url from watchlist`
+    `select company, careers_url from watchlist where tenant_id = $1`,
+    [await resolveTenantId()],
+    await resolveTenantId()
   );
 
   // The error used to be discarded here, which made a failed read
@@ -451,10 +453,10 @@ export async function checkCompanyNow(company: string): Promise<CrawlOutcome> {
 export async function getDueCompanies(
   limit: number = DEFAULT_BATCH_LIMIT
 ): Promise<{ companies: string[]; error?: string }> {
-  const { data, error } = await rawQuery<{ company: string }>(DUE_COMPANIES_SQL, [
-    limit,
-    await resolveTenantId(),
-  ]);
+  const { data, error } = await rawQuery<{ company: string }>(DUE_COMPANIES_SQL,
+    [limit, await resolveTenantId()],
+    await resolveTenantId()
+  );
   if (error) return { companies: [], error: error.message };
   return { companies: (data ?? []).map((r) => r.company) };
 }

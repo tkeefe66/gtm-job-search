@@ -76,12 +76,12 @@ const SCORED = `fit_score is not null`;
 export const SCORED_JOBS_SQL = `select id, company, role_title, company_description, department, location,
             key_skills, fit_summary, salary_range, arr, exit_signal, backer
        from jobs
-      where ${SCORED}
+      where tenant_id = $2 and ${SCORED}
       order by updated_at asc nulls first
       limit $1`;
 
 /** Every scored job, for the "this is what a rescore will cost" figure. */
-export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where ${SCORED}`;
+export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where tenant_id = $1 and ${SCORED}`;
 
 /**
  * Scored jobs this pass has not finished yet: everything still carrying an
@@ -97,7 +97,7 @@ export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where ${SCORED
  * permanently failing row. Stop when a batch reports `rescored === 0`.
  */
 export const SCORED_JOBS_REMAINING_SQL = `select count(*) n from jobs
-      where ${SCORED}
+      where tenant_id = $2 and ${SCORED}
         and (updated_at is null or updated_at < $1)`;
 
 /**

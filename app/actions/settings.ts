@@ -68,7 +68,11 @@ export async function getSettings(): Promise<SettingsView> {
 async function countScoredJobs(): Promise<{ count: number; error?: string }> {
   // Shares its `fit_score is not null` predicate with the rescore queries, so
   // the number shown to the user and the set rescoreAll walks cannot drift.
-  const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_COUNT_SQL);
+  const { data, error } = await rawQuery<{ n: string }>(
+    SCORED_JOBS_COUNT_SQL,
+    [await resolveTenantId()],
+    await resolveTenantId()
+  );
   if (error) {
     // `|| UNDESCRIBED_DB_ERROR` for the same reason readAllSettings uses it: pg
     // with no DATABASE_URL rejects with an EMPTY message, and both the log line
@@ -109,10 +113,10 @@ export async function countCrawlJobsMatchingTitles(
   // on every keystroke is pointless.
   if (patterns.length === 0) return { count: 0 };
 
-  const { data, error } = await rawQuery<{ n: string }>(CRAWL_TITLE_MATCH_SQL, [
-    patterns,
-    await resolveTenantId(),
-  ]);
+  const { data, error } = await rawQuery<{ n: string }>(CRAWL_TITLE_MATCH_SQL,
+    [patterns, await resolveTenantId()],
+    await resolveTenantId()
+  );
   if (error) {
     // `|| UNDESCRIBED_DB_ERROR` for the same reason its sibling countScoredJobs
     // uses it, twenty lines up: without it both strings trail off after the
@@ -148,9 +152,11 @@ async function applySideEffects(key: SettingKey): Promise<void> {
     // re-bill their next search — a denial-of-wallet reachable from the ordinary
     // settings form, with no exploit required. Migration 002 gave these tables a
     // tenant_id; this is the predicate that uses it.
-    const { error } = await rawQuery(`delete from ${table} where tenant_id = $1`, [
-      await resolveTenantId(),
-    ]);
+    const { error } = await rawQuery(
+      `delete from ${table} where tenant_id = $1`,
+      [await resolveTenantId()],
+      await resolveTenantId()
+    );
     if (error) {
       // Non-fatal: the setting itself is already saved. A surviving cache
       // serves stale results until it expires, which is worse than fresh but
@@ -467,7 +473,11 @@ export async function rescoreAll(opts?: {
 
   // rawQuery, NOT the builder — see SCORED_JOBS_SQL. `.neq("fit_score", null)`
   // matches zero rows and reports success.
-  const { data, error } = await rawQuery<ScoredJobRow>(SCORED_JOBS_SQL, [limit]);
+  const { data, error } = await rawQuery<ScoredJobRow>(
+    SCORED_JOBS_SQL,
+    [limit, await resolveTenantId()],
+    await resolveTenantId()
+  );
   if (error) {
     return {
       rescored: 0,
@@ -554,9 +564,11 @@ export async function rescoreAll(opts?: {
 }
 
 async function countRemaining(passStartedAt: string): Promise<number | null> {
-  const { data, error } = await rawQuery<{ n: string }>(SCORED_JOBS_REMAINING_SQL, [
-    passStartedAt,
-  ]);
+  const { data, error } = await rawQuery<{ n: string }>(
+    SCORED_JOBS_REMAINING_SQL,
+    [passStartedAt, await resolveTenantId()],
+    await resolveTenantId()
+  );
   if (error) {
     console.error(
       `rescoreAll: could not count remaining rows — ${error.message || UNDESCRIBED_DB_ERROR}`

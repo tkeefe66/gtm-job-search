@@ -52,7 +52,7 @@ describe("SCORED_JOBS_SQL", () => {
     // `.neq("fit_score", null)` renders `"fit_score" <> $1` with $1 = null,
     // which is never true in Postgres: zero rows, no error, "rescored 0 of 0"
     // reported as success. This is why rescoreAll uses rawQuery at all.
-    expect(SCORED_JOBS_SQL).toContain("where fit_score is not null");
+    expect(SCORED_JOBS_SQL).toContain("fit_score is not null");
     expect(SCORED_JOBS_SQL).not.toContain("<>");
     expect(SCORED_JOBS_SQL).not.toContain("!=");
   });
