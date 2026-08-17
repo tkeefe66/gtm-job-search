@@ -400,3 +400,84 @@ arithmetic reproduces today's output. Two blocking gaps and four smaller ones:
 12. **The fixture values were unstated** where the two obvious choices are mutually
     exclusive. Resolved with a third fixture set.
 13. Line drift: `roles.test.ts:76`→`:77`, `search-criteria.test.ts:346`→`:348`.
+
+---
+
+## What this pass actually cost — read before phase 2
+
+Written after implementation, from the execution ledger. Phase 2 covers the same
+prompts at greater scale, so these are the traps it will meet again.
+
+### The no-op held, and here is what "proved" means
+
+Six tasks, eleven commits, 850 → 861 tests. Zero behavioural change, verified
+three ways rather than asserted: two checked-in fixtures pinning the RENDERED fit
+prompt stayed byte-identical through every commit; a final review reconstructed
+the old strings by materialising each file at `f4cf993`, evaluating it, and
+comparing evaluated output to evaluated output across 36 fit-prompt input
+combinations and all nine splice sites; and each harness was self-checked by
+mutating one character and confirming it fails.
+
+**Verify harnesses before trusting them.** The first byte-identity check in this
+project reported a false negative by comparing an old SOURCE literal (escapes
+intact) against a new EVALUATED string. A harness that has never failed has not
+been shown to work.
+
+**Fixtures cannot catch a field that is never varied.** Every `FitInputs`
+construction in the suite passed the `DEFAULT_*` clause tails, so code that
+ignored `inputs.weakFitTail` and inlined the constant would have passed all 861
+tests AND all three fixtures. The guard is an assertion with synthetic values and
+`not.toContain(DEFAULT_*)`. **Any field added to `FitInputs` belongs in that test**
+(`lib/fit-prompt.test.ts`, "renders every career-specific field it is HANDED").
+
+### The one defect this project produced, twelve times
+
+Every single defect was prose asserting something about code, written without
+opening the file. **The code was right every time; the sentences about it were
+not.** Instances: a plan's expected-churn table; a docblock stating an invariant
+backwards; a claim about `"use server"` placement; a claim that one constant could
+serve two grammatical positions; a fixture count; a word count; a citation of a
+constant (`SEARCH_SUBJECT_SLASHED`) that exists nowhere; a proof claim naming a
+fixture that could not be part of the proof; an "each is guarded" guarantee
+extended over `discover.ts`, which has no guards at all; a rationale that this
+spec had been revised specifically to delete; a stale symbol location; and a
+misquote (`Backer:` for `Backer / investor:`) that survived three revisions and
+reached CLAUDE.md.
+
+Two consequences for phase 2:
+
+1. **Treat a factual claim in a comment, a spec, or CLAUDE.md as an assertion
+   requiring a grep, not as narration.** Check names against symbols that exist,
+   counts against the things counted, invariants against the code. CLAUDE.md
+   matters most — it is loaded as standing instructions into every future
+   session, so a false sentence there misleads indefinitely.
+2. **Distinguish a drifted line number from a false claim.** They are not the same
+   defect and only one needs fixing. This document's line numbers are as of
+   `f4cf993` and are not maintained (see the header). Quoted TEXT is different and
+   must be exact.
+
+### Two rulings phase 2 inherits
+
+**Split per grammatical form; never force one constant through several.** The bug
+that broke the no-op mid-pass: `ic_flag` uses the same idea as a gerund
+("building GTM systems and agentic AI workflows") and as a compressed negative
+compound adjective ("no systems/AI-building upside"). One constant could not serve
+both, and the attempt reworded the second to fit. Semantically equivalent is not
+the bar. Hence `BUILDING_CONCEPT` **and** `BUILDING_UPSIDE`, and `QUERY_SUBJECT`
+(two words, for search queries) distinct from `SEARCH_SUBJECT` (four, for prose).
+The slashed form is not extracted at all — it lives inside `STACK_FAMILY_INTRO`,
+which was taken whole because the sentence names three GTM job titles after the
+subject that are exactly as career-specific as the subject itself.
+
+**Required parameters buy less than they appear to.** They catch OMISSION, which
+is a phase-1 risk. A phase-2 site that forgets to switch its argument keeps
+passing `CANDIDATE_PERSONA` — compiles, type-checks, ships GTM text to a nurse.
+Phase 2 needs its own guard, and the golden tests asserting a CHANGED value
+reaches the output are it.
+
+### Reviewer output is evidence, not a verdict
+
+Two reviews in this project produced findings that were partly wrong, in both
+directions. One flagged four spec line numbers as fabricated claims; checking
+against `f4cf993` showed every one had been correct when written. The check is
+cheap. Run it before complying — and before dismissing.
