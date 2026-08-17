@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// The tenant resolver is mocked: these tests are about how settings are read,
+// merged and validated, and resolveTenantId reaches the session (or, under the
+// platform branch, the database) before any of that runs. Which tenant the rows
+// belong to is asserted where it belongs — in the SQL these tests already pin.
+vi.mock("@/lib/tenant", () => ({
+  resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
+}));
+
+
 // The one module in this file's graph that touches the network. Mocked so the
 // failure channel below can be driven directly — the whole point of that
 // channel is what happens when this call fails, which no fixture can produce.
@@ -159,7 +168,11 @@ describe("criteria-changed stamp", () => {
     // across app_settings would also stamp on searchCeiling and compFloor —
     // neither changes what the crawler looks for, and stamping on them
     // suppresses stale-posting closure for ~2 crawl cycles per company.
-    expect(CRITERIA_CHANGED_AT_SQL).toContain("where key = $1");
+    expect(CRITERIA_CHANGED_AT_SQL).toContain("key = $1");
+    // And scoped to a TENANT as well as a key, since migration 001. Without
+    // this, one tenant's criteria-changed stamp suppresses stale-posting
+    // closure for every other tenant.
+    expect(CRITERIA_CHANGED_AT_SQL).toContain("tenant_id = $2");
     expect(CRITERIA_CHANGED_AT_SQL).not.toContain("max(");
     expect(CRITERIA_CHANGED_AT_SQL).toContain("#>> '{}'");
   });
@@ -249,17 +262,20 @@ describe("writeCompScoringRescoredAt", () => {
 
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("insert into app_settings");
-    expect(sql).toContain("on conflict (key) do update");
+    expect(sql).toContain("on conflict (tenant_id, key) do update");
     // The KEY, not a setting key and not the criteria stamp. Writing under
     // criteria_changed_at would suppress stale-posting closure for ~2 crawl
     // cycles per company every time a rescore ran.
-    expect(params[0]).toBe(COMP_SCORING_RESCORED_AT_KEY);
-    expect(params[1]).toBe(JSON.stringify(when.toISOString()));
+    // tenant_id leads the parameter list since migration 001 — the stamp is
+    // per-tenant, so a rescore by one tenant must not move another's.
+    expect(params[0]).toBe("00000000-0000-0000-0000-000000000001");
+    expect(params[1]).toBe(COMP_SCORING_RESCORED_AT_KEY);
+    expect(params[2]).toBe(JSON.stringify(when.toISOString()));
     // Round trip: what compScoringRescoredFrom reads back out of a jsonb
     // string row is the same instant that went in.
     expect(
       compScoringRescoredFrom([
-        { key: COMP_SCORING_RESCORED_AT_KEY, value: JSON.parse(String(params[1])) },
+        { key: COMP_SCORING_RESCORED_AT_KEY, value: JSON.parse(String(params[2])) },
       ])
     ).toBe(when.toISOString());
   });

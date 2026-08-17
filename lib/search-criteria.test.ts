@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// The tenant resolver is mocked: these tests are about how settings are read,
+// merged and validated, and resolveTenantId reaches the session (or, under the
+// platform branch, the database) before any of that runs. Which tenant the rows
+// belong to is asserted where it belongs — in the SQL these tests already pin.
+vi.mock("@/lib/tenant", () => ({
+  resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
+}));
+
+
 // The only module in this file's graph that touches the network, mocked the
 // same way lib/settings-store.test.ts mocks it. The loaders at the bottom of
 // this file are otherwise unreachable from a test, and the property they have

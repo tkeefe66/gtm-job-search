@@ -1,4 +1,5 @@
 import { rawQuery } from "@/lib/supabase";
+import { resolveTenantId } from "@/lib/tenant";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 // The full set of editable settings. Adding one here plus a default in
@@ -247,7 +248,8 @@ export async function readAllSettingsResult(): Promise<{
   error?: string;
 }> {
   const { data, error } = await rawQuery<{ key: string; value: unknown }>(
-    `select key, value from app_settings`
+    `select key, value from app_settings where tenant_id = $1`,
+    [await resolveTenantId()]
   );
   // The message is passed through verbatim, empty string included: the key
   // being PRESENT is the failure signal. See UNDESCRIBED_DB_ERROR.
@@ -298,13 +300,13 @@ export async function readAllSettings(): Promise<SettingRow[]> {
  * decoration on a crawl run, and a failed read must not abort one.
  */
 export const CRITERIA_CHANGED_AT_SQL = `select value #>> '{}' as value
-      from app_settings
-     where key = $1`;
+     from app_settings
+     where tenant_id = $2 and key = $1`;
 
 export async function readCriteriaChangedAt(): Promise<string | null> {
   const { data, error } = await rawQuery<{ value: string | null }>(
     CRITERIA_CHANGED_AT_SQL,
-    [CRITERIA_CHANGED_AT_KEY]
+    [CRITERIA_CHANGED_AT_KEY, await resolveTenantId()]
   );
   if (error) {
     // `error` is an object here, so the branch is already presence-based; only
@@ -329,11 +331,16 @@ async function upsertSetting(
     | typeof COMP_SCORING_RESCORED_AT_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
+  // `on conflict (tenant_id, key)`, matching the composite primary key that
+  // migration 001 installed. The old `on conflict (key)` no longer matches any
+  // constraint, and Postgres raises 42P10 for that at RUNTIME — invisible to
+  // `npm run build`, so every settings save would have failed silently.
+  const tenantId = await resolveTenantId();
   const { error } = await rawQuery(
-    `insert into app_settings (key, value, updated_at)
-     values ($1, $2::jsonb, now())
-     on conflict (key) do update set value = excluded.value, updated_at = now()`,
-    [key, JSON.stringify(value)]
+    `insert into app_settings (tenant_id, key, value, updated_at)
+     values ($1, $2, $3::jsonb, now())
+     on conflict (tenant_id, key) do update set value = excluded.value, updated_at = now()`,
+    [tenantId, key, JSON.stringify(value)]
   );
   return { error: error?.message };
 }
@@ -384,6 +391,11 @@ export async function writeCompScoringRescoredAt(
 }
 
 export async function deleteSetting(key: SettingKey): Promise<{ error?: string }> {
-  const { error } = await rawQuery(`delete from app_settings where key = $1`, [key]);
+  // Scoped: an unqualified delete would reset every tenant's setting, which is
+  // the same defect class as applySideEffects' unqualified cache wipe.
+  const { error } = await rawQuery(
+    `delete from app_settings where tenant_id = $2 and key = $1`,
+    [key, await resolveTenantId()]
+  );
   return { error: error?.message };
 }
