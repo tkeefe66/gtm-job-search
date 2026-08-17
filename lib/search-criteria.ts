@@ -12,6 +12,11 @@
 
 import type { FitInputs } from "@/lib/fit-inputs";
 import {
+  DEFAULT_WEAK_FIT_TAIL,
+  DEFAULT_MODERATE_TAIL,
+  DEFAULT_STRONG_TAIL,
+} from "@/lib/fit-prompt";
+import {
   ceilingFrom,
   compFloorFrom,
   mergeSettings,
@@ -321,7 +326,13 @@ export async function loadScoringInputs(): Promise<FitInputs> {
  * test would catch and no log line would mention.
  */
 export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitInputs {
-  return { fitBrain: criteria.fitBrain, compFloor: compFloorFrom(rows) };
+  return {
+    fitBrain: criteria.fitBrain,
+    compFloor: compFloorFrom(rows),
+    weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+    moderateTail: DEFAULT_MODERATE_TAIL,
+    strongTail: DEFAULT_STRONG_TAIL,
+  };
 }
 
 /**

@@ -33,6 +33,11 @@ import {
   type Criteria,
 } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
+import {
+  DEFAULT_MODERATE_TAIL,
+  DEFAULT_STRONG_TAIL,
+  DEFAULT_WEAK_FIT_TAIL,
+} from "@/lib/fit-prompt";
 
 const SMALL: Criteria = {
   titles: ["Head of RevOps", "GTM Engineer"],
@@ -394,6 +399,9 @@ describe("scoringInputsFrom", () => {
     expect(scoringInputsFrom(SMALL, ROWS)).toEqual({
       fitBrain: "A candidate.",
       compFloor: 180000,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
     });
   });
 
@@ -428,13 +436,21 @@ describe("scoringInputsFrom", () => {
     expect(scoringInputsFrom(SMALL, ROWS).fitBrain).not.toBe("stored brain");
   });
 
-  test("carries nothing beyond the two scoring inputs", () => {
+  test("carries nothing beyond the five scoring inputs", () => {
     // FitInputs is deliberately narrow: it is handed down every batch path,
     // and anything extra here would widen what the crawler and the role search
-    // carry around. The keys are the contract.
+    // carry around. The keys are the contract. The three tails (weakFitTail,
+    // moderateTail, strongTail) belong here for the same reason fitBrain and
+    // compFloor do: they are scoring inputs, not extraction-time settings.
     const keys = Object.keys(scoringInputsFrom(SMALL, ROWS));
-    expect(keys.length).toBe(2);
-    expect(keys.sort()).toEqual(["compFloor", "fitBrain"]);
+    expect(keys.length).toBe(5);
+    expect(keys.sort()).toEqual([
+      "compFloor",
+      "fitBrain",
+      "moderateTail",
+      "strongTail",
+      "weakFitTail",
+    ]);
   });
 });
 
@@ -456,6 +472,9 @@ describe("the settings loaders", () => {
     expect(await loadScoringInputs()).toEqual({
       fitBrain: "stored brain",
       compFloor: 180000,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
     });
   });
 
@@ -470,7 +489,13 @@ describe("the settings loaders", () => {
   test("loadCriteriaAndScoringInputs returns both off ONE read, agreeing", async () => {
     const { criteria, fitInputs } = await loadCriteriaAndScoringInputs();
     expect(query).toHaveBeenCalledTimes(1);
-    expect(fitInputs).toEqual({ fitBrain: "stored brain", compFloor: 180000 });
+    expect(fitInputs).toEqual({
+      fitBrain: "stored brain",
+      compFloor: 180000,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
+    });
     // The crawl run context and the Discover ingest hand these two around
     // together; a fit brain that disagreed with the criteria object would
     // score roles against text the same run never searched with.
@@ -482,7 +507,13 @@ describe("the settings loaders", () => {
     expect(query).toHaveBeenCalledTimes(1);
     expect(ceiling).toBe(12);
     expect(criteria.fitBrain).toBe("stored brain");
-    expect(fitInputs).toEqual({ fitBrain: "stored brain", compFloor: 180000 });
+    expect(fitInputs).toEqual({
+      fitBrain: "stored brain",
+      compFloor: 180000,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
+    });
   });
 
   test("with nothing stored, every loader reports no floor and the defaults", async () => {
@@ -490,6 +521,9 @@ describe("the settings loaders", () => {
     expect(await loadScoringInputs()).toEqual({
       fitBrain: DEFAULT_CRITERIA.fitBrain,
       compFloor: null,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
     });
     expect((await loadCriteriaAndScoringInputs()).fitInputs.compFloor).toBeNull();
     expect((await loadSearchInputs()).fitInputs.compFloor).toBeNull();
@@ -503,6 +537,9 @@ describe("the settings loaders", () => {
     expect(await loadScoringInputs()).toEqual({
       fitBrain: DEFAULT_CRITERIA.fitBrain,
       compFloor: null,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
     });
     err.mockRestore();
   });

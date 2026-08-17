@@ -7,6 +7,9 @@ import {
   buildFitPrompt,
   compFloorLine,
   compScoringClause,
+  DEFAULT_MODERATE_TAIL,
+  DEFAULT_STRONG_TAIL,
+  DEFAULT_WEAK_FIT_TAIL,
   formatDollars,
 } from "./fit-prompt";
 import {
@@ -247,7 +250,13 @@ describe("buildFitPrompt", () => {
     // Same property lib/crawler.test.ts pins for buildExtractionPrompt: an
     // implementation that ignored `inputs` and imported DEFAULT_FIT_BRAIN
     // would pass every other assertion while ignoring the user's edits.
-    const prompt = buildFitPrompt(ROLE, { fitBrain: "Chief Waffle Officer.", compFloor: null });
+    const prompt = buildFitPrompt(ROLE, {
+      fitBrain: "Chief Waffle Officer.",
+      compFloor: null,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
+    });
     expect(prompt).toContain("Chief Waffle Officer.");
     expect(prompt).not.toContain("Tom Keefe");
     expect(prompt).not.toContain(BRAIN);
@@ -268,7 +277,13 @@ describe("buildFitPrompt", () => {
     // Appended at prompt-assembly time. If this ever merged into the brain,
     // a floor change would be indistinguishable from a fit-brain edit — and
     // would survive a "reset fit brain to default".
-    const inputs: FitInputs = { fitBrain: BRAIN, compFloor: 180000 };
+    const inputs: FitInputs = {
+      fitBrain: BRAIN,
+      compFloor: 180000,
+      weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+      moderateTail: DEFAULT_MODERATE_TAIL,
+      strongTail: DEFAULT_STRONG_TAIL,
+    };
     buildFitPrompt(ROLE, inputs);
     expect(inputs.fitBrain).toBe(BRAIN);
   });

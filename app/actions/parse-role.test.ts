@@ -35,6 +35,11 @@ vi.mock("@/lib/search-criteria", () => ({ loadScoringInputs: vi.fn() }));
 
 import { scoreFit } from "./parse-role";
 import { complete } from "@/lib/model-call";
+import {
+  DEFAULT_MODERATE_TAIL,
+  DEFAULT_STRONG_TAIL,
+  DEFAULT_WEAK_FIT_TAIL,
+} from "@/lib/fit-prompt";
 
 const model = vi.mocked(complete);
 
@@ -57,7 +62,13 @@ describe("scoreFit runs through the provider registry, not the raw SDK", () => {
     location: "Denver, CO",
     salary_range: "$220K–$260K (base)",
   };
-  const fitInputs = { fitBrain: "score this candidate", compFloor: null };
+  const fitInputs = {
+    fitBrain: "score this candidate",
+    compFloor: null,
+    weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+    moderateTail: DEFAULT_MODERATE_TAIL,
+    strongTail: DEFAULT_STRONG_TAIL,
+  };
 
   test("a score comes back through the facade", async () => {
     model.mockResolvedValue(JSON.stringify({ score: 4, rationale: "close fit" }));

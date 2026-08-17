@@ -28,4 +28,21 @@ export interface FitInputs {
    * rejects 0 for the same reason.
    */
   compFloor: number | null;
+  /**
+   * The tails of the 2/3/4 clauses in the fit prompt's scoring guide — what
+   * "weak", "moderate" and "strong" actually mean for this career.
+   *
+   * Three fields rather than one because they splice at three distinct
+   * positions inside one template literal; a single string cannot reach all
+   * three. The 1 and 5 clauses are not here: they are career-neutral as
+   * written ("wrong industry, no relevant overlap" / "almost tailor-made").
+   *
+   * CONTRACTUALLY NON-EMPTY. An empty tail renders `2 = Weak fit — ` with a
+   * trailing space, which is the same dangling-fragment defect the block
+   * helpers in lib/fit-prompt.ts exist to prevent — and it is invisible to the
+   * doubled-blank-line guard, because a trailing space is not a blank line.
+   */
+  weakFitTail: string;
+  moderateTail: string;
+  strongTail: string;
 }

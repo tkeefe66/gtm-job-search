@@ -11,6 +11,11 @@
 
 import type { FitInputs } from "@/lib/fit-inputs";
 import type { FitPromptRole } from "@/lib/fit-prompt";
+import {
+  DEFAULT_WEAK_FIT_TAIL,
+  DEFAULT_MODERATE_TAIL,
+  DEFAULT_STRONG_TAIL,
+} from "@/lib/fit-prompt";
 
 export const FIXTURE_BRAIN = "A candidate who does GTM systems.";
 
@@ -31,6 +36,9 @@ export const FIXTURE_ROLE: FitPromptRole = {
 export const FIXTURE_NO_FLOOR: FitInputs = {
   fitBrain: FIXTURE_BRAIN,
   compFloor: null,
+  weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+  moderateTail: DEFAULT_MODERATE_TAIL,
+  strongTail: DEFAULT_STRONG_TAIL,
 };
 
 // 180000, not 180 or 1800: the rendered figure has to cross a thousands
@@ -38,4 +46,7 @@ export const FIXTURE_NO_FLOOR: FitInputs = {
 export const FIXTURE_WITH_FLOOR: FitInputs = {
   fitBrain: FIXTURE_BRAIN,
   compFloor: 180000,
+  weakFitTail: DEFAULT_WEAK_FIT_TAIL,
+  moderateTail: DEFAULT_MODERATE_TAIL,
+  strongTail: DEFAULT_STRONG_TAIL,
 };

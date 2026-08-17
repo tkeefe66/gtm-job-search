@@ -137,6 +137,19 @@ export function aiGtmCompCarveOut(compFloor: number | null): string {
 }
 
 /**
+ * The default tails of the 2/3/4 scoring-guide clauses — see the field doc on
+ * `FitInputs.weakFitTail` in lib/fit-inputs.ts for why there are three and why
+ * the 1 and 5 clauses aren't here. This is today's one career hardcoded as the
+ * fallback; `scoringInputsFrom` is what will source these per-user later.
+ */
+export const DEFAULT_WEAK_FIT_TAIL =
+  "some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope";
+export const DEFAULT_MODERATE_TAIL =
+  "relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside";
+export const DEFAULT_STRONG_TAIL =
+  "clear domain alignment AND scope at or near the level the candidate says they are targeting (broad ownership of their stated stack, hands-on systems + AI/agentic building, or explicit cross-functional leadership even without the matching title)";
+
+/**
  * The full user-turn prompt for one fit score.
  *
  * Renders the criteria it is HANDED — the fit brain and floor come in through
@@ -164,9 +177,9 @@ Summary: ${role.fit_summary}
 
 SCORING GUIDE:
 1 = Poor fit — wrong industry, no relevant overlap, or clearly too junior/unrelated
-2 = Weak fit — some domain overlap but significant gaps, or a narrow ops/IC role with no systems-building or strategic scope
-3 = Moderate fit — relevant domain and background but a standard ops/manager role without broad ownership, systems architecture, or AI/building upside
-4 = Strong fit — clear domain alignment AND scope at or near the level the candidate says they are targeting (broad ownership of their stated stack, hands-on systems + AI/agentic building, or explicit cross-functional leadership even without the matching title)
+2 = Weak fit — ${inputs.weakFitTail}
+3 = Moderate fit — ${inputs.moderateTail}
+4 = Strong fit — ${inputs.strongTail}
 5 = Exceptional fit — almost tailor-made: the function, the level, and the company type the candidate states they are targeting, all at once${compScoringClause(inputs.compFloor)}
 
 SENIORITY IS RELATIVE TO THE CANDIDATE, NEVER ABSOLUTE: judge level against what
