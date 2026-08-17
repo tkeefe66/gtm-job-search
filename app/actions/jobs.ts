@@ -3,7 +3,9 @@
 import { requireActor } from "@/lib/require-actor";
 import { resolveTenantId } from "@/lib/tenant";
 
-import { supabase } from "@/lib/supabase";
+import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
+import { JOB_STATUSES_KEY } from "@/lib/settings-store";
+import { rawQuery, supabase } from "@/lib/supabase";
 import type { Job, JobInsert, JobStatus } from "@/lib/types";
 
 export async function getJobs(): Promise<{ jobs: Job[]; error?: string }> {
@@ -79,4 +81,28 @@ export async function deleteJob(id: string): Promise<{ error?: string }> {
     return { error: error.message };
   }
   return {};
+}
+
+/**
+ * The user's status config, for the client components that render statuses.
+ *
+ * Carries an error channel on purpose. Returning DEFAULT_STATUSES on a failed
+ * read would show the user a config that is not theirs — un-hiding statuses and
+ * reverting renames — and then let them write a status their config forbids.
+ * The caller must be able to tell "your config" from "the database is down".
+ */
+export async function getJobStatuses(): Promise<{
+  statuses: JobStatusDef[];
+  error?: string;
+}> {
+  await requireActor();
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<{ value: unknown }>(
+    `select value from app_settings where tenant_id = $1 and key = $2`,
+    [tenantId, JOB_STATUSES_KEY],
+    tenantId
+  );
+  // Verbatim, empty string included — presence is the signal.
+  if (error) return { statuses: resolveStatuses(null), error: error.message };
+  return { statuses: resolveStatuses(data?.[0]?.value ?? null) };
 }

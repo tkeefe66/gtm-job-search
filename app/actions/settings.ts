@@ -9,6 +9,7 @@ import { updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
 import { passDrained } from "@/lib/rescore-progress";
+import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
 import { CRAWL_TITLE_MATCH_SQL, titleMatchPatterns } from "@/lib/removed-titles";
 import {
   SCORED_JOBS_COUNT_SQL,
@@ -35,6 +36,7 @@ import {
   readCriteriaChangedAt,
   writeCompScoringRescoredAt,
   writeCriteriaChangedAt,
+  writeJobStatuses,
   writeSetting,
   type SettingKey,
 } from "@/lib/settings-store";
@@ -628,4 +630,88 @@ async function countRemaining(passStartedAt: string): Promise<number | null> {
   // lib/rescore-scope.ts so it is pinned by a test; nothing in this module can
   // be.
   return remainingCountFrom(data, error);
+}
+
+/**
+ * Replaces the whole status config.
+ *
+ * Whole-array replace, last-write-wins across tabs — accepted, and the reason
+ * there is no merge is that reorder and delete have no sensible per-field merge.
+ *
+ * Clears no cache and revalidates no path, and both are decisions rather than
+ * omissions. Statuses do not change what any search returns, so no cached search
+ * result goes stale. /roles renders compFloor server-side but fetches statuses
+ * client-side, so there is nothing server-rendered to invalidate.
+ */
+export async function saveJobStatuses(
+  defs: JobStatusDef[]
+): Promise<{ error?: string }> {
+  await requireActor();
+  // Resolved before storing, never after: repairs (a dropped system key, New
+  // forced back to active) belong in the stored value, not re-applied on every
+  // read of a config the user believes they saved.
+  return writeJobStatuses(resolveStatuses(defs));
+}
+
+/**
+ * How many jobs hold each status key.
+ *
+ * Carries an error channel because a failed count reading as an empty record is
+ * indistinguishable from "nothing uses this status", which silently unlocks the
+ * delete guard.
+ */
+export async function countJobsByStatus(): Promise<{
+  counts: Record<string, number>;
+  error?: string;
+}> {
+  await requireActor();
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<{ status: string; n: string }>(
+    `select status, count(*) n from jobs where tenant_id = $1 group by status`,
+    [tenantId],
+    tenantId
+  );
+  if (error) return { counts: {}, error: error.message };
+  const counts: Record<string, number> = {};
+  for (const row of data ?? []) counts[row.status] = Number(row.n);
+  return { counts };
+}
+
+/**
+ * Moves every job on `fromKey` to `toKey`.
+ *
+ * Explicitly tenant-scoped. This is raw SQL, so QueryBuilder's tenant-table
+ * registry does not see it, and rawQuery's own docs say the tenantId argument is
+ * the only thing that puts a policy in front of it. RLS is a backstop, not a
+ * substitute: a policy denial returns zero rows rather than an error, so an
+ * unscoped update would report success having moved nothing.
+ *
+ * `New` is rejected as a target. lib/crawler.ts and lib/removed-titles.ts both
+ * match `status = 'New'` to decide which rows automated stale-posting closure
+ * may touch, so moving hand-triaged rows into it re-arms that automation against
+ * them — a larger footgun than any bucket change.
+ */
+export async function reassignStatus(
+  fromKey: string,
+  toKey: string
+): Promise<{ moved: number; error?: string }> {
+  await requireActor();
+  if (toKey === "New") {
+    return {
+      moved: 0,
+      error:
+        'Roles cannot be moved into "New". The crawler treats New roles as ' +
+        "un-triaged and may close them automatically.",
+    };
+  }
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<{ id: string }>(
+    `update jobs set status = $2, updated_at = now()
+      where tenant_id = $3 and status = $1
+      returning id`,
+    [fromKey, toKey, tenantId],
+    tenantId
+  );
+  if (error) return { moved: 0, error: error.message };
+  return { moved: (data ?? []).length };
 }
