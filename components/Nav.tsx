@@ -24,10 +24,10 @@ export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
     <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-heading font-bold tracking-tight">
-          Tom&apos;s GTM Job Search
+          Job Search
         </h1>
         <p className="text-sm text-ink/60">
-          AI-powered GTM / RevOps job search — discover, research, track, analyze.
+          AI-powered job search — discover, research, track, analyze.
         </p>
       </div>
       <nav className="flex gap-1 border-b border-slate">

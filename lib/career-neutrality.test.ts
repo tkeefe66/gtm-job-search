@@ -67,6 +67,19 @@ describe("no production module holds a career-specific string", () => {
     });
   }
 
+  test("no file under app/ or components/ names the previous owner", () => {
+    // Scoped to app/ and components/ ONLY — not lib/, because
+    // lib/__fixtures__/fit-golden-set.json legitimately carries the previous
+    // owner's name throughout (a captured golden set, scored against a
+    // specific fit brain) and must keep it. Word-boundary regex so this
+    // doesn't false-positive on substrings like "custom" or "bottom".
+    const scoped = FILES.filter(
+      (f) => f.rel.startsWith("app" + path.sep) || f.rel.startsWith("components" + path.sep)
+    );
+    const offenders = scoped.filter((f) => /\bTom\b/.test(f.text)).map((f) => f.rel);
+    expect(offenders).toEqual([]);
+  });
+
   test("no module imports a deleted GTM constant", () => {
     // Names, not text: a re-introduced `SEARCH_SUBJECT` import would pass the
     // phrase checks above (the string lives in profile.ts) while pinning a

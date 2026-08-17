@@ -23,7 +23,7 @@ export default async function SignIn() {
 
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-sm flex-col justify-center">
-      <h1 className="font-display text-2xl text-ink">GTM Job Search</h1>
+      <h1 className="font-display text-2xl text-ink">Job Search</h1>
 
       {waiting ? (
         <p className="mt-4 text-sm text-ink/70">
