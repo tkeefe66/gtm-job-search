@@ -89,6 +89,39 @@ function Picker({ label, children }: { label: string; children: React.ReactNode 
 }
 
 /**
+ * An on/off filter, sized to sit in the picker row without pretending to be a
+ * picker. Same height, border and radius as PICKER_CLS so the row keeps one
+ * baseline; `aria-pressed` rather than a checkbox role because it filters the
+ * list immediately rather than staging a value for submission.
+ */
+function Toggle({
+  on,
+  onClick,
+  title,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-pressed={on}
+      className={`rounded-md border px-2.5 py-2 text-sm transition ${
+        on
+          ? "border-ink bg-ink text-white"
+          : "border-slate bg-white text-ink/70 hover:border-ink hover:text-ink"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
  * Drawn rather than a "↑"/"↓" glyph: one authored mark that rotates between the
  * two states, so the control keeps a single silhouette and the change of
  * direction is legible as motion instead of as a substituted character.
@@ -783,34 +816,38 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
               </select>
             </Picker>
           )}
-        </div>
-      </div>
 
-      {/* Compensation toggles. Chip STYLING from the status row above, not its
-          mechanism — these two are independent, and neither is exclusive. */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {/* Hidden entirely when no floor is set: with nothing to compare
-            against it would be a control that visibly does nothing. */}
-        {compFloor !== null && (
-          <button
-            onClick={() => setMeetsOnly((v) => !v)}
-            title={`Hide roles whose base tops out under $${compFloor.toLocaleString()}`}
-            className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-              meetsOnly ? "border-ink bg-ink text-white" : "border-slate bg-white hover:border-ink"
-            }`}
-          >
-            Meets minimum
-          </button>
-        )}
-        <button
-          onClick={() => setHideNoRange((v) => !v)}
-          title="Hide roles that published no readable salary range"
-          className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
-            hideNoRange ? "border-ink bg-ink text-white" : "border-slate bg-white hover:border-ink"
-          }`}
-        >
-          Hide no range listed
-        </button>
+          {/* Pay stays TOGGLES rather than becoming a fourth dropdown, and the
+              distinction is not cosmetic: lib/salary-filter.ts treats these as
+              two INDEPENDENT booleans — "pays too little" and "didn't say" are
+              different facts and either can be asked alone. A single-select
+              cannot express that without enumerating four combinations. They
+              take the pickers' height, border and label so the row still reads
+              as one group; the shape difference is what says "these two are
+              answered separately". */}
+          <Picker label="Pay">
+            <div className="flex items-center gap-1.5">
+              {/* Hidden entirely when no floor is set: with nothing to compare
+                  against it would be a control that visibly does nothing. */}
+              {compFloor !== null && (
+                <Toggle
+                  on={meetsOnly}
+                  onClick={() => setMeetsOnly((v) => !v)}
+                  title={`Hide roles whose base tops out under $${compFloor.toLocaleString()}`}
+                >
+                  Meets minimum
+                </Toggle>
+              )}
+              <Toggle
+                on={hideNoRange}
+                onClick={() => setHideNoRange((v) => !v)}
+                title="Hide roles that published no readable salary range"
+              >
+                Hide no range listed
+              </Toggle>
+            </div>
+          </Picker>
+        </div>
       </div>
 
       {loading && <div className="py-12"><Spinner label="Loading roles…" /></div>}
