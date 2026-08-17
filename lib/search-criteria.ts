@@ -217,11 +217,20 @@ export function titleQueries(criteria: Criteria): string[] {
   return queries;
 }
 
+/**
+ * The field term used inside a SEARCH QUERY, which is why it is short.
+ *
+ * Two words where SEARCH_SUBJECT is five. A query is not a sentence: the longer
+ * phrase makes the query worse, not more precise. Phase 2 should not assume one
+ * generated value serves both this and the prose sites.
+ */
+export const QUERY_SUBJECT = "revenue operations";
+
 export function stackQueries(criteria: Criteria): string[] {
   const queries: string[] = [];
   for (const tool of criteria.stackTerms) {
     for (const place of criteria.locations) {
-      queries.push(`"${tool}" revenue operations hiring ${place}`);
+      queries.push(`"${tool}" ${QUERY_SUBJECT} hiring ${place}`);
     }
   }
   return queries;

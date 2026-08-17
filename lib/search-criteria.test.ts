@@ -28,6 +28,7 @@ import {
   loadSearchInputs,
   pickQueries,
   planQueries,
+  QUERY_SUBJECT,
   roleExtractionSchema,
   scoringInputsFrom,
   stackQueries,
@@ -138,6 +139,15 @@ describe("stackQueries", () => {
     for (const q of queries) {
       expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
     }
+  });
+
+  test("a stack query reproduces today's shape exactly", () => {
+    const q = stackQueries({ ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] });
+    expect(q).toEqual(['"Salesforce" revenue operations hiring Denver']);
+  });
+
+  test("QUERY_SUBJECT is two words, not the five-word prose SEARCH_SUBJECT", () => {
+    expect(QUERY_SUBJECT).toBe("revenue operations");
   });
 
   test("returns nothing when either list is empty", () => {
