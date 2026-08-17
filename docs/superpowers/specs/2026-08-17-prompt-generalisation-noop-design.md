@@ -1,6 +1,8 @@
 # Prompt generalisation as a provable no-op — design
 
-**Status:** revision 3, 2026-08-17. Not yet implemented. Revision 2 was reviewed: all 13 of its corrections landed and all five constants verified character-exact, but two blocking gaps remained — see "Revision corrections (2 → 3)".
+**Status:** revision 3, 2026-08-17. **Implemented** on `feat/prompt-generalisation` (`f4cf993..HEAD`). Revision 2 was reviewed: all 13 of its corrections landed and all five constants verified character-exact, but two blocking gaps remained — see "Revision corrections (2 → 3)".
+
+**Every `file.ts:NN` in this document is as of `f4cf993`, the commit this spec was written against, and is NOT updated as the code moves.** They were all correct when written and the implementation itself shifted many of them — `Summary:` went 163 → 225, `FINANCIAL SIGNALS` 185 → 240. Read them as "where this was when the argument was made"; the durable identifiers are the symbol names beside them. Do not treat a drifted number here as a false claim, and do not renumber them: a spec that chases HEAD stops being a record of what was decided and when. Text QUOTED from the source is different — that must be exact, and one misquote here (`Backer:` for the real `Backer / investor:`) survived three revisions and reached CLAUDE.md before anyone grepped it.
 
 **Phase 1 of three.** The parent design
 (`2026-08-17-career-agnostic-onboarding-design.md`) opens this app to any career.
@@ -220,7 +222,7 @@ the one code path that runs nightly without anybody watching.
 - **No emptying of any default.** That is phase 2's single atomic switch commit.
 - No Discover changes, no branding, no `fit_signal` → `fit_summary` rename.
 - **`FINANCIAL SIGNALS` (`lib/fit-prompt.ts:185-199`) stays hardcoded**, and so do
-  the `ARR:` / `Backer:` / `Exit signal:` lines (`:159-161`) and
+  the `ARR:` / `Backer / investor:` / `Exit signal:` lines (`:159-161`) and
   `roleExtractionSchema`'s `seniority` enum (`lib/search-criteria.ts:90`). All name
   venture-backed-tech vocabulary — ARR thresholds, PE exits, IPO paths, "a16z,
   Sequoia, Benchmark". They are *guarded* ("only if the candidate cares",
