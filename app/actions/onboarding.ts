@@ -3,12 +3,16 @@
 // The onboarding flow: read what a tenant has typed so far, save it as they go,
 // spend a metered Claude call turning it into a career profile, and land the
 // result as one atomic write. The pure decisions this file leans on
-// (answersAreComplete, cachesOnboardingClears, generationFailure) live in
-// lib/onboarding-rules.ts rather than here — see that file's header for why:
-// app/actions/auth-required.test.ts walks every exported function in this
-// directory and requires it to reject an unauthenticated call, and a pure
-// helper exported from a "use server" file looks exactly like an action to
-// that sweep without calling requireActor.
+// (answersAreComplete, generationFailure) live in lib/onboarding-rules.ts
+// rather than here — see that file's header for why: app/actions/auth-
+// required.test.ts walks every exported function in this directory and
+// requires it to reject an unauthenticated call, and a pure helper exported
+// from a "use server" file looks exactly like an action to that sweep without
+// calling requireActor. cachesOnboardingClears lives one file over, in
+// lib/onboarding-caches.ts, for the same reason plus one more: it reaches
+// `pg` (via lib/settings-store.ts), and components/Onboarding.tsx imports
+// lib/onboarding-rules.ts at runtime — splitting them is what keeps that
+// import safe for the browser bundle.
 //
 // NOTHING HERE MAY BE LOGGED: not the prompt, not the answers, not the résumé.
 // The answers carry a résumé — the most sensitive thing this app stores. Every

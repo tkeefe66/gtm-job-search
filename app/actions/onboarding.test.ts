@@ -297,7 +297,7 @@ describe("saveProfile — one transaction, or none", () => {
     const tables = query.mock.calls.map((c) => c[0] as string);
     expect(tables.some((sql) => sql.includes("delete from role_searches"))).toBe(true);
     expect(tables.some((sql) => sql.includes("delete from discovered_roles"))).toBe(true);
-    // jobs is the user's pipeline, never a cache — see lib/onboarding-rules.ts.
+    // jobs is the user's pipeline, never a cache — see lib/onboarding-caches.ts.
     expect(tables.some((sql) => sql.includes("delete from jobs"))).toBe(false);
   });
 

@@ -18,16 +18,14 @@ import { getSettings, markCompScoringRescored, rescoreAll } from "@/app/actions/
 // pull in at RUNTIME too (see their own header comments — neither reaches
 // `pg`), which is what makes DEFAULT_PROFILE, profileToFitInputs, and
 // sampleRoleFor usable as real values below rather than just types.
-import {
-  DEFAULT_PROFILE,
-  profileToFitInputs,
-  type HiringSignal,
-  type OnboardingAnswers,
-  type Profile,
-} from "@/lib/profile";
-import type { GeneratedProfile } from "@/lib/onboarding-prompt";
+import { DEFAULT_PROFILE, profileToFitInputs, type OnboardingAnswers } from "@/lib/profile";
 import { answersAreComplete, sampleRoleFor } from "@/lib/onboarding-rules";
-import { needsKeyMessage } from "@/lib/budget";
+import {
+  draftFromGenerated,
+  payloadFrom,
+  toList,
+  type ProfileDraft,
+} from "@/lib/onboarding-draft";
 import {
   onboardingRescoreOffer,
   passDrained,
@@ -49,121 +47,43 @@ type Step = "loading" | "key" | "door" | "answers" | "generating" | "review" | "
 
 type Section = "key" | "answers" | "generate" | "sample" | "finish" | "rescore";
 
-/** The editable form of a generated profile — every list joined to lines, so
- *  each field binds to one textarea the way titles/locations/stackTerms do on
- *  /settings. Reshaping only: nothing here decides anything, which is why it
- *  stays a plain mapping in the component rather than moving to lib/. */
-interface ProfileDraft {
-  fitBrain: string;
-  weakFitTail: string;
-  moderateTail: string;
-  strongTail: string;
-  titleScope: string;
-  domainBonus: string;
-  searchSubject: string;
-  querySubject: string;
-  stackFamilyIntro: string;
-  candidatePersona: string;
-  buildingConcept: string;
-  buildingUpside: string;
-  hiringSignalName: string;
-  hiringSignalSources: string;
-  hiringSignalQualifier: string;
-  hiringSignalHasRecency: boolean;
-  hiringSignalExtraFields: string;
-  toolsAreWeak: boolean;
-  titles: string;
-  locations: string;
-  stackTerms: string;
-  locationRule: string;
-}
-
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Textarea lines to a list — trimmed, blanks dropped. The server normalizes
- *  again (validateList, inside saveProfile), so this only has to be good
- *  enough to preview and to send; it does not have to be the final word. */
-const toList = (text: string) =>
-  text
-    .split("\n")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
-function draftFromGenerated(g: GeneratedProfile): ProfileDraft {
-  return {
-    fitBrain: g.fitBrain,
-    weakFitTail: g.weakFitTail,
-    moderateTail: g.moderateTail,
-    strongTail: g.strongTail,
-    titleScope: g.titleScope,
-    domainBonus: g.domainBonus,
-    searchSubject: g.searchSubject,
-    querySubject: g.querySubject,
-    stackFamilyIntro: g.stackFamilyIntro,
-    candidatePersona: g.candidatePersona,
-    buildingConcept: g.buildingConcept,
-    buildingUpside: g.buildingUpside,
-    hiringSignalName: g.hiringSignal.name,
-    hiringSignalSources: g.hiringSignal.sources.join("\n"),
-    hiringSignalQualifier: g.hiringSignal.qualifier,
-    hiringSignalHasRecency: g.hiringSignal.hasRecency,
-    hiringSignalExtraFields: g.hiringSignal.extraFields.join("\n"),
-    toolsAreWeak: g.toolsAreWeak,
-    titles: g.titles.join("\n"),
-    locations: g.locations.join("\n"),
-    stackTerms: g.stackTerms.join("\n"),
-    locationRule: g.locationRule,
-  };
-}
-
-/** The draft, in the shape both saveProfile and scoreFit need. Structurally a
- *  `Profile & GeneratedProfile` — saveProfile's own required type — AND
- *  assignable to plain `Profile` for profileToFitInputs, since it is a
- *  superset. `answers` comes from the caller's own state, never spread from
- *  the generated object: GeneratedProfile omits it on purpose (Task 8's
- *  review), so spreading only the draft would overwrite the user's stored
- *  answers and résumé with nothing. */
-function payloadFrom(draft: ProfileDraft, answers: OnboardingAnswers): Profile & GeneratedProfile {
-  const hiringSignal: HiringSignal = {
-    name: draft.hiringSignalName,
-    sources: toList(draft.hiringSignalSources),
-    qualifier: draft.hiringSignalQualifier,
-    hasRecency: draft.hiringSignalHasRecency,
-    extraFields: toList(draft.hiringSignalExtraFields),
-  };
-  return {
-    answers,
-    fitBrain: draft.fitBrain,
-    weakFitTail: draft.weakFitTail,
-    moderateTail: draft.moderateTail,
-    strongTail: draft.strongTail,
-    titleScope: draft.titleScope,
-    domainBonus: draft.domainBonus,
-    searchSubject: draft.searchSubject,
-    querySubject: draft.querySubject,
-    stackFamilyIntro: draft.stackFamilyIntro,
-    candidatePersona: draft.candidatePersona,
-    buildingConcept: draft.buildingConcept,
-    buildingUpside: draft.buildingUpside,
-    hiringSignal,
-    toolsAreWeak: draft.toolsAreWeak,
-    titles: toList(draft.titles),
-    locations: toList(draft.locations),
-    stackTerms: toList(draft.stackTerms),
-    locationRule: draft.locationRule,
-  };
-}
+/**
+ * Sized generously rather than derived, for the one case that needs it: the
+ * "could not confirm your scored-role count" branch of handleFinish (Finding
+ * 2). maxRescoreBatches uses this only as a CEILING on how many batches a
+ * pass may run — real progress (shouldContinueRescore) is what actually stops
+ * it — so an unknown count is safer served by a large ceiling than by a small
+ * or zero one, which would silently cap a real rescore at one batch.
+ */
+const UNKNOWN_RESCORE_BUDGET = 100_000;
 
 export default function Onboarding() {
   const router = useRouter();
 
   const [step, setStep] = useState<Step>("loading");
+  // Presence, not truthiness. A NON-NULL loadError means getOnboardingState's
+  // read failed, and `answers` in that case is DEFAULT_PROFILE's EMPTY
+  // defaults — never the tenant's real stored answers (see the mount effect
+  // below). Rendering the wizard on those and letting Finish reach saveProfile
+  // would silently overwrite a real, previously-saved answers/résumé with
+  // nothing. So this flag fully blocks the wizard rather than just warning —
+  // stronger than /settings' settingsReadWarning, which can afford to keep
+  // rendering because each of its sections saves independently; onboarding's
+  // answers are all-or-nothing at Finish, so there is no safe partial render.
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [answers, setAnswers] = useState<OnboardingAnswers>(DEFAULT_PROFILE.answers);
   // Read once, at mount, before this run can have changed it. A first run has
   // nothing to rescore — see onboardingRescoreOffer in lib/rescore-progress.ts.
   const [wasAlreadyOnboarded, setWasAlreadyOnboarded] = useState(false);
+  // Whether Step 0 (the key) was shown to THIS user, captured once at mount so
+  // the step numbering stays consistent even if they go Back into it later.
+  // Drives the "Step X of N" labels below — with the key step skipped, the
+  // wizard is 3 steps, not 4, and the door screen must read "Step 1", not
+  // "Step 2" with no Step 1 ever having been shown.
+  const [keyStepNeeded, setKeyStepNeeded] = useState(false);
 
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [showMore, setShowMore] = useState(false);
@@ -185,6 +105,11 @@ export default function Onboarding() {
 
   const [rescoreReason, setRescoreReason] = useState<RescoreReason | null>(null);
   const [rescoreCount, setRescoreCount] = useState(0);
+  // Set when getSettings() itself failed after Finish, so scoredJobCount could
+  // not be confirmed — see handleFinish. Kept apart from rescoreReason because
+  // rescorePromptQuestion's wording quotes an exact count and a dollar figure,
+  // neither of which can be stated honestly here.
+  const [rescoreUnknown, setRescoreUnknown] = useState(false);
   const [rescoring, setRescoring] = useState(false);
   const [rescoreNotice, setRescoreNotice] = useState<string | null>(null);
   const [rescoreError, setRescoreError] = useState<string | null>(null);
@@ -196,8 +121,17 @@ export default function Onboarding() {
       try {
         const [state, keyStatus] = await Promise.all([getOnboardingState(), getApiKeyStatus()]);
         if (cancelled) return;
-        // Presence, not truthiness — the message can be empty.
-        if (state.error !== undefined) setLoadError(state.error);
+        // Presence, not truthiness — the message can be empty. On a failed
+        // read, `state.answers` is DEFAULT_PROFILE's EMPTY defaults (see
+        // getOnboardingState's own fallback) — NOT the tenant's real stored
+        // answers, so it is deliberately not applied here. loadError being set
+        // blocks the whole wizard below (Finding 1); nothing downstream of
+        // this branch can reach Finish, so there is nothing to guard by
+        // skipping setWasAlreadyOnboarded / setStep too.
+        if (state.error !== undefined) {
+          setLoadError(state.error);
+          return;
+        }
         setAnswers(state.answers);
         setWasAlreadyOnboarded(
           state.onboardedAt !== null && state.onboardedAt.length > 0
@@ -205,7 +139,9 @@ export default function Onboarding() {
         // A failed key check is treated the same as "no key": Step 0 still
         // shows, and ApiKeyPanel surfaces the read failure itself when it
         // loads a second time.
-        setStep(keyStatus.error === undefined && keyStatus.present ? "door" : "key");
+        const needsKey = !(keyStatus.error === undefined && keyStatus.present);
+        setKeyStepNeeded(needsKey);
+        setStep(needsKey ? "key" : "door");
       } catch (err) {
         if (!cancelled) setLoadError(`Could not load onboarding — ${message(err)}`);
       }
@@ -214,6 +150,22 @@ export default function Onboarding() {
       cancelled = true;
     };
   }, []);
+
+  // Step numbering, relative to what THIS user actually sees (Step 0/"key" is
+  // skipped for anyone with a stored key already) rather than a fixed literal
+  // — a fixed "Step 2 of 4" on the door screen read as skipping a step for
+  // whoever never saw Step 1. Pure arithmetic, not a decision with a wrong
+  // answer worth pinning in lib/: unlike payloadFrom/draftFromGenerated, there
+  // is no failure mode here subtler than "off by one", and it is visible on
+  // every screen it appears on.
+  const totalSteps = keyStepNeeded ? 4 : 3;
+  const stepNumber = (s: "key" | "door" | "answers" | "generating" | "review") => {
+    if (s === "key") return 1;
+    const base = keyStepNeeded ? 1 : 0;
+    if (s === "door" || s === "answers") return base + 1;
+    if (s === "generating") return base + 2;
+    return base + 3; // review
+  };
 
   async function handleKeyContinue() {
     setBusy((b) => ({ ...b, key: true }));
@@ -371,6 +323,23 @@ export default function Onboarding() {
       // onboardingRescoreOffer in lib/rescore-progress.ts.
       if (wasAlreadyOnboarded) {
         const settings = await getSettings();
+        // Presence, not truthiness. A failed count read leaves
+        // scoredJobCount at 0, which onboardingRescoreOffer reads as "nothing
+        // to rescore" — silently suppressing the offer exactly when the
+        // database is flaky, right after this tenant's fit brain changed.
+        // Offering anyway is the safer direction: a redundant offer costs one
+        // dismissal, a wrongly suppressed one leaves the jobs table scored
+        // against two different careers with nothing on screen saying so.
+        if (settings.error !== undefined) {
+          setRescoreReason(null);
+          setRescoreUnknown(true);
+          setRescoreCount(0);
+          setRescoreDone(false);
+          setRescoreNotice(null);
+          setRescoreError(null);
+          setStep("rescore");
+          return;
+        }
         const offer = onboardingRescoreOffer({
           scoredJobCount: settings.scoredJobCount,
           wasAlreadyOnboarded: true,
@@ -378,6 +347,7 @@ export default function Onboarding() {
         });
         if (offer) {
           setRescoreReason(offer);
+          setRescoreUnknown(false);
           setRescoreCount(settings.scoredJobCount);
           setRescoreDone(false);
           setRescoreNotice(null);
@@ -401,7 +371,11 @@ export default function Onboarding() {
     setRescoreNotice(null);
     try {
       const pass = await runRescorePass({
-        total: rescoreCount,
+        // See UNKNOWN_RESCORE_BUDGET's own comment: this is a batch-count
+        // CEILING, not the number of rows rescored, so an unknown count is
+        // served by a generously large one rather than by 0 (which would cap
+        // a real rescore at a single batch).
+        total: rescoreUnknown ? UNKNOWN_RESCORE_BUDGET : rescoreCount,
         runBatch: (args) => rescoreAll(args),
         onProgress: (totals) => setRescoreNotice(rescoreSummary(totals)),
       });
@@ -413,7 +387,11 @@ export default function Onboarding() {
       }
       if (passDrained(pass)) {
         const stamp = await markCompScoringRescored(pass);
-        if (stamp.error) {
+        // Presence, not truthiness — the repo's signature defect, copied
+        // verbatim from components/Settings.tsx's own `if (stamp.error)`.
+        // Fixed here; Settings.tsx is out of scope for this task and is
+        // tracked separately.
+        if (stamp.error !== undefined) {
           setRescoreNotice(
             (n) => `${n ?? ""} (${stamp.error} — this offer may reappear later.)`
           );
@@ -438,6 +416,24 @@ export default function Onboarding() {
     );
   }
 
+  // BLOCKS the whole wizard (Finding 1) rather than warning and continuing.
+  // `answers` in this state is still DEFAULT_PROFILE's empty defaults — the
+  // mount effect deliberately returns before applying the real read — so
+  // there is nothing safe to show or edit, and no path from here reaches
+  // saveProfile.
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-10">
+        <h1 className="font-heading text-2xl font-semibold text-ink">Welcome</h1>
+        <div className="mt-4 rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-3 text-sm text-[#92400E]">
+          Could not load your saved answers — {loadError}. Continuing would risk overwriting
+          anything you already saved, so this page is not shown until it can read them.
+          Reload to try again.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
       <h1 className="font-heading text-2xl font-semibold text-ink">Welcome</h1>
@@ -445,15 +441,11 @@ export default function Onboarding() {
         A few questions decide what this tool searches for and how it scores what it finds.
       </p>
 
-      {loadError && (
-        <div className="mt-4 rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-3 text-sm text-[#92400E]">
-          {loadError}
-        </div>
-      )}
-
       {step === "key" && (
         <section className="mt-8">
-          <h2 className="font-heading text-lg font-semibold">Step 1 of 4 — your API key</h2>
+          <h2 className="font-heading text-lg font-semibold">
+            Step {stepNumber("key")} of {totalSteps} — your API key
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
             This app runs entirely on your own model API key — nothing you do here bills
             anyone but you, and there is no free tier to fall back on.
@@ -474,7 +466,9 @@ export default function Onboarding() {
 
       {step === "door" && (
         <section className="mt-8">
-          <h2 className="font-heading text-lg font-semibold">Step 2 of 4 — tell us about you</h2>
+          <h2 className="font-heading text-lg font-semibold">
+            Step {stepNumber("door")} of {totalSteps} — tell us about you
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
             Answer a few short questions, or paste a résumé and tell us what you want next.
           </p>
@@ -504,7 +498,8 @@ export default function Onboarding() {
       {step === "answers" && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step 2 of 4 — {answers.mode === "resume" ? "your résumé" : "a few questions"}
+            Step {stepNumber("answers")} of {totalSteps} —{" "}
+            {answers.mode === "resume" ? "your résumé" : "a few questions"}
           </h2>
 
           {answers.mode === "resume" ? (
@@ -594,7 +589,9 @@ export default function Onboarding() {
 
       {step === "generating" && (
         <section className="mt-8">
-          <h2 className="font-heading text-lg font-semibold">Step 3 of 4 — build your profile</h2>
+          <h2 className="font-heading text-lg font-semibold">
+            Step {stepNumber("generating")} of {totalSteps} — build your profile
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
             One billed call to your model provider turns your answers into search terms and a
             scoring rubric. You can edit everything it produces on the next screen.
@@ -634,7 +631,9 @@ export default function Onboarding() {
 
       {step === "review" && draft && (
         <section className="mt-8">
-          <h2 className="font-heading text-lg font-semibold">Step 4 of 4 — review</h2>
+          <h2 className="font-heading text-lg font-semibold">
+            Step {stepNumber("review")} of {totalSteps} — review
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
             Edit anything that is wrong before finishing. Nothing is saved until you click
             Finish.
@@ -904,11 +903,16 @@ export default function Onboarding() {
         </section>
       )}
 
-      {step === "rescore" && rescoreReason !== null && (
+      {step === "rescore" && (rescoreReason !== null || rescoreUnknown) && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">Your existing pipeline</h2>
           <p className="mt-2 max-w-2xl text-sm text-ink/70">
-            {rescorePromptQuestion(rescoreReason, rescoreCount)}
+            {rescoreReason !== null
+              ? rescorePromptQuestion(rescoreReason, rescoreCount)
+              : "Your profile just changed, but this app could not confirm how many " +
+                "of your existing roles are already scored. Rescoring now keeps your " +
+                "pipeline scored consistently against your new profile rather than " +
+                "half against your old one."}
           </p>
 
           {rescoring && (
