@@ -50,17 +50,28 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
   const [statusLoadError, setStatusLoadError] = useState(false);
 
   useEffect(() => {
-    void getJobStatuses().then((r) => {
-      // Presence, not truthiness: the error string can be empty (an
-      // unreachable database rejects with an empty AggregateError message).
-      // getJobStatuses returns the shipped defaults ALONGSIDE a failed read,
-      // and its own doc comment says that config must never be presented as
-      // the user's — so only adopt `r.statuses` when the read actually
-      // succeeded. On failure this panel just stays on its DEFAULT_STATUSES
-      // seed, which is the correct no-op state for the pre-feature app.
-      if (r.error === undefined) setStatuses(r.statuses);
-      else setStatusLoadError(true);
-    });
+    (async () => {
+      try {
+        const r = await getJobStatuses();
+        // Presence, not truthiness: the error string can be empty (an
+        // unreachable database rejects with an empty AggregateError message).
+        // getJobStatuses returns the shipped defaults ALONGSIDE a failed read,
+        // and its own doc comment says that config must never be presented as
+        // the user's — so only adopt `r.statuses` when the read actually
+        // succeeded. On failure this panel just stays on its DEFAULT_STATUSES
+        // seed, which is the correct no-op state for the pre-feature app.
+        if (r.error === undefined) setStatuses(r.statuses);
+        else setStatusLoadError(true);
+      } catch {
+        // getJobStatuses calls requireActor() first, which THROWS (rather
+        // than returning an error) on an expired or missing session — see
+        // lib/require-actor.ts. Without this catch, session expiry would
+        // reject the promise, skip the branch above entirely, and leave the
+        // user on the defaults with no warning and an unhandled rejection in
+        // the console. Same visible fallback as the resolved-error path.
+        setStatusLoadError(true);
+      }
+    })();
   }, []);
 
   function set(k: keyof typeof EMPTY, v: string) {
