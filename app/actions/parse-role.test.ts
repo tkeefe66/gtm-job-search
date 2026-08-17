@@ -24,21 +24,20 @@ vi.mock("@/lib/require-actor", () => ({
 
 
 // Mock the edges, keep the decision (app/actions/roles.test.ts has the same
-// harness note). Only parseJobUrl's catch path is under test here, so the
-// Claude client is the single edge that has to move.
-vi.mock("@/lib/anthropic", () => ({
+// harness note). The facade is the single edge every model call in this module
+// goes through, so it is the only one that has to move.
+vi.mock("@/lib/model-call", () => ({
   callWithWebSearch: vi.fn(),
-  anthropic: {},
-  MODEL: "claude-sonnet-4-6",
+  complete: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),
 }));
 vi.mock("@/lib/search-criteria", () => ({ loadScoringInputs: vi.fn() }));
-vi.mock("@/lib/usage.js", () => ({ report: vi.fn() }));
 
-import { parseJobUrl, parseRecruiterText } from "./parse-role";
-import { callWithWebSearch } from "@/lib/anthropic";
+import { parseJobUrl, parseRecruiterText, scoreFit } from "./parse-role";
+import { callWithWebSearch, complete } from "@/lib/model-call";
 
 const search = vi.mocked(callWithWebSearch);
+const model = vi.mocked(complete);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -104,5 +103,45 @@ describe("parseRecruiterText always returns a message when it failed", () => {
 
     expect(res.error).toBeUndefined();
     expect(res.role?.company).toBe("Clay");
+  });
+});
+
+describe("scoreFit runs through the provider registry, not the raw SDK", () => {
+  // The real FitPromptRole (lib/fit-prompt.ts:30) — every non-optional field,
+  // because scoreFit's parameter type is that interface and a partial will not
+  // compile. salary_range is "" when the posting published none, never null.
+  const role = {
+    company: "Acme",
+    role_title: "VP RevOps",
+    company_description: "Series B GTM analytics",
+    key_skills: "Salesforce, dbt",
+    fit_summary: "close",
+    department: "Revenue Operations",
+    location: "Denver, CO",
+    salary_range: "$220K–$260K (base)",
+  };
+  const fitInputs = { fitBrain: "score this candidate", compFloor: null };
+
+  test("a score comes back through the facade", async () => {
+    model.mockResolvedValue(JSON.stringify({ score: 4, rationale: "close fit" }));
+    const res = await scoreFit({ ...role, fitInputs });
+    expect(res).toMatchObject({ score: 4, rationale: "close fit" });
+  });
+
+  test("the model is not named at the call site — routing is the scope's job", async () => {
+    model.mockResolvedValue(JSON.stringify({ score: 3, rationale: "" }));
+    await scoreFit({ ...role, fitInputs });
+    expect(model.mock.calls[0][0]).not.toHaveProperty("model");
+  });
+
+  // The empty-string rule: a failure that is not the database substitutes its
+  // own sentence, because UNDESCRIBED_DB_ERROR names the database and would be
+  // a false sentence here.
+  test("a model failure with an empty message still returns a sentence", async () => {
+    model.mockRejectedValue(new Error(""));
+    const res = await scoreFit({ ...role, fitInputs });
+    expect(res.error).not.toBe("");
+    expect(res.error).toBeTruthy();
+    expect(res.score).toBe(0);
   });
 });

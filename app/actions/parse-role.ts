@@ -3,12 +3,10 @@
 import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 
-import { callWithWebSearch, clientFor, MODEL, parseJson } from "@/lib/anthropic";
-import { recordUsage } from "@/lib/billing-context";
+import { callWithWebSearch, complete, parseJson } from "@/lib/model-call";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { buildFitPrompt, type FitPromptRole } from "@/lib/fit-prompt";
 import { loadScoringInputs } from "@/lib/search-criteria";
-import { report } from "@/lib/usage.js";
 
 export interface ParsedRole {
   company: string;
@@ -237,39 +235,25 @@ async function scoreFitInner(
 ): Promise<{ score: number; rationale: string; error?: string }> {
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
-    // clientFor(), NOT the module-level `anthropic` client. scoreFit is the one
-    // call site that used the raw SDK, so a BYO tenant's scoring would have
-    // silently billed the platform key — the exact "never fall back silently"
-    // rule this design states elsewhere. recordUsage below is why its tokens
-    // reach the meter at all.
-    const message = await clientFor().messages.create({
-      model: MODEL,
-      max_tokens: 500,
+    // Through the facade, which resolves the tenant's provider, key and model
+    // from the ambient billing scope and records this call's usage into it.
+    // This is the app's highest-volume model call — once per role inside
+    // ingestRoles' Promise.all — so it is the one that most needs to route the
+    // same way as everything else rather than holding its own client.
+    const raw = await complete({
       system:
         "You are a ruthless career coach scoring job fit for a specific candidate. Be honest and harsh — most roles should score 2-3. Only give 4-5 for genuinely strong matches. A 5 is rare. Return ONLY valid JSON.",
-      messages: [
-        {
-          role: "user",
-          content: buildFitPrompt(opts, fitInputs),
-        },
-      ],
+      prompt: buildFitPrompt(opts, fitInputs),
+      maxTokens: 500,
     });
-
-    report("gtm-job-search", MODEL, message.usage);
-    recordUsage({
-      inputTokens: message.usage?.input_tokens ?? 0,
-      outputTokens: message.usage?.output_tokens ?? 0,
-    });
-
-    const raw = message.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("");
 
     const result = parseJson<{ score: number; rationale: string }>(raw);
     return { score: Math.min(5, Math.max(1, Math.round(result.score))), rationale: result.rationale };
   } catch (err) {
     console.error("scoreFit error:", err);
-    return { score: 0, rationale: "", error: err instanceof Error ? err.message : "Failed to score fit." };
+    // Not describeWriteFailure: this failure is the model or the parse, not the
+    // database, and a message naming the database would be a false sentence.
+    const message = err instanceof Error && err.message ? err.message : "Failed to score fit.";
+    return { score: 0, rationale: "", error: message };
   }
 }
