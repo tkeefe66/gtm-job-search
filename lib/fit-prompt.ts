@@ -145,8 +145,9 @@ export function aiGtmCompCarveOut(compFloor: number | null): string {
  * same seam defect aiGtmCompCarveOut had, and the same shape compScoringClause
  * already solves by owning its own leading newlines.
  *
- * The bullets carry no leading or trailing newline: both blank lines around the
- * block belong to this wrapper.
+ * The bullets carry no leading or trailing newline. This wrapper owns only the
+ * blank line BEFORE the block; the blank line after it stays in the template
+ * literal, so the empty case still separates the surrounding sections.
  */
 export function titleScopeBlock(titleScope: string): string {
   if (!titleScope) return "";

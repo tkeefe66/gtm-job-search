@@ -47,21 +47,22 @@ export interface FitInputs {
   strongTail: string;
   /**
    * The TITLE SCOPE SIGNALS bullets, heading excluded — `titleScopeBlock` in
-   * lib/fit-prompt.ts owns the heading and both surrounding blank lines, the
-   * same split `weakFitTail`/`moderateTail`/`strongTail` use for their own
-   * seams. "" omits the whole block, heading included; see `titleScopeBlock`
-   * for why the heading cannot live in the template literal.
+   * lib/fit-prompt.ts owns the heading and only the blank line BEFORE the
+   * block; the blank line after it stays in the template literal, the same
+   * split `weakFitTail`/`moderateTail`/`strongTail` use for their own seams.
+   * "" omits the whole block, heading included; see `titleScopeBlock` for why
+   * the heading cannot live in the template literal.
    */
   titleScope: string;
   /**
-   * The AI-DRIVEN GTM TRANSFORMATION RULE block, heading included — unlike
-   * `titleScope`, `domainBonusBlock` does not own a heading of its own,
-   * because the block's structure (a numbered "when all three are true" test)
-   * is itself part of what a career-neutral default cannot assume; a
-   * different career's domain bonus may not be a three-condition rule at all.
-   * "" omits the whole block. The compensation carve-out (`aiGtmCompCarveOut`)
-   * is appended by `domainBonusBlock`, not stored here, so it keeps gating on
-   * `compFloor` even when this field is replaced with different text.
+   * The AI-DRIVEN GTM TRANSFORMATION RULE block, heading included this time —
+   * unlike `titleScope`, this field carries its own heading, because the
+   * block's structure (a numbered "when all three are true" test) is itself
+   * part of what a career-neutral default cannot assume; a different career's
+   * domain bonus may not be a three-condition rule at all. "" omits the whole
+   * block. The compensation carve-out (`aiGtmCompCarveOut`) is appended by
+   * `domainBonusBlock`, not stored here, so it keeps gating on `compFloor`
+   * even when this field is replaced with different text.
    */
   domainBonus: string;
 }

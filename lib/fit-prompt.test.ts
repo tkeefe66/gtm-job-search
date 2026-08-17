@@ -459,6 +459,38 @@ describe("the rendered prompt, against its fixture", () => {
     expect(noFloor.filter((l) => !withFloor.includes(l))).toEqual([]);
   });
 
+  test("empty-blocks differs from with-floor ONLY by the title-scope and domain-bonus text", () => {
+    // Same hazard as the test above, for the third fixture: empty-blocks.txt
+    // and with-floor.txt could each match their own rendering while having
+    // drifted apart from each other for an unrelated reason (e.g. a hand-edit
+    // to one file's compensation section). Every line in empty-blocks.txt must
+    // also appear in with-floor.txt — nothing in the "both blocks omitted"
+    // rendering is content that isn't ALSO in the "both blocks present" one.
+    const withFloor = read("fit-prompt.with-floor.txt").split("\n");
+    const emptyBlocks = read("fit-prompt.empty-blocks.txt").split("\n");
+    expect(emptyBlocks.filter((l) => !withFloor.includes(l))).toEqual([]);
+    // And the only lines with-floor has that empty-blocks lacks are the
+    // TITLE SCOPE SIGNALS heading + its five bullets, the AI-DRIVEN GTM
+    // TRANSFORMATION RULE heading + its three-condition body, and the
+    // compensation carve-out line that rides along with it.
+    const extra = withFloor.filter((l) => !emptyBlocks.includes(l));
+    expect(extra).toEqual([
+      "TITLE SCOPE SIGNALS (use these to adjust score):",
+      '- "Head of", "VP", "Director" of RevOps / Revenue Operations / GTM Systems / Marketing Operations / GTM Strategy = leadership level, eligible for 4-5 if domain matches',
+      '- "GTM Engineer", "GTM Systems", "AI Operations", "AI Ops", "Revenue Systems", "Marketing Ops Architect", "Agentic / Automation" in the title = a direct match IF that is the positioning the candidate describes; score on company tier + scope + AI/building mandate, eligible for 4-5 even as an IC when systems/agentic work and broad ownership are the point',
+      "- IC / practitioner builder roles at elite AI-first companies (Anthropic, OpenAI, Google DeepMind, Cursor, Cohere, Mistral, etc.) or hyper-growth B2B SaaS (Series B+) where hands-on GTM systems + agentic AI is the mandate = eligible for 4-5 regardless of title — the building, equity, learning, and impact outweigh the title",
+      "- A narrowly-scoped role at a generic small company with no building mandate = cap at 2-3, UNLESS narrow-and-hands-on is what the candidate says they want",
+      "- Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower",
+      "AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):",
+      "1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)",
+      '2. The role is explicitly framed as leading an AI transformation of GTM, RevOps, or Marketing Operations — building AI/agentic workflows into the revenue engine, not just "uses AI"',
+      "3. The domain is within 1 degree of THE CANDIDATE's background as stated above (adjacent industry, adjacent function, or any vertical where the experience they describe transfers)",
+      "→ When all three apply: floor score of 4. This is a mandate to define what AI means for the entire GTM/revenue motion — exactly the kind of mandate the candidate describes wanting.",
+      "→ If the domain requires deep vertical expertise the candidate does not claim (pharma, clinical, hardware, heavy regulatory): stay at 3. Real upside but execution risk is high — they would spend year 1 learning the domain rather than building.",
+      "→ If the posted base is below the candidate's stated minimum, or is a range whose top only reaches it, cap at 3 regardless of this rule. The compensation floor overrides this one.",
+    ]);
+  });
+
   test("neither rendering carries a doubled blank line", () => {
     // A splice that renders "" leaves the newlines around it behind. Harmless
     // to a model, but it is the visible symptom of a seam that assumed its
