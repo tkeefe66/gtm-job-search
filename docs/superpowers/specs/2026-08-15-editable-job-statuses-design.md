@@ -240,8 +240,18 @@ iterates only the three existing groups and never touches a fourth.
 
 ### Side effects on save
 
-`CACHES_TO_CLEAR[jobStatuses] = []`, `AFFECTS_CRAWL` excludes it,
-`PATHS_TO_REVALIDATE[jobStatuses] = []`.
+**No entries in `lib/settings-effects.ts` at all** — revision 3 said to add two
+`[]` entries, and that contradicts its own storage decision one section above.
+`CACHES_TO_CLEAR` and `PATHS_TO_REVALIDATE` are both `Record<SettingKey, string[]>`,
+and `JOB_STATUSES_KEY` is deliberately not a `SettingKey`, so neither entry can be
+written; `AFFECTS_CRAWL` is a `SettingKey[]` and excludes it for the same reason.
+The file is untouched.
+
+The effect those entries were meant to express is still correct and still has to
+happen — it just belongs in `saveJobStatuses` directly: clear nothing (statuses
+do not change what any search returns) and revalidate nothing (`/roles` renders
+`compFloor` server-side but fetches statuses client-side, so there is no
+server-rendered status to invalidate).
 
 The empty revalidation list is correct, but **not for the reason revision 2
 gave**. It claimed "/roles is a client component that fetches for itself";
@@ -367,7 +377,7 @@ exactly one tile for any config **and any stored status value**.
 | `lib/job-statuses.test.ts` | NEW |
 | `lib/types.ts` | `JobStatus` narrows to `SystemStatusKey` (`:1-14`); the three arrays (`:16`, `:32`, `:42`) deleted after `DEFAULT_STATUSES` is derived from them. `Job.status` at `:94` is already `JobStatus \| string` and is unaffected |
 | `lib/settings-store.ts` | Standalone `JOB_STATUSES_KEY`; raw read |
-| `lib/settings-effects.ts` | Two `[]` entries |
+| `lib/settings-effects.ts` | **No change** — see Side effects on save |
 | `lib/settings-view.ts` | `statuses` added to `SettingsView` (`:21`) |
 | `app/actions/settings.ts` | `saveJobStatuses`, `countJobsByStatus`, `reassignStatus` — the last two raw SQL with an explicit `tenantId` |
 | `app/actions/jobs.ts` | `getJobStatuses()` with an error channel; also drop the now-unused `JobStatus` import at `:7` |
@@ -485,10 +495,15 @@ active and terminal sets" cannot be violated when `bucket` is a single field, an
 6. **The `JobStatus` annotation list was incomplete** — 11 sites listed, 17 in the
    file. The filter predicates at `:229-233` and the chip handler at `:534` were
    missing.
-7. **A job holding a key in no config entry was undefined**, while Testing #9
+7. **The two `lib/settings-effects.ts` entries could not be written.** Revision 3
+   specified `CACHES_TO_CLEAR[jobStatuses] = []` and
+   `PATHS_TO_REVALIDATE[jobStatuses] = []` one section after deciding that
+   `JOB_STATUSES_KEY` is not a `SettingKey`; both records are keyed by
+   `SettingKey`. The file is untouched and the intent moves into `saveJobStatuses`.
+8. **A job holding a key in no config entry was undefined**, while Testing #9
    asserted every job tiles for *any* config. Now specified: displayed verbatim,
    bucketed active, never rewritten.
-8. **`ui.tsx`'s dead map is also wrong**, not just unused: it lists `Reviewing`,
+9. **`ui.tsx`'s dead map is also wrong**, not just unused: it lists `Reviewing`,
    which is not a `JobStatus`, and disagrees with `RolesTable` on shared names.
    Recorded so the deletion is not mistaken for a lossy simplification.
 
