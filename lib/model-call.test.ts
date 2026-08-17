@@ -19,7 +19,10 @@ vi.mock("./providers/registry", () => ({
 
 import { callWithWebSearch, complete as completeCall, SearchUnavailableError } from "./model-call";
 
-const usage = { inputTokens: 10, cachedInputTokens: 0, outputTokens: 5, searches: 2 };
+// cachedInputTokens is deliberately NON-ZERO: it is priced separately from
+// fresh input, and a zero fixture cannot tell "carried through" apart from
+// "never set".
+const usage = { inputTokens: 10, cachedInputTokens: 40, outputTokens: 5, searches: 2 };
 
 function scope(over: Partial<Parameters<typeof runWithBilling>[0]> = {}) {
   return {
@@ -53,6 +56,7 @@ describe("the facade routes through the scope's provider", () => {
 
     expect(s.searches).toBe(2);
     expect(s.inputTokens).toBe(10);
+    expect(s.cachedInputTokens).toBe(40);
     expect(s.outputTokens).toBe(5);
   });
 
