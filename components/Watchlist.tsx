@@ -5,6 +5,7 @@ import {
   checkCompanyNow,
   getTrackedCompanies,
   setCareersUrl,
+  setCrawlInterval,
   setTracking,
   trackCompanyByName,
 } from "@/app/actions/watchlist";
@@ -137,6 +138,21 @@ export default function Watchlist() {
   const tracked = companies.filter((c) => c.tracking_enabled);
   const untracked = companies.filter((c) => !c.tracking_enabled);
 
+  async function changeInterval(company: string, days: number) {
+    // The per-row lock, not a shared one — see busyRows' comment above: a single
+    // shared value lets one row's action re-enable another row mid-flight.
+    setRowBusy(company, true);
+    const res = await setCrawlInterval(company, days);
+    // Presence, not truthiness — an unreachable database reports an empty
+    // message, and `if (res.error)` would show the change as saved.
+    if (res.error !== undefined) setNotice(res.error || "Could not save that interval.");
+    setRowBusy(company, false);
+    // Reload rather than patching state: the NEXT CHECK date on this row is
+    // derived from the interval, so a local edit would leave the row showing a
+    // schedule that no longer matches what the crawler will do.
+    await load();
+  }
+
   function renderRow(c: TrackedCompany, i: number) {
     const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
     const failing = c.consecutive_failures >= 3;
@@ -159,6 +175,24 @@ export default function Watchlist() {
 
           {c.tagline && (
             <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{c.tagline}</p>
+          )}
+
+          {c.tracking_enabled && (
+            <label className="mt-1 flex items-center gap-1 text-xs text-ink/50">
+              Check every
+              <select
+                value={c.crawl_interval_days}
+                disabled={busyRows.has(c.company)}
+                onChange={(e) => void changeInterval(c.company, Number(e.target.value))}
+                className="rounded border border-slate bg-white px-1 py-0.5 text-xs disabled:opacity-40"
+              >
+                {[1, 3, 7, 14, 30, 90].map((d) => (
+                  <option key={d} value={d}>
+                    {d === 1 ? "day" : `${d} days`}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
 
           <p className="mt-1 text-xs text-ink/40">

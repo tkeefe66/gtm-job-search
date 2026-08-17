@@ -1,0 +1,13 @@
+-- Insights is removed from the app, so its cache goes with it.
+--
+-- Safe to drop rather than keep: insights_cache held only generated summaries of
+-- the jobs table. No user-authored data lived here — every row was a Claude
+-- response that could be produced again from the pipeline, if the feature ever
+-- returned.
+--
+-- NOTE the coupling this has to the backup job: lib/backup-guard.mjs asserts the
+-- app's own tables exist before it will write a dump, and insights_cache was on
+-- that list. Dropping the table without removing it from REQUIRED_TABLES makes
+-- every nightly backup REFUSE — correctly, and for a reason nobody would connect
+-- to a feature removed a week earlier. Both changes ship together.
+drop table if exists insights_cache;

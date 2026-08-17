@@ -46,3 +46,28 @@ export function isDue(
   if (!due) return true;
   return due.getTime() <= now.getTime();
 }
+
+/**
+ * Bounds on a per-company crawl interval.
+ *
+ * Below 1 the interval arithmetic in DUE_COMPANIES_SQL makes a company due on
+ * EVERY run, which at 3 crawls a night means one company consumes the whole
+ * platform batch and starves every other company and tenant — a per-company
+ * setting quietly becoming a platform-wide one. Above 365 it stops being a
+ * schedule.
+ *
+ * Lives here rather than in the action because `"use server"` forbids non-async
+ * exports, so a constant declared there cannot be exported OR reached from a
+ * test — the same constraint that put buildFitPrompt in lib/.
+ */
+export const MIN_CRAWL_INTERVAL_DAYS = 1;
+export const MAX_CRAWL_INTERVAL_DAYS = 365;
+
+/** The problem with `days`, or "" when it is fine. */
+export function crawlIntervalError(days: number): string {
+  if (!Number.isInteger(days)) return "Crawl interval must be a whole number of days.";
+  if (days < MIN_CRAWL_INTERVAL_DAYS || days > MAX_CRAWL_INTERVAL_DAYS) {
+    return `Crawl interval must be between ${MIN_CRAWL_INTERVAL_DAYS} and ${MAX_CRAWL_INTERVAL_DAYS} days.`;
+  }
+  return "";
+}

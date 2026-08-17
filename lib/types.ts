@@ -134,21 +134,6 @@ export type JobInsert = Partial<Omit<Job, "id" | "created_at" | "updated_at">> &
   role_title: string;
 };
 
-export interface CompanyArchetype {
-  archetype: string;
-  description: string;
-  example_companies: string[];
-}
-
-export interface Insights {
-  top_skills_in_demand: string[];
-  common_themes: string[];
-  gap_analysis: string;
-  positioning_advice: string;
-  company_archetypes: CompanyArchetype[];
-  recommended_next_searches: string[];
-}
-
 export type CrawlStatus = "ok" | "empty" | "error" | "needs_url";
 export type CrawlMethod = "fetch" | "search";
 

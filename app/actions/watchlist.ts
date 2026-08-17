@@ -5,7 +5,7 @@ import { resolveTenantId } from "@/lib/tenant";
 
 import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
-import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL } from "@/lib/crawl-schedule";
+import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL, crawlIntervalError } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
 import { normalizeCompanyName } from "@/lib/role-key";
 import { rawQuery, supabase } from "@/lib/supabase";
@@ -459,4 +459,41 @@ export async function getDueCompanies(
   );
   if (error) return { companies: [], error: error.message };
   return { companies: (data ?? []).map((r) => r.company) };
+}
+
+/**
+ * How often this company is crawled, in days.
+ *
+ * The scheduler already honours a per-company interval — DUE_COMPANIES_SQL
+ * computes due-ness from `crawl_interval_days` on each row, and the Watchlist
+ * already renders the next check from it. Every company simply sat on the
+ * default of 7 because nothing could set it. This is that missing control.
+ *
+ * Bounded rather than free-form. Below 1 the interval arithmetic in
+ * DUE_COMPANIES_SQL makes a company due on every single run, which at 3 crawls a
+ * night means one company would consume the entire platform batch and starve
+ * every other company and tenant — a per-company setting quietly becoming a
+ * platform-wide one. Above 365 it stops being a schedule.
+ */
+export async function setCrawlInterval(
+  company: string,
+  days: number
+): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
+
+  // Validated here, not only in the form: this is an RPC endpoint, and a value
+  // that only the UI rejects is a value an action still accepts.
+  const invalid = crawlIntervalError(days);
+  if (invalid) return { error: invalid };
+
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
+
+  const { error } = await supabase.forTenant(await resolveTenantId())
+    .from("watchlist")
+    .update({ crawl_interval_days: days })
+    .eq("company", target.company);
+  return { error: error?.message };
 }

@@ -128,7 +128,6 @@ export const TENANT_TABLES = [
   "jobs",
   "watchlist",
   "app_settings",
-  "insights_cache",
   // Added by migration 002. These look like world caches and are not: their
   // contents are produced by prompts built from ONE tenant's criteria, and their
   // keys never contained those criteria.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DUE_COMPANIES_SQL, isDue, nextCheckDue } from "./crawl-schedule";
+import { DUE_COMPANIES_SQL, isDue, nextCheckDue, crawlIntervalError, MIN_CRAWL_INTERVAL_DAYS, MAX_CRAWL_INTERVAL_DAYS } from "./crawl-schedule";
 
 const NOW = new Date("2026-08-12T12:00:00.000Z");
 
@@ -43,5 +43,30 @@ describe("DUE_COMPANIES_SQL", () => {
 
   test("takes its limit from a bound parameter, never interpolation", () => {
     expect(DUE_COMPANIES_SQL).toContain("limit $1");
+  });
+});
+
+describe("crawlIntervalError", () => {
+  test("accepts the values the picker offers", () => {
+    for (const d of [1, 3, 7, 14, 30, 90]) expect(crawlIntervalError(d)).toBe("");
+  });
+
+  // Zero or negative makes DUE_COMPANIES_SQL treat the company as due on every
+  // run — one company would consume the entire 3-crawl nightly batch and starve
+  // everyone else, turning a per-company setting into a platform-wide one.
+  test("refuses intervals that would make a company permanently due", () => {
+    expect(crawlIntervalError(0)).toContain("between");
+    expect(crawlIntervalError(-7)).toContain("between");
+  });
+
+  test("refuses non-integers and absurd values", () => {
+    expect(crawlIntervalError(1.5)).toContain("whole number");
+    expect(crawlIntervalError(NaN)).toContain("whole number");
+    expect(crawlIntervalError(400)).toContain("between");
+  });
+
+  test("the boundaries themselves are allowed", () => {
+    expect(crawlIntervalError(MIN_CRAWL_INTERVAL_DAYS)).toBe("");
+    expect(crawlIntervalError(MAX_CRAWL_INTERVAL_DAYS)).toBe("");
   });
 });

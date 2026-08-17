@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describeThrown, isTenantTable, supabase, TENANT_TABLES } from "./supabase";
 import { UNDESCRIBED_DB_ERROR } from "./write-failure";
@@ -75,15 +75,18 @@ describe("tenant scoping", () => {
       path.join(__dirname, "..", "db", "schema.sql"),
       "utf8"
     );
-    const migration = readFileSync(
-      path.join(__dirname, "..", "db", "migrations", "001_tenant_id.sql"),
-      "utf8"
-    );
-    const sql = `${schema}\n${migration}`;
+    // Every migration, not just the first: a table can gain a tenant_id in one
+    // and be DROPPED in a later one, and reading only the addition would demand
+    // that a table which no longer exists stay registered.
+    const dir = path.join(__dirname, "..", "db", "migrations");
+    const sql = [schema, ...readdirSync(dir).sort().map((f) => readFileSync(path.join(dir, f), "utf8"))].join("\n");
 
     const scoped = new Set<string>();
     for (const m of sql.matchAll(/alter table (\w+)\s+add column if not exists tenant_id/gi)) {
       scoped.add(m[1]);
+    }
+    for (const m of sql.matchAll(/drop table if exists (\w+)/gi)) {
+      scoped.delete(m[1]);
     }
     expect(scoped.size).toBeGreaterThan(0);
 
