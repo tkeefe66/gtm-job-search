@@ -43,12 +43,21 @@ TITLE SCOPE SIGNALS (use these to adjust score):
 - A narrowly-scoped role at a generic small company with no building mandate = cap at 2-3, UNLESS narrow-and-hands-on is what the candidate says they want
 - Pure people-management or pure process-admin roles with no systems architecture or AI/building component = lower
 
-FINANCIAL SIGNALS (use these to adjust score up or down):
+FINANCIAL SIGNALS — UPWARD ONLY, and only if the candidate cares:
+These describe company stage, equity and liquidity. Apply them ONLY to the extent
+the candidate's own words reference caring about company stage, equity, growth or
+exit. If the candidate never mentions those things, treat company financials as
+NEUTRAL and score on function, level and domain alone.
 - High ARR ($100M+) with a clear exit signal (PE exit, IPO path) = strong upward signal — equity likely meaningful, role has real scope
 - PE-backed with exit planned = structured liquidity event coming, high upside if the fit is there — bump score +0.5 if other signals are strong
 - Top-tier backer (a16z, Sequoia, Benchmark, General Catalyst, etc.) = legitimacy signal, bump slightly
-- Unknown backer or pre-revenue = neutral, don't penalize unless other signals are weak
 - Very high ARR ($500M+) at a PE-backed company heading to exit = rare opportunity signal, weight positively
+- ABSENCE OF THIS DATA IS NOT A DEDUCTION. Unknown backer, unknown ARR, unlisted
+  stage, or no AI/transformation mandate must NEVER lower a score or cap it below
+  what the function, level and domain fit earn on their own. Most postings do not
+  publish financials; treating silence as a negative would cap every role at a
+  company that simply did not say. Say nothing about it in the rationale rather
+  than citing it as a reason.
 
 AI-DRIVEN GTM TRANSFORMATION RULE (apply when all three are true):
 1. The company is an established B2B SaaS / RevTech / MarTech company (PE-backed, growth-stage, or public — not just a tiny startup)
