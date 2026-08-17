@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { parseRecruiterText, scoreFit } from "@/app/actions/parse-role";
-import { addJob } from "@/app/actions/jobs";
-import { JOB_STATUSES, type JobStatus } from "@/lib/types";
+import { addJob, getJobStatuses } from "@/app/actions/jobs";
+import { DEFAULT_STATUSES, optionsFor, type JobStatusDef } from "@/lib/job-statuses";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
@@ -34,7 +34,7 @@ const EMPTY = {
   recruiter_email: "",
   recruiter_company: "",
   recruiter_notes: "",
-  status: "New" as JobStatus,
+  status: "New",
 };
 
 export default function RecruiterPanel({ onClose, onAdded }: Props) {
@@ -46,6 +46,22 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [statuses, setStatuses] = useState<JobStatusDef[]>(DEFAULT_STATUSES);
+  const [statusLoadError, setStatusLoadError] = useState(false);
+
+  useEffect(() => {
+    void getJobStatuses().then((r) => {
+      // Presence, not truthiness: the error string can be empty (an
+      // unreachable database rejects with an empty AggregateError message).
+      // getJobStatuses returns the shipped defaults ALONGSIDE a failed read,
+      // and its own doc comment says that config must never be presented as
+      // the user's — so only adopt `r.statuses` when the read actually
+      // succeeded. On failure this panel just stays on its DEFAULT_STATUSES
+      // seed, which is the correct no-op state for the pre-feature app.
+      if (r.error === undefined) setStatuses(r.statuses);
+      else setStatusLoadError(true);
+    });
+  }, []);
 
   function set(k: keyof typeof EMPTY, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -263,8 +279,15 @@ export default function RecruiterPanel({ onClose, onAdded }: Props) {
                     onChange={(e) => set("status", e.target.value)}
                     className="w-full rounded-md border border-slate bg-white px-3 py-1.5 text-sm outline-none focus:border-ink"
                   >
-                    {JOB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {optionsFor(statuses, form.status).map((d) => (
+                      <option key={d.key} value={d.key}>{d.label}</option>
+                    ))}
                   </select>
+                  {statusLoadError && (
+                    <p className="mt-1 text-xs text-[#92400E]">
+                      Couldn&apos;t load your status settings — showing the defaults.
+                    </p>
+                  )}
                 </Field>
               </div>
             </div>

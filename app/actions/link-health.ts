@@ -2,12 +2,13 @@
 
 import { supabase } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { updateJob } from "@/app/actions/jobs";
+import { updateJob, getJobStatuses } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
 import { resolveEmployerLink } from "@/lib/resolve-job-link";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { TERMINAL_STATUSES, type Job } from "@/lib/types";
+import { bucketFor } from "@/lib/job-statuses";
+import type { Job } from "@/lib/types";
 
 /**
  * Re-checks stored job links and repairs what it safely can.
@@ -75,8 +76,19 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     return { ...empty, error: readFailure };
   }
 
+  // This pass decides which roles cost a liveness check, so a failed config
+  // read must not be silently bucketed on the defaults as though the terminal
+  // set were known. Presence, not truthiness — same trap as the jobs read
+  // above.
+  const { statuses, error: statusesError } = await getJobStatuses();
+  if (statusesError !== undefined) {
+    const failure = describeWriteFailure(statusesError, "read your status settings to check links");
+    console.error(`repairJobLinks: ${failure}`);
+    return { ...empty, error: failure };
+  }
+
   const jobs = ((data as Job[]) ?? []).filter(
-    (j) => j.job_url && !TERMINAL_STATUSES.includes(j.status as never)
+    (j) => j.job_url && bucketFor(statuses, j.status) !== "terminal"
   );
 
   const report: LinkRepairReport = { ...empty };
