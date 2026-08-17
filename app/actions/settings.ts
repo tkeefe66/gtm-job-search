@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { revalidatePath } from "next/cache";
@@ -457,13 +458,55 @@ export interface RescoreResult {
  * pass that value in. See passStartFrom in lib/rescore-scope.ts — a per-batch
  * timestamp makes `remaining` uncloseable and bills full extra passes.
  */
+/**
+ * Metered. Rescore fans a scoreFit call across every already-scored row, so an
+ * unmetered pass is the easiest way in the app to spend a lot without clicking
+ * a lot — one press, then a loop the UI drives.
+ *
+ * The reservation is a floor per BATCH, not per pass: the caller loops until
+ * `remaining` drains, so each batch reserves and reconciles on its own. A pass
+ * that runs out of budget halfway stops cleanly with rows still to do, which is
+ * a state the loop already handles — `remaining > 0` simply stays true.
+ */
 export async function rescoreAll(opts?: {
   limit?: number;
   passStartedAt?: string;
 }): Promise<RescoreResult> {
-  // Session required. Server Actions are RPC endpoints addressed by an ID that
-  // ships in the client bundle, so a page-level check does not cover them.
-  await requireActor();
+  const actor = await requireActor();
+  const budget = await withBudget({
+    action: "rescore",
+    estimateCents: 10,
+    isAdmin: actor.isAdmin,
+    fn: () => rescoreAllInner(opts),
+  });
+  // A cap is a refusal, not a failure. `remaining: null` would claim the COUNT
+  // failed, which authorises nothing and reads as a broken pass; the pass simply
+  // did not run, so nothing was rescored and nothing is known to have drained.
+  if (budget.capped) {
+    return {
+      rescored: 0,
+      failed: 0,
+      remaining: null,
+      passStartedAt: opts?.passStartedAt ?? new Date().toISOString(),
+      error: budget.capped,
+    };
+  }
+  if (budget.error !== undefined) {
+    return {
+      rescored: 0,
+      failed: 0,
+      remaining: null,
+      passStartedAt: opts?.passStartedAt ?? new Date().toISOString(),
+      error: budget.error,
+    };
+  }
+  return budget.result!;
+}
+
+async function rescoreAllInner(opts?: {
+  limit?: number;
+  passStartedAt?: string;
+}): Promise<RescoreResult> {
   // Taken before the first write, so `remaining` counts rows THE PASS has not
   // touched. updateJob stamps updated_at, which is also what moves finished
   // rows to the back of SCORED_JOBS_SQL's ordering.

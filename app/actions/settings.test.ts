@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// The budget wrapper is bypassed: this suite asserts how a rescore batch COUNTS
+// rows, and withBudget reaches the database for tiers, ceilings and counters
+// before any of that runs. Budget behaviour is pinned in lib/budget.test.ts and
+// the reservation is proven against a real database.
+vi.mock("@/lib/metered", () => ({
+  withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
+}));
+
+
 // The session guard is mocked, not exercised: these tests are about each
 // action's own failure reporting, and requireActor() would otherwise throw
 // before any of that ran. That the guard EXISTS on every action is asserted

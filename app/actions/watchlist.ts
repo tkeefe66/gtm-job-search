@@ -1,6 +1,7 @@
 "use server";
 
 import { requireActor } from "@/lib/require-actor";
+import { crawlQuotaVerdict } from "@/lib/crawl-quota";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
@@ -169,10 +170,58 @@ export async function getWatchlist(): Promise<{ entries: WatchlistEntry[]; error
   return { entries: (data ?? []) as WatchlistEntry[] };
 }
 
+/**
+ * Refuses a new tracked company once the tenant is at their quota.
+ *
+ * Enforced in the ACTION, not the button: a server action is an RPC endpoint,
+ * so a limit the UI respects is one the action still has to check.
+ *
+ * Counts only rows with tracking_enabled — an untracked row costs no crawl
+ * capacity, and counting it would punish the soft-disable that exists precisely
+ * so history survives.
+ */
+async function quotaBlocks(): Promise<string | null> {
+  const actor = await requireActor();
+  const tenantId = await resolveTenantId();
+
+  const { data: counted, error: countError } = await rawQuery<{ n: string }>(
+    `select count(*) n from watchlist where tenant_id = $1 and tracking_enabled = true`,
+    [tenantId],
+    tenantId
+  );
+  // A failed count must NOT read as zero: that would silently grant unlimited
+  // tracking, which is the same class of bug as a failed count unlocking a
+  // delete guard.
+  if (countError) return "Could not check your tracking limit — nothing was changed.";
+
+  const { data: quotaRows } = await rawQuery<{ crawl_quota: number | null }>(
+    `select crawl_quota from users where id = $1`,
+    [tenantId]
+  );
+  const { data: defaults } = await rawQuery<{ value: unknown }>(
+    `select value from platform_settings where key = 'defaultCrawlQuota'`
+  );
+  const fallback = typeof defaults[0]?.value === "number" ? defaults[0].value : 10;
+
+  const verdict = crawlQuotaVerdict({
+    tracked: Number(counted[0]?.n ?? 0),
+    quota: quotaRows[0]?.crawl_quota ?? fallback,
+    isAdmin: actor.isAdmin,
+  });
+  return verdict.allow ? null : (verdict.reason ?? "Tracking limit reached.");
+}
+
 export async function addToWatchlist(startup: Startup): Promise<{ error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
+  // Checked here as well as in setTracking: this row is created with
+  // tracking_enabled defaulting to true, so without it the quota is bypassed by
+  // the most common path into the watchlist.
+  {
+    const blocked = await quotaBlocks();
+    if (blocked) return { error: blocked };
+  }
   // "not found" is the normal case here (a company Discover has never seen
   // tracked before) — this is an upsert, so `found` is irrelevant and only
   // `row` is used.
@@ -335,6 +384,12 @@ export async function trackCompanyByName(
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
+  // Before the crawl, not after: this path tracks AND crawls immediately, so a
+  // check afterwards would already have spent the call it was meant to prevent.
+  {
+    const blocked = await quotaBlocks();
+    if (blocked) return { error: blocked };
+  }
   const trimmed = name.trim();
   if (!trimmed) return { error: "Enter a company name." };
 
@@ -394,6 +449,7 @@ export async function trackCompanyByName(
 // (above) closes that: it checks existence up front and returns an explicit
 // error naming the company instead of letting a guaranteed-zero-row write
 // report success.
+
 export async function setTracking(
   company: string,
   enabled: boolean
@@ -401,6 +457,13 @@ export async function setTracking(
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
+  // Only when turning tracking ON. Untracking must always be allowed — a tenant
+  // at their quota would otherwise be unable to free a slot, which turns a limit
+  // into a trap.
+  if (enabled) {
+    const blocked = await quotaBlocks();
+    if (blocked) return { error: blocked };
+  }
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
