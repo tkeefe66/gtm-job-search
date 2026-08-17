@@ -1,9 +1,16 @@
-// Deliberately approximate — surfaced in the UI as "~$X". Its job is making
-// the Denver/Colorado overlap visible (those two terms cover nearly the same
-// ground and account for a third of the grid), not precise billing.
-const DOLLARS_PER_SEARCH = 0.01; // web_search server tool, ~$10 per 1,000
+import {
+  ANTHROPIC_CENTS_PER_SEARCH,
+  ANTHROPIC_DEFAULT_MODEL,
+  anthropicPrice,
+} from "@/lib/providers/anthropic-pricing";
+
+// Deliberately approximate — surfaced in the UI as "~$X". Its job is making the
+// Denver/Colorado overlap visible, not precise billing. The RATES, though, come
+// from the provider's own table rather than a third copy of them: this line is
+// rendered to users, and a stale copy here shows a price the meter disagrees with.
+const DOLLARS_PER_SEARCH = ANTHROPIC_CENTS_PER_SEARCH / 100;
 const TOKENS_PER_SEARCH_RESULT = 5_000; // results entering context, observed order of magnitude
-const DOLLARS_PER_INPUT_TOKEN = 3 / 1_000_000; // claude-sonnet-4-6 input
+const DOLLARS_PER_INPUT_TOKEN = anthropicPrice(ANTHROPIC_DEFAULT_MODEL).input / 1_000_000;
 const FIT_SCORING_DOLLARS = 0.19; // up to 25 scoreFit calls per run
 
 export interface EstimateInput {
