@@ -108,18 +108,21 @@ export async function suspendUser(id: string): Promise<{ error?: string }> {
  * companies crawled — that would spend money on somebody who cannot sign in.
  */
 export async function listCrawlableTenants(): Promise<{
-  tenantIds: string[];
+  tenants: { id: string; isAdmin: boolean }[];
   error?: string;
 }> {
-  const { data, error } = await rawQuery<{ id: string }>(
-    `select id from users where status = 'active' order by created_at`
+  // The role comes back too: the crawl is metered per tenant, and the tier
+  // decides which ceilings apply. Without it every scheduled crawl would be
+  // billed against the free defaults, including the owner's.
+  const { data, error } = await rawQuery<{ id: string; role: string }>(
+    `select id, role from users where status = 'active' order by created_at`
   );
   const described = describeWriteFailure(
     error ? error.message : undefined,
     "list tenants to crawl"
   );
-  if (described !== undefined) return { tenantIds: [], error: described };
-  return { tenantIds: data.map((r) => r.id) };
+  if (described !== undefined) return { tenants: [], error: described };
+  return { tenants: data.map((r) => ({ id: r.id, isAdmin: r.role === "admin" })) };
 }
 
 export interface TenantBudget {

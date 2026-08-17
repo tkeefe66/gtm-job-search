@@ -6,6 +6,7 @@ import { getDueCompanies } from "@/app/actions/watchlist";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
 import { splitCrawlBatch } from "@/lib/crawl-fairness";
+import { withBudget } from "@/lib/metered";
 import { listCrawlableTenants } from "@/app/actions/admin";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
@@ -73,7 +74,7 @@ async function handleCrawl(req: Request) {
   // would never have been crawled and any result would have landed in the
   // admin's pipeline — silently, since a watchlist that is never crawled looks
   // exactly like companies that are never hiring.
-  const { tenantIds, error: tenantError } = await listCrawlableTenants();
+  const { tenants, error: tenantError } = await listCrawlableTenants();
   if (tenantError !== undefined) {
     console.error(`cron/crawl: could not list tenants — ${tenantError}`);
     return NextResponse.json({ error: tenantError }, { status: 500 });
@@ -84,7 +85,7 @@ async function handleCrawl(req: Request) {
   // DIFFERENT somebody each night — see lib/crawl-fairness.ts. Day number, so a
   // run repeated within a day does not reshuffle.
   const rotation = Math.floor(Date.now() / 86_400_000);
-  const slices = splitCrawlBatch(tenantIds, limit, rotation);
+  const slices = splitCrawlBatch(tenants.map((t) => t.id), limit, rotation);
 
   const results: CrawlOutcome[] = [];
   // An accumulator object rather than a `let`: TypeScript cannot follow an
@@ -97,7 +98,21 @@ async function handleCrawl(req: Request) {
     // precisely because mixing two title lists produces a run whose results
     // cannot be interpreted — which is the same reason the scope is per tenant
     // rather than per run.
+    const isAdmin = tenants.find((t) => t.id === slice.tenantId)?.isAdmin ?? false;
+
     await runAsTenant(slice.tenantId, async () => {
+      // METERED, like every interactive path. This is the only work that spends
+      // while nobody is watching, so leaving it uncapped would mean the ceiling
+      // bounded the clicks and not the thing most able to run away.
+      //
+      // A capped tenant is SKIPPED, not failed: their budget is exhausted, which
+      // is a normal state, and a nightly job that reports failure for it would
+      // cry wolf every night until the period rolled over.
+      const budget = await withBudget({
+        action: "crawl",
+        estimateCents: 10 * slice.limit,
+        isAdmin,
+        fn: async () => {
       const { companies: due, error } = await getDueCompanies(slice.limit);
       if (error) {
         console.error(`cron/crawl: due companies failed for a tenant — ${error}`);
@@ -148,6 +163,16 @@ async function handleCrawl(req: Request) {
             `cron/crawl: link repair threw — ${err instanceof Error ? err.message : String(err)}`
           );
         }
+      }
+        },
+      });
+
+      if (budget.capped) {
+        // Expected, not exceptional. Logged so a quiet night is explainable
+        // rather than looking like a crawler that stopped working.
+        console.log(`cron/crawl: skipped a tenant — ${budget.capped}`);
+      } else if (budget.error !== undefined) {
+        console.error(`cron/crawl: budget check failed — ${budget.error}`);
       }
     });
   }
