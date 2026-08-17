@@ -6,7 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 import { rawQuery } from "@/lib/supabase";
 import { seal, lastFour } from "@/lib/secret-box";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { MODEL } from "@/lib/anthropic";
+import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/providers/anthropic-pricing";
 
 /**
  * Bring-your-own Anthropic key.
@@ -87,7 +87,7 @@ export async function saveApiKey(key: string): Promise<{ error?: string }> {
 
   try {
     await new Anthropic({ apiKey: trimmed }).messages.create({
-      model: MODEL,
+      model: ANTHROPIC_DEFAULT_MODEL,
       max_tokens: 1,
       messages: [{ role: "user", content: "hi" }],
     });

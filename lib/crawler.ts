@@ -1,4 +1,4 @@
-import { callStructured, callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { callStructured, callWithWebSearch, parseJson } from "@/lib/model-call";
 import { resolveTenantId } from "@/lib/tenant";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";

@@ -14,6 +14,7 @@ import {
 } from "@/lib/budget";
 import { providerFor } from "@/lib/providers/registry";
 import { resolveProviderConfig, type ProviderConfig } from "@/lib/providers/resolution";
+import { SearchUnavailableError } from "@/lib/model-call";
 
 /**
  * Runs a block of Claude work against a tenant's budget.
@@ -274,6 +275,12 @@ async function runScope<T>(
   try {
     const result = await runWithBilling(scope, opts.fn);
     return { result };
+  } catch (err) {
+    // A search refused because this provider cannot cap uses in-request is a
+    // REFUSAL, not a crash: the caller renders it as a sentence, the same way a
+    // hit ceiling is rendered. Anything else propagates untouched.
+    if (err instanceof SearchUnavailableError) return { capped: err.message };
+    throw err;
   } finally {
     // In a finally: a call that throws halfway still issued searches, and
     // charging only successful calls would make a failing loop free. Priced

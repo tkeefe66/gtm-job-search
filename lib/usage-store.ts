@@ -95,7 +95,7 @@ class BudgetRefused extends Error {}
  *
  * `searches` is passed explicitly rather than derived from tokens. web_search
  * calls are billed per search and are NOT part of the usage token counts
- * (lib/anthropic.ts says so outright), so a cost reconstructed from tokens alone
+ * (lib/providers/types.ts says so outright), so a cost reconstructed from tokens alone
  * understates every search-tier call — which is most of this app's spend.
  *
  * The delta may be NEGATIVE when a call came in under its estimate; the counter

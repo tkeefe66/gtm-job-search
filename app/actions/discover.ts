@@ -4,7 +4,7 @@ import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
-import { callWithWebSearch, parseJson } from "@/lib/anthropic";
+import { callWithWebSearch, parseJson } from "@/lib/model-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";

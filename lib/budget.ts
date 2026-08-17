@@ -1,7 +1,7 @@
 /**
  * Who pays for a Claude call, and how much they are still allowed to spend.
  *
- * The design turns on one fact recorded in lib/anthropic.ts: **web_search
+ * The design turns on one fact recorded in lib/providers/types.ts: **web_search
  * server-tool calls are billed per search and are NOT part of the usage token
  * counts.** A meter built on `message.usage` cannot see the dominant, most
  * variable cost. Searches are ~1c each and the discover, roles and crawler

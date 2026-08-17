@@ -68,7 +68,7 @@ vi.mock("@/lib/tenant", () => ({
 vi.mock("@/lib/metered", () => ({
   withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
 }));
-vi.mock("@/lib/anthropic", () => ({
+vi.mock("@/lib/model-call", () => ({
   callWithWebSearch: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),
 }));
@@ -84,7 +84,7 @@ vi.mock("@/lib/search-criteria", () => ({
 }));
 
 import { findAndSaveRoles } from "./roles";
-import { callWithWebSearch } from "@/lib/anthropic";
+import { callWithWebSearch } from "@/lib/model-call";
 import type { Startup } from "@/lib/types";
 
 const search = vi.mocked(callWithWebSearch);
