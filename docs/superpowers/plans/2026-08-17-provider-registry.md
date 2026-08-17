@@ -1838,12 +1838,38 @@ Expected: a 200 with the dry-run body. This proves the cron route still resolves
 In the browser, signed in as the admin:
 
 1. `/settings` → the API key panel shows the stored provider and the model (or the default), and the "~$X per By Role run" line reads the same as before this work.
-2. Save a key with a deliberately wrong value (`sk-ant-nope`) → "Anthropic rejected that key." A second attempt within a minute → the rate-limit sentence.
+2. Save a key with a deliberately wrong value (`sk-ant-nope`) → "Anthropic rejected that key on claude-sonnet-4-6. Check both the key and the model, then try again." A **second** attempt within a minute reaches Anthropic again and returns the SAME sentence — not the rate-limit one. The rate-limit gate reads `last_verified_at`, which is stamped only on a SUCCESSFUL save, so two consecutive rejected keys write nothing for it to read. Do not treat the absence of the rate-limit sentence here as a regression.
+   - Note: that gap is pre-existing and out of scope for this plan — the endpoint remains a key-validation oracle for any tenant without a recently-verified key. It needs its own ticket, not a fix folded into this deploy.
 3. Watchlist → **Check now** on one company → roles come back scored. This is the live check for `scoreFit` through the registry; the fit column filling in is the assertion.
 
 Record the result of each in `docs/superpowers/2026-08-17-provider-registry-live-checks.md`, following the shape of the existing `*-live-checks.md` files. A step that was not run is written as not run, never omitted.
 
-- [ ] **Step 8: Commit the live-check record**
+- [ ] **Step 8: Prove a pre-existing v1-AAD row still opens**
+
+**The only check here that cannot be run locally and cannot be undone by a redeploy.** Migration 007 leaves existing rows at `aad_version = 1`, sealed against `tenantId` alone; if v1 stopped opening, every stored key would silently become "this tenant has no key" behind a plausible "add your API key" screen. Step 7.2 writes nothing — the key is rejected — so it proves nothing about decryption, and step 7.3 exercises the v1 path only if the admin happens to hold a stored BYO key.
+
+First, confirm there is a v1 row to prove anything about:
+
+```bash
+railway run --service Postgres node -e "import('pg').then(async ({default: pg}) => { const c = new pg.Client({ connectionString: process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL }); await c.connect(); console.table((await c.query('select tenant_id, aad_version, provider, model, last_four from tenant_api_keys')).rows); await c.end(); })"
+```
+
+(Run from the repo root so `pg` resolves, and `DATABASE_PUBLIC_URL` first because the private host is unreachable from a laptop. Never inline the connection string.)
+
+If no row has `aad_version = 1`, record that and skip — write it as not applicable, never as passed.
+
+Otherwise, signed in as that tenant:
+
+1. `/settings` → the panel shows that key's last four and its provider, unchanged from before the deploy.
+2. Run one metered call (Watchlist → **Check now**), then read the logs:
+
+```bash
+railway logs --service web | grep -i "could not be opened"
+```
+
+Expected: **no match.** A `metered: a stored API key for a tenant could not be opened` line means the v1 fallback in `lib/secret-box.ts` did not fire and every stored key is now unreadable — stop and do not proceed to the record commit.
+
+- [ ] **Step 9: Commit the live-check record**
 
 ```bash
 git add docs/superpowers/2026-08-17-provider-registry-live-checks.md
