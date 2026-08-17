@@ -106,8 +106,19 @@ interface Provider {
   searchCapEnforcement: "in-request" | "none";
   /** Cost, per provider and resolved model. Never a shared constant. */
   costCents(usage: Usage, model: string): number;
-  validateKey(key: string): Promise<boolean>;
+  /** The models this adapter can price. A model it cannot price cannot be
+   *  stored: the fallback rate would under-meter it and the ceiling would pass
+   *  several times the intended spend. Added during step 1. */
+  pricedModels: readonly string[];
+  /** Takes the MODEL, not just the key — a probe against the default model
+   *  passes a typo'd or inaccessible one, which is then sealed and only fails
+   *  at first use, wearing an error that blames the API key. Returns a REASON,
+   *  never the SDK's text, which embeds request URLs and sometimes the key.
+   *  Widened during step 1; revision 2 had `validateKey(key): Promise<boolean>`. */
+  validateKey(key: string, model: string): Promise<KeyVerdict>;
 }
+
+type KeyVerdict = { ok: true } | { ok: false; reason: "format" | "rejected" };
 
 interface Usage {
   inputTokens: number;      // EXCLUDING cached, normalised across providers

@@ -45,7 +45,13 @@ Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABA
 
 ## Architecture
 
-**Every "search" feature is a Claude call with the `web_search` server tool** — there's no scraper. `lib/anthropic.ts` has the two shared helpers: `callWithWebSearch()` (model `claude-sonnet-4-6`) and `parseJson()` (fence-stripping/boundary-finding, because responses aren't strict JSON mode). When adding a web-search call, budget `maxTokens` generously: the model's search narration counts against it, and 2000 tokens has truncated responses before the JSON was emitted (see comment in `app/actions/roles.ts`).
+**Every "search" feature is a Claude call with the `web_search` server tool** — there's no scraper. `lib/model-call.ts` is the provider-neutral entry point for EVERY model call: `callWithWebSearch()`, `callStructured()`, `complete()` and `parseJson()` (fence-stripping/boundary-finding, because responses aren't strict JSON mode). Do not construct an SDK client anywhere else — `lib/anthropic.ts`, `clientFor()` and the module-level `MODEL` constant are gone.
+
+**Provider, key and model are resolved PER TENANT, not from a constant.** `lib/model-call.ts` reads them off the ambient `BillingScope` and dispatches to an adapter in `lib/providers/` (`registry.ts` → `anthropic.ts`); `lib/metered.ts` resolves them from the tenant's `tenant_api_keys` row and prices reconciliation through `provider.costCents`. The scope is ambient rather than a parameter because `scoreFit` is reached three levels down inside `ingestRoles`' `Promise.all`. `lib/providers/anthropic-pricing.ts` is the ONE Anthropic price table (`lib/cost-estimate.ts` reads it, so it must never import the SDK — it is reached from a client component). Anthropic is the only adapter; `providerFor("openai")` throws, and a test pins that. Design: `docs/superpowers/specs/2026-08-17-model-agnostic-design.md`.
+
+**`provider` and `model` are bound into the stored key's AEAD additional data**, versioned per row (`aad_version`), so rows sealed before that binding still open — a failed open is indistinguishable from "no key stored" and would present as a friendly empty state. Consequence: changing the model re-seals, and the plaintext is never read back, so the user must paste their key again.
+
+When adding a web-search call, budget `maxTokens` generously: the model's search narration counts against it, and 2000 tokens has truncated responses before the JSON was emitted (see comment in `app/actions/roles.ts`).
 
 **`lib/supabase.ts` is NOT Supabase** — it's a hand-rolled Supabase-shaped query builder over `pg`, kept so server actions read like Supabase calls. It connects via `DATABASE_URL`. Schema truth is `db/schema.sql` (eight tables: `jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`, `role_searches`, `app_settings`); `supabase/migrations/` is legacy.
 

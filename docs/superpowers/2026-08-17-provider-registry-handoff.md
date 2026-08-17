@@ -1,5 +1,11 @@
 # Handoff: provider registry (step 1)
 
+> **SUPERSEDED — step 1 shipped on 2026-08-17.** Start from
+> `2026-08-17-after-step-1-handoff.md` instead. "The task" section below is
+> DONE; do not implement it again. The **Traps**, **Settled** and **Errors made**
+> sections are still accurate and still worth reading, which is why this file is
+> kept rather than deleted.
+
 Written 2026-08-17 at the end of a very long session, for whoever picks this up
 next. The specs describe WHAT to build; this describes the ground you are
 standing on, the traps that cost time today, and the decisions that are settled
