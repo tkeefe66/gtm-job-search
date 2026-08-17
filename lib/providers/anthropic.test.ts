@@ -85,7 +85,7 @@ describe("the Anthropic adapter", () => {
     const { factory, create } = fakeClient(textOnly);
     const p = createAnthropicProvider({ createClient: factory });
 
-    expect(await p.validateKey("hunter2")).toEqual({ ok: false, reason: "format" });
+    expect(await p.validateKey("hunter2", "claude-sonnet-4-6")).toEqual({ ok: false, reason: "format" });
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -93,7 +93,7 @@ describe("the Anthropic adapter", () => {
     const create = vi.fn().mockRejectedValue(new Error("401 https://api.anthropic.com key=sk-ant-leak"));
     const p = createAnthropicProvider({ createClient: () => ({ messages: { create } }) });
 
-    const verdict = await p.validateKey("sk-ant-plausible");
+    const verdict = await p.validateKey("sk-ant-plausible", "claude-sonnet-4-6");
 
     expect(verdict).toEqual({ ok: false, reason: "rejected" });
     expect(JSON.stringify(verdict)).not.toContain("sk-ant-leak");
@@ -101,7 +101,30 @@ describe("the Anthropic adapter", () => {
 
   test("a key the API accepts comes back ok", async () => {
     const p = createAnthropicProvider({ createClient: fakeClient(textOnly).factory });
-    expect(await p.validateKey("sk-ant-plausible")).toEqual({ ok: true });
+    expect(await p.validateKey("sk-ant-plausible", "claude-sonnet-4-6")).toEqual({ ok: true });
+  });
+
+  // The whole point of the model argument: a good key against a model the
+  // account cannot reach must fail HERE, at save time, and not later as
+  // "check your ANTHROPIC_API_KEY" against a key that was never wrong.
+  test("a valid key against a model the API rejects comes back as rejected", async () => {
+    const create = vi.fn().mockRejectedValue(new Error("404 model: not_found_error"));
+    const p = createAnthropicProvider({ createClient: () => ({ messages: { create } }) });
+
+    expect(await p.validateKey("sk-ant-plausible", "claude-typo-9")).toEqual({
+      ok: false,
+      reason: "rejected",
+    });
+  });
+
+  test("the probe carries the model it was passed, not the adapter's default", async () => {
+    const { factory, create } = fakeClient(textOnly);
+    const p = createAnthropicProvider({ createClient: factory });
+
+    await p.validateKey("sk-ant-plausible", "claude-opus-4-1");
+
+    expect(create.mock.calls[0][0].model).toBe("claude-opus-4-1");
+    expect(create.mock.calls[0][0].model).not.toBe(p.defaultModel);
   });
 
   test("a json schema is sent as a forced tool, because constrained decoding is what makes weak models return parseable JSON", async () => {

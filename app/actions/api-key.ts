@@ -97,17 +97,24 @@ export async function saveApiKey(
     return { error: "Please wait a minute before trying another key." };
   }
 
+  const provider = providerFor(PROVIDER);
+
+  // The model the key will ACTUALLY run on — `null` means "the provider's
+  // default", so that is what gets probed. Validating against the default
+  // while storing something else proves nothing.
+  const probeModel = model ?? provider.defaultModel;
+
   // The adapter owns both checks: the shape of its keys and whether the vendor
-  // accepts this one. What comes back is a REASON, never the SDK's text — that
-  // embeds request URLs and sometimes the key itself, and this string is
-  // rendered to a browser.
-  const verdict = await providerFor(PROVIDER).validateKey(trimmed);
+  // accepts this one on this model. What comes back is a REASON, never the
+  // SDK's text — that embeds request URLs and sometimes the key itself, and
+  // this string is rendered to a browser.
+  const verdict = await provider.validateKey(trimmed, probeModel);
   if (!verdict.ok) {
     return {
       error:
         verdict.reason === "format"
           ? "That does not look like an Anthropic API key (they start with sk-ant-)."
-          : "Anthropic rejected that key. Check it and try again.",
+          : `Anthropic rejected that key on ${probeModel}. Check both the key and the model, then try again.`,
     };
   }
 

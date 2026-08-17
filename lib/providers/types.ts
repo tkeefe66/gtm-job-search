@@ -66,7 +66,16 @@ export interface Provider {
   searchAndComplete(opts: SearchOpts): Promise<Completion>;
   /** Cost in cents, per provider AND resolved model. Never a shared constant. */
   costCents(usage: Usage, model: string): number;
-  validateKey(key: string): Promise<KeyVerdict>;
+  /**
+   * Probe the key against the model it will ACTUALLY run on.
+   *
+   * `model` is not optional and is not the adapter's default: a tenant who
+   * types a typo'd or inaccessible model passes a default-model probe, has the
+   * key sealed and stored, and only learns at first use — where the message
+   * blames the key. They rotate a key that was fine. The argument is on the
+   * interface now precisely so the second adapter does not reopen it.
+   */
+  validateKey(key: string, model: string): Promise<KeyVerdict>;
 }
 
 /**

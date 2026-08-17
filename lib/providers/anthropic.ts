@@ -143,14 +143,16 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
       return { text: textOf(message.content), usage: normaliseUsage(message.usage, issued.length) };
     },
 
-    async validateKey(key: string): Promise<KeyVerdict> {
+    async validateKey(key: string, model: string): Promise<KeyVerdict> {
       if (!key.startsWith("sk-ant-")) return { ok: false, reason: "format" };
       try {
-        // The cheapest possible call — one token. Storing a key that does not
-        // work means every search fails later with an error the tenant cannot
-        // connect to what they typed.
+        // The cheapest possible call — one token — against the model this key
+        // will actually run on, NOT the default. A probe of the default proves
+        // nothing about a key that cannot reach the model the tenant chose:
+        // the row saves, and the failure surfaces later as "check your
+        // ANTHROPIC_API_KEY" against a key that was never the problem.
         await createClient(key).messages.create({
-          model: ANTHROPIC_DEFAULT_MODEL,
+          model,
           max_tokens: 1,
           messages: [{ role: "user", content: "hi" }],
         });
