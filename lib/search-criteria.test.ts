@@ -78,9 +78,8 @@ describe("DEFAULT_CRITERIA", () => {
     expect(DEFAULT_CRITERIA.stackTerms.length).toBeGreaterThan(0);
   });
 
-  test("fit brain describes the candidate and names a location preference", () => {
-    expect(DEFAULT_CRITERIA.fitBrain.length).toBeGreaterThan(200);
-    expect(DEFAULT_CRITERIA.fitBrain).toContain("Denver");
+  test("fit brain ships empty — a working default would score a stranger's roles", () => {
+    expect(DEFAULT_CRITERIA.fitBrain).toBe("");
   });
 });
 
@@ -123,17 +122,17 @@ describe("titleQueries", () => {
 });
 
 describe("stackQueries", () => {
-  const QUERY_SUBJECT = DEFAULT_PROFILE.querySubject;
+  const DEFAULT_QUERY_SUBJECT = DEFAULT_PROFILE.querySubject;
 
   test("pairs tool names with hiring language", () => {
-    const queries = stackQueries(SMALL, QUERY_SUBJECT);
+    const queries = stackQueries(SMALL, DEFAULT_QUERY_SUBJECT);
     expect(queries.length).toBe(4);
     expect(queries.some((q) => q.includes("Clay"))).toBe(true);
     expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
   });
 
   test("every query carries a location term", () => {
-    const queries = stackQueries(SMALL, QUERY_SUBJECT);
+    const queries = stackQueries(SMALL, DEFAULT_QUERY_SUBJECT);
     expect(queries.length).toBeGreaterThan(0);
     for (const q of queries) {
       expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
@@ -143,7 +142,7 @@ describe("stackQueries", () => {
   test("a stack query reproduces today's shape exactly", () => {
     const q = stackQueries(
       { ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] },
-      QUERY_SUBJECT
+      DEFAULT_QUERY_SUBJECT
     );
     expect(q).toEqual(['"Salesforce" revenue operations hiring Denver']);
   });
@@ -157,8 +156,8 @@ describe("stackQueries", () => {
   });
 
   test("returns nothing when either list is empty", () => {
-    expect(stackQueries({ ...SMALL, stackTerms: [] }, QUERY_SUBJECT)).toEqual([]);
-    expect(stackQueries({ ...SMALL, locations: [] }, QUERY_SUBJECT)).toEqual([]);
+    expect(stackQueries({ ...SMALL, stackTerms: [] }, DEFAULT_QUERY_SUBJECT)).toEqual([]);
+    expect(stackQueries({ ...SMALL, locations: [] }, DEFAULT_QUERY_SUBJECT)).toEqual([]);
   });
 });
 
@@ -311,7 +310,15 @@ describe("emptySearchReason", () => {
   test("a fully-populated criteria set can run either family", () => {
     expect(emptySearchReason("title", SMALL)).toBeNull();
     expect(emptySearchReason("stack", SMALL)).toBeNull();
-    expect(emptySearchReason("title", DEFAULT_CRITERIA)).toBeNull();
+  });
+
+  test("the shipped DEFAULT_CRITERIA refuses on its empty fit brain alone", () => {
+    // DEFAULT_CRITERIA's lists are all populated — only fitBrain ships empty
+    // (see the DEFAULT_CRITERIA describe block above) — so this is the guard
+    // that actually protects an un-onboarded tenant hitting the shipped
+    // defaults, not a hand-built fixture.
+    const reason = emptySearchReason("title", DEFAULT_CRITERIA);
+    expect(reason).toContain("fit brain");
   });
 
   test("an empty title list blocks the title search before anything is billed", () => {
@@ -362,6 +369,34 @@ describe("emptySearchReason", () => {
         stackQueries(c, DEFAULT_PROFILE.querySubject).length > 0
       );
     }
+  });
+
+  test("an empty fit brain refuses BOTH families, and says what to do", () => {
+    for (const family of ["title", "stack"] as const) {
+      const reason = emptySearchReason(family, { ...DEFAULT_CRITERIA, fitBrain: "" });
+      expect(reason).toBeTruthy();
+      expect(reason).toContain("fit brain");
+    }
+  });
+
+  test("a whitespace-only fit brain is empty too", () => {
+    expect(emptySearchReason("title", { ...DEFAULT_CRITERIA, fitBrain: "   \n " })).toBeTruthy();
+  });
+
+  test("a present fit brain with full lists still refuses nothing", () => {
+    expect(
+      emptySearchReason("title", { ...DEFAULT_CRITERIA, fitBrain: "A candidate." })
+    ).toBeNull();
+  });
+
+  test("the missing-brain reason is listed alongside missing lists, not instead", () => {
+    const reason = emptySearchReason("title", {
+      ...DEFAULT_CRITERIA,
+      titles: [],
+      fitBrain: "",
+    });
+    expect(reason).toContain("target titles");
+    expect(reason).toContain("fit brain");
   });
 });
 

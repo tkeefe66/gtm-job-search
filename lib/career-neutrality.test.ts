@@ -26,29 +26,8 @@ const ROOT = path.resolve(__dirname, "..");
 
 /**
  * Where a career-specific string is ALLOWED to appear.
- *
- * `lib/search-criteria.ts` is here for a narrow, coincidental reason, not
- * because it is exempt from the switch: `DEFAULT_FIT_BRAIN` (Tom's own bio,
- * a `Criteria` default — a separate, user-editable system from `Profile`,
- * out of this task's scope per CLAUDE.md) contains the prose "marketing/
- * revenue operations leadership", which happens to contain
- * `profile.querySubject`'s value ("revenue operations") as a substring. That
- * line has been unchanged since before this task (one commit ever touched
- * it) and has nothing to do with the six constants this task deletes. Every
- * function this file still exports (`roleSearchSystem`, `roleExtractionSchema`,
- * `stackQueries`) is fully parameter-driven with no embedded career literal
- * of its own, so this entry does not weaken the guard against the actual
- * risk — a phase-2 CALL SITE keeping a hardcoded string instead of switching
- * to the profile. The deleted-name scan below still covers this file in
- * full: a re-introduced `SEARCH_SUBJECT`-named constant here would still fail
- * it.
  */
-const HOMES = new Set([
-  "lib/profile.ts",
-  "lib/fit-prompt.ts",
-  "lib/search-criteria.ts",
-  "lib/__fixtures__/fit-golden-set.json",
-]);
+const HOMES = new Set(["lib/profile.ts", "lib/fit-prompt.ts"]);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -88,10 +67,15 @@ describe("no production module holds a career-specific string", () => {
     });
   }
 
-  test("no module outside lib/profile.ts imports a deleted GTM constant", () => {
+  test("no module imports a deleted GTM constant", () => {
     // Names, not text: a re-introduced `SEARCH_SUBJECT` import would pass the
     // phrase checks above (the string lives in profile.ts) while pinning a
     // call site to one career again.
+    //
+    // Collects every offending name into ONE array before asserting, rather
+    // than asserting inside the loop: an assert-per-iteration stops at the
+    // first regressed name and hides the rest, so a run that "names one
+    // constant" could actually mean several came back.
     const GONE = [
       "SEARCH_SUBJECT",
       "QUERY_SUBJECT",
@@ -100,11 +84,13 @@ describe("no production module holds a career-specific string", () => {
       "BUILDING_CONCEPT",
       "BUILDING_UPSIDE",
     ];
+    const violations: string[] = [];
     for (const name of GONE) {
       const offenders = FILES.filter((f) =>
         new RegExp(`\\b${name}\\b`).test(f.text)
       ).map((f) => f.rel);
-      expect(offenders, `${name} was deleted in phase 2`).toEqual([]);
+      for (const rel of offenders) violations.push(`${name} in ${rel}`);
     }
+    expect(violations).toEqual([]);
   });
 });

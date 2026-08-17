@@ -79,19 +79,23 @@ export function roleSearchSystem(subject: string): string {
   return `You are a recruiting researcher specializing in ${subject} roles. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
-export const DEFAULT_FIT_BRAIN = `
-Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
-- 13+ years architecting B2B revenue engines; 6+ years inside the ABM/ABX product category (Demandbase, Engagio)
-- Current: Director of GTM Experts at Demandbase — leads a team that architects GTM systems and AI workflows for enterprise customers (BlackRock, Boeing, Microsoft, SAP Concur, Snowflake); influenced $43M+ in won revenue and $96M+ in pipeline
-- Deep expertise: the quantitative spine of GTM — pipeline waterfall modeling, ICP analysis, capacity planning, attribution, predictive account scoring, forecasting; QBR / board narrative work with CMOs, CROs, and RevOps leaders
-- Tooling: Marketo, Salesforce, Tableau, Bizible, LeanData, Workato, Outreach; led Pardot→Marketo migrations and multiple acquisition data migrations
-- AI builder: ships AI-first products and agentic workflows hands-on ("vibe-codes" working prototypes) — built a live AI product demo for a flagship event, a multi-agent B2B news intelligence agent, and other agentic apps
-- Strong: GTM systems architecture, marketing/revenue operations leadership, AI/agentic GTM workflows, enterprise B2B SaaS, data-driven GTM strategy, executive storytelling, cross-functional leadership (Sales, Marketing, Product, CS, Finance)
-- Weaker fit: pure people-management roles with no systems/building, non-B2B or non-SaaS industries, roles with no AI/automation upside, deeply technical software-engineering roles
-- Looking for: Head / VP / Director of GTM Systems, RevOps, Revenue Operations, Marketing Operations, GTM Strategy, or GTM/AI Operations — plus GTM Engineer and AI-Ops practitioner-builder roles where hands-on systems + agentic AI work is the point
-- Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
-- Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
-`.trim();
+/**
+ * EMPTY, deliberately, and this is the whole reason the onboarding flow exists.
+ *
+ * This constant used to be one person's résumé, and `loadCriteria` fell back to
+ * it whenever a tenant had saved nothing — so a second user could sign in, be
+ * approved, and have every role they found scored against a stranger's career,
+ * with nothing on screen to say so. Silent wrongness is the failure this
+ * codebase consistently chooses to fail loudly on instead (see
+ * describeWriteFailure, and the whole .claude/skills/swallowed-string-errors
+ * doctrine).
+ *
+ * Consequence, accepted: a tenant who reaches a search un-onboarded gets an
+ * error rather than results. emptySearchReason below is where that error is
+ * worded, and it is the ACTION-LEVEL onboarding gate — a guard can be forgotten
+ * on a new action, whereas empty criteria protect every path not yet written.
+ */
+export const DEFAULT_FIT_BRAIN = "";
 
 export function roleExtractionSchema(
   persona: string,
@@ -323,11 +327,29 @@ export function emptySearchReason(
   if (family === "title" && criteria.titles.length === 0) missing.push("target titles");
   if (family === "stack" && criteria.stackTerms.length === 0) missing.push("stack terms");
   if (criteria.locations.length === 0) missing.push("location terms");
+  // The fit brain is not a query input — the search would run without it — but
+  // every role it found would then be scored against nothing, which reads as
+  // "the market has nothing good" rather than as a missing profile. Refusing
+  // before the call is what keeps a billed search from producing meaningless
+  // scores.
+  if (!criteria.fitBrain.trim()) missing.push("fit brain");
   if (missing.length === 0) return null;
   return (
-    `Cannot run the ${family} search: your ${missing.join(" and ")} list is empty, ` +
-    `so there are no queries to send. Add at least one entry on the Settings page, ` +
-    `or reset that list to its default.`
+    `Cannot run the ${family} search: your ${missing.join(" and ")} ` +
+    `${missing.length === 1 ? "is" : "are"} empty. ` +
+    `Finish onboarding, or fill this in on the Settings page.`
+  );
+}
+
+/**
+ * Why a fit score cannot be computed. Non-empty on every path, so a caller's
+ * `error !== undefined` check works without the text having to be truthy.
+ */
+export function emptyBrainRefusal(): string {
+  return (
+    "This role cannot be scored yet: your fit brain is empty, so there is " +
+    "nothing to score it against. Finish onboarding, or write one on the " +
+    "Settings page."
   );
 }
 
