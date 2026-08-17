@@ -1,6 +1,7 @@
 import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
+import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
 
 // The full set of editable settings. Adding one here plus a default in
 // lib/search-criteria.ts is the whole change — app_settings is key/value, so
@@ -101,6 +102,18 @@ export const CRITERIA_CHANGED_AT_KEY = "criteria_changed_at";
  * it chooses, which is careful not to claim otherwise.
  */
 export const COMP_SCORING_RESCORED_AT_KEY = "comp_scoring_rescored_at";
+
+/**
+ * Where the user's job-status config lives.
+ *
+ * A standalone key, deliberately NOT a member of SETTING_KEYS, for the same
+ * reason the two stamps above are not: it does not go through mergeSettings.
+ * Its value is an array of objects, and mergeSettings is shape-guarded for the
+ * list/text/number values that ARE criteria fields. Putting it in SETTING_KEYS
+ * would force a fourth shape group and edits to two currently-green tests, to
+ * buy a merge this value never uses.
+ */
+export const JOB_STATUSES_KEY = "jobStatuses";
 
 export interface SettingRow {
   key: string;
@@ -330,7 +343,8 @@ async function upsertSetting(
   key:
     | SettingKey
     | typeof CRITERIA_CHANGED_AT_KEY
-    | typeof COMP_SCORING_RESCORED_AT_KEY,
+    | typeof COMP_SCORING_RESCORED_AT_KEY
+    | typeof JOB_STATUSES_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   // `on conflict (tenant_id, key)`, matching the composite primary key that
@@ -402,4 +416,26 @@ export async function deleteSetting(key: SettingKey): Promise<{ error?: string }
     await resolveTenantId()
   );
   return { error: error?.message };
+}
+
+/**
+ * The status config out of rows ALREADY read — pure, for the reason
+ * compScoringRescoredFrom is: the settings page takes ONE snapshot of
+ * app_settings and everything it shows must come out of that same snapshot,
+ * or a concurrent save can split the page across two versions of the settings.
+ */
+export function jobStatusesFrom(rows: SettingRow[]): JobStatusDef[] {
+  return resolveStatuses(rows.find((r) => r.key === JOB_STATUSES_KEY)?.value ?? null);
+}
+
+/**
+ * Stores the whole array. Lives here, next to the key, for the reason spelled
+ * out on writeCriteriaChangedAt: a writer in another module would have to widen
+ * upsertSetting's key type to reach it, reopening the typo hazard the constant
+ * closes.
+ */
+export async function writeJobStatuses(
+  defs: JobStatusDef[]
+): Promise<{ error?: string }> {
+  return upsertSetting(JOB_STATUSES_KEY, defs);
 }

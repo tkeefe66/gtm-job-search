@@ -4,8 +4,10 @@ import { buildSettingsView, settingsReadWarning } from "./settings-view";
 import {
   COMP_SCORING_RESCORED_AT_KEY,
   CRITERIA_CHANGED_AT_KEY,
+  JOB_STATUSES_KEY,
   UNDESCRIBED_DB_ERROR,
 } from "./settings-store";
+import { DEFAULT_STATUSES } from "./job-statuses";
 
 const CLEAN = {
   rows: [] as { key: string; value: unknown }[],
@@ -168,5 +170,25 @@ describe("an undescribed read failure is still a read failure", () => {
     // passing implementation.
     expect(buildSettingsView({ ...CLEAN, settingsError: "boom" }).error).toContain("boom");
     expect(buildSettingsView({ ...CLEAN }).error).toBeUndefined();
+  });
+});
+
+describe("statuses on the settings view", () => {
+  test("falls back to the shipped defaults when no row is stored", () => {
+    const view = buildSettingsView({ ...CLEAN });
+    expect(view.statuses).toEqual(DEFAULT_STATUSES);
+  });
+
+  test("reads a stored config off the same snapshot as everything else", () => {
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [
+        {
+          key: JOB_STATUSES_KEY,
+          value: [{ key: "Applied", label: "Submitted", bucket: "active", hidden: false }],
+        },
+      ],
+    });
+    expect(view.statuses.find((d) => d.key === "Applied")!.label).toBe("Submitted");
   });
 });

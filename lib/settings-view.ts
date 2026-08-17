@@ -14,9 +14,11 @@ import {
   ceilingFrom,
   compFloorFrom,
   compScoringRescoredFrom,
+  jobStatusesFrom,
   mergeSettings,
   type SettingRow,
 } from "@/lib/settings-store";
+import type { JobStatusDef } from "@/lib/job-statuses";
 
 export interface SettingsView {
   criteria: Criteria;
@@ -34,6 +36,8 @@ export interface SettingsView {
    * compRescoreOffer in lib/rescore-progress.ts.
    */
   compScoringRescoredAt: string | null;
+  /** The user's pipeline statuses, resolved from the same snapshot as the rest. */
+  statuses: JobStatusDef[];
   /** Everything wrong with this load, in one line, or absent when clean. */
   error?: string;
 }
@@ -113,6 +117,7 @@ export function buildSettingsView(input: SettingsViewInput): SettingsView {
     // a wrongly suppressed one loses the feature), and the read-failure banner
     // is already on screen next to it.
     compScoringRescoredAt: compScoringRescoredFrom(input.rows),
+    statuses: jobStatusesFrom(input.rows),
     // Joined rather than first-wins: the settings read and the count are
     // separate queries that fail separately, and hiding one behind the other
     // loses a failure the user needs.
