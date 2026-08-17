@@ -1,9 +1,16 @@
 # Career-agnostic profiles and first-run onboarding — design
 
-**Status:** revision 1, 2026-08-17. Not yet implemented. Approved in principle
+**Status:** revision 2, 2026-08-17. Not yet implemented. Approved in principle
 (approach A, conversational + résumé entry, per-profile rubric generation,
-required for new users with the existing account grandfathered); this document is
-the detail behind that.
+onboarding required before the app is usable); this document is the detail behind
+that.
+
+**Revision 2 removes the grandfather branch.** Revision 1 kept the existing
+account on its current criteria via a backfill migration. That migration was the
+riskiest step in the document and rested on an unverified fact about the deployed
+database. The existing account now runs the flow like anyone else, preserving its
+tuned values by pasting them at the review step — see "The existing account goes
+through the flow".
 
 **Every `file:line` below was derived against `7af185e`.** They rot — re-derive
 before implementing rather than trusting them.
@@ -55,11 +62,15 @@ The technique is the one that worked for `DEFAULT_STATUSES`: make the shipped
 values reproduce today's behaviour exactly, so the change is a shape change
 rather than a behaviour change.
 
-Concretely: Tom's backfilled `titleScopeSignals` and `domainBonusRule` contain
-the **current hardcoded text, verbatim**. Fed those values, `buildFitPrompt` must
-render byte-identical output to today. The existing fixtures
-(`lib/__fixtures__/fit-prompt.no-floor.txt`, `.with-floor.txt`) are the proof: if
-they need regenerating, the refactor changed behaviour and is wrong.
+Concretely: fed `titleScopeSignals` and `domainBonusRule` carrying the **current
+hardcoded text, verbatim**, `buildFitPrompt` must render byte-identical output to
+today. The existing fixtures (`lib/__fixtures__/fit-prompt.no-floor.txt`,
+`.with-floor.txt`) are the proof: if they need regenerating, the refactor changed
+behaviour and is wrong.
+
+That is a claim about the *builder*, and it is what the fixtures can prove. The
+separate question of whether the existing user's *stored* values match what they
+replaced is checked once, by hand, at the end — see Testing.
 
 This also bounds the risk of the whole project. Nothing about Tom's scoring
 changes; the code simply stops holding his answers.
@@ -204,35 +215,53 @@ action already calls:
   crawler runs as `PLATFORM_ACTOR` with no session and no tenant of its own;
   gating it would stop every nightly crawl with no error anyone would see until
   the roles stopped arriving.
+- **`/admin` is exempt.** Otherwise a bug anywhere in onboarding locks the only
+  admin out of approving users — the flow would hold the door shut on the one
+  person who could open it. This is a route exemption in the same shape as the
+  `CRON_CALLED` one, and it stands on its own terms: admin is platform operation,
+  reads no criteria, and scores nothing.
 
-### Grandfathering the existing account
+### The existing account goes through the flow
 
-"Leave Tom alone" is **not a no-op**, and this is the step most likely to go
-wrong.
+**There is no grandfather branch.** Revision 1 specified a backfill migration to
+leave the existing tenant untouched; revision 2 does not, because the migration
+was buying less than it cost. The existing account runs onboarding like anyone
+else.
 
-If production `app_settings` is empty or partial for the existing tenant, that
-tenant is currently running on `DEFAULT_CRITERIA` — the compiled-in constants.
-Changing those constants therefore changes *his* behaviour. So the order is:
+What that removes: a migration against live data, a branch in `require-actor`, an
+ordering constraint on when `DEFAULT_FIT_BRAIN` may be neutralised, and — the
+reason this is the better trade — a fact about the deployed database that this
+document could not check and would have had to be right about. The flow also gets
+exercised, once, by the only person able to judge whether its output is any good.
 
-1. **Measure first.** Which criteria keys does the existing tenant actually have
-   stored? This is a fact about the deployed database, not about the repo, and it
-   has not been checked:
-   ```sql
-   select key from app_settings where tenant_id = '<tom>' order by key;
-   ```
-2. **Backfill.** Write his current *effective* values — whatever `loadCriteria`
-   resolves today — into explicit rows, including `titleScopeSignals` and
-   `domainBonusRule` carrying the current hardcoded text verbatim. Stamp
-   `onboarded_at`.
-3. **Only then** neutralise the shipped defaults.
+**The values are preserved by hand, not by machine.** At Step 4 the existing
+user pastes today's fit brain and the two rubric blocks in verbatim
+(`lib/search-criteria.ts:62`, `lib/fit-prompt.ts:178-206` — these should be
+handed over as text, not retyped). Generated titles and locations can be accepted
+if they are right; the three scoring fields are replaced with what is already
+tuned.
 
-After the backfill, `DEFAULT_FIT_BRAIN` becomes `""` and a search with an empty
-fit brain **refuses to run** rather than falling back. Today the fallback is
-sensible; with real tenants it means any gap in the gate scores a stranger's roles
-against Tom's background — silent wrongness, which this codebase consistently
-chooses to fail loudly on instead. `emptySearchReason`
-(`lib/search-criteria.ts:279`) is the existing precedent for refusing with a
-reason.
+This matters because of the golden set. Its expected scores are pinned to the
+current rubric *text*, and ~70 already-scored roles were scored under it. A
+generated draft would split the table across two prompt versions with no way to
+tell which scores are correct.
+
+**Verify mechanically; do not trust the paste.** After finishing, render the live
+fit prompt for that tenant and diff it against the pre-change output. A dropped
+bullet or a trailing newline is exactly the silent divergence this codebase is
+built to catch, and the check is a one-off.
+
+Because the backfill is gone, `DEFAULT_FIT_BRAIN` becomes `""` in the same change
+rather than waiting on a migration, and a search with an empty fit brain
+**refuses to run** rather than falling back. Today the fallback is sensible; with
+real tenants it means any gap in the gate scores a stranger's roles against Tom's
+background — silent wrongness, which this codebase consistently chooses to fail
+loudly on instead. `emptySearchReason` (`lib/search-criteria.ts:279`) is the
+existing precedent for refusing with a reason.
+
+**One operational note:** while onboarding is incomplete the gate holds the
+existing user at `/welcome`, so it wants doing in one sitting. `/admin` stays
+reachable throughout, per the exemption above.
 
 ### Discover's premise, and its windows
 
@@ -298,22 +327,30 @@ own documented rule.
 `app/**/*.test.ts` — no jsdom, so the onboarding component itself is not
 unit-testable and its logic belongs in `lib/profile.ts` where it can be.
 
-1. **The fit-prompt fixtures are byte-identical** when fed Tom's backfilled
-   values. This is the no-op proof and the most important test in the change.
+1. **The fit-prompt fixtures are byte-identical** when the interpolated fields
+   carry today's hardcoded text. This is the no-op proof and the most important
+   test in the change: it shows the refactor moved the rubric's GTM blocks out of
+   the code without altering a character of what the model receives.
 2. `resolveProfile` repairs a malformed generation rather than passing it
    through: missing fields, wrong types, prose where a list belongs.
 3. An empty `fitBrain` refuses the search with a reason rather than falling back.
 4. The onboarding gate: active + no stamp → redirect; active + stamp → through;
-   `isPlatform()` → through regardless.
+   `isPlatform()` → through regardless; `/admin` → through regardless.
 5. The action exemption list is exhaustive, in the shape of
    `app/actions/auth-required.test.ts`.
 6. `SettingKeysAreFullyClassified` still compiles with the fourth shape group.
-7. `lib/settings-effects.test.ts` covers the three new keys.
+7. `lib/settings-effects.test.ts` covers all five new keys.
 8. Rendered onboarding-prompt fixtures, in the manner of the fit-prompt ones.
 
 The golden-set gate (`lib/fit-agreement.ts`) is **not** re-run as part of this
 work, because test 1 proves the prompt did not change. If test 1 fails, the
 golden set must be re-captured and that is a different, larger decision.
+
+**One check is manual and not automatable here**, because it is about stored data
+rather than code: after the existing user completes onboarding, render their live
+fit prompt and diff it against the pre-change output. Test 1 pins the *builder*
+against fixed inputs; it cannot tell whether the values that user actually pasted
+match what they replaced. Do this once, at the end.
 
 ## Consequences worth accepting
 
@@ -326,6 +363,28 @@ golden set must be re-captured and that is a different, larger decision.
 - CLAUDE.md's "Single-user, AI-powered GTM/RevOps job search tool tuned to Tom
   Keefe's profile" opening becomes wrong, as does its description of the fit brain
   and search criteria. It must be corrected in the same branch.
+- **The existing user's tuned values survive only if they are pasted correctly.**
+  Revision 2 trades a migration that could be got right mechanically for a manual
+  step that could be got wrong. That is the deliberate trade: the migration's
+  correctness depended on an unverified fact about production, while this step's
+  correctness is checkable afterwards by diffing the rendered prompt. A mistake
+  here is visible and repairable; a mistake in the migration would have been
+  neither.
+
+## Revision corrections (1 → 2)
+
+1. **The grandfather branch is gone.** Revision 1 specified measuring the
+   deployed `app_settings`, backfilling the existing tenant's effective values,
+   and only then neutralising the shipped defaults. The existing account now runs
+   the flow like everyone else. This removes a live-data migration, a branch in
+   `require-actor`, an ordering constraint, and the document's only unverifiable
+   claim.
+2. **`/admin` is exempt from the onboarding gate**, which revision 1 did not
+   consider. Without it a bug in onboarding locks the only admin out of the
+   approval screen — the flow holding the door shut on the one person who could
+   open it.
+3. **A manual verification step was added**, because test 1 pins the prompt
+   builder against fixed inputs and cannot see what the user actually stored.
 
 ## Out of scope
 
