@@ -6,6 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearchDetailed } from "@/lib/model-call";
 import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
+import { ROLE_FIELDS } from "@/lib/types";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { supabase } from "@/lib/supabase";
@@ -130,6 +131,7 @@ async function findAndSaveRolesInner(
       stopReason,
       key: "roles",
       itemNoun: "role",
+      itemFields: ROLE_FIELDS,
       label: `findAndSaveRoles(${startup.company})`,
       extract: arrayUnder<Role>("roles"),
     });

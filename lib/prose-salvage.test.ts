@@ -132,6 +132,48 @@ describe("salvageSchemaFor", () => {
   });
 });
 
+describe("field names", () => {
+  // THE DEFECT THIS PINS, found by calling the real API on 2026-08-18: the
+  // model was handed prose and an item schema with no properties, so it chose
+  // its own field names — {title, url, salary} where Role requires
+  // {role_title, job_url, salary_range}. ingestRoles would have received
+  // role_title: undefined for every salvaged role. Every unit test passed,
+  // because every fixture was written with the correct names already.
+  test("the schema declares the caller's field names on each item", () => {
+    // Mutation this catches: ignoring itemFields and emitting a bare
+    // {type: "object"} item, which is what shipped.
+    const schema = salvageSchemaFor("roles", "role", ["role_title", "job_url"]);
+    const props = schema.properties as Record<string, { items?: { properties?: Record<string, unknown> } }>;
+    expect(Object.keys(props.roles?.items?.properties ?? {})).toEqual(["role_title", "job_url"]);
+  });
+
+  test("items still accept fields beyond the declared ones", () => {
+    // The original reason the item shape was left open: the real extraction
+    // contract is per-tenant prose, so closing it would strip fields it does
+    // not enumerate. Declaring the core names must not close the shape.
+    const schema = salvageSchemaFor("roles", "role", ["role_title"]);
+    const props = schema.properties as Record<string, { items?: Record<string, unknown> }>;
+    expect(props.roles?.items?.additionalProperties).not.toBe(false);
+  });
+
+  test("the prompt names the required fields verbatim", () => {
+    // Mutation this catches: constraining the schema but leaving the prompt
+    // saying "using the field names it uses" — prose has no field names, so
+    // that sentence invites exactly the invention that caused the defect.
+    const prompt = buildSalvagePrompt("some prose", "role", ["role_title", "job_url"]);
+    expect(prompt).toContain("role_title");
+    expect(prompt).toContain("job_url");
+  });
+
+  test("omitting the field list leaves the item shape open", () => {
+    const props = salvageSchemaFor("roles", "role").properties as Record<
+      string,
+      { items?: { properties?: unknown } }
+    >;
+    expect(props.roles?.items?.properties).toBeUndefined();
+  });
+});
+
 describe("SALVAGE_SYSTEM", () => {
   test("frames the task as transcription, not research", () => {
     // Mutation this catches: a system prompt that invites the model to look

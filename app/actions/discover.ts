@@ -6,6 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearchDetailed } from "@/lib/model-call";
 import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
+import { STARTUP_FIELDS } from "@/lib/types";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
@@ -253,6 +254,7 @@ async function discoverStartupsInner(
       stopReason,
       key: "startups",
       itemNoun: "company",
+      itemFields: STARTUP_FIELDS,
       label: `discoverStartups(${dateRange})`,
       extract: arrayUnder<Startup>("startups"),
     });

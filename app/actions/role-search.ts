@@ -6,6 +6,7 @@ import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearchDetailed } from "@/lib/model-call";
 import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
+import { ROLE_MATCH_FIELDS } from "@/lib/types";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
@@ -215,6 +216,7 @@ async function findRolesByCriteriaInner(
       stopReason,
       key: "matches",
       itemNoun: "role match",
+      itemFields: ROLE_MATCH_FIELDS,
       label: `findRolesByCriteria(${family})`,
       extract: arrayUnder<RoleMatch>("matches"),
     });

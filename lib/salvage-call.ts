@@ -44,6 +44,12 @@ export async function parseOrSalvage<T>(opts: {
   key: string;
   /** Singular noun for the prompt: "role", "company", "role match". */
   itemNoun: string;
+  /**
+   * The field names the caller's own type requires. Without these the model
+   * picks its own — see salvageSchemaFor. Every caller in this repo passes
+   * them; the parameter is optional only for a shape-free future caller.
+   */
+  itemFields?: readonly string[];
   /** Identifies this call site in logs. */
   label: string;
   extract: (parsed: unknown) => { items: T[]; message?: string };
@@ -70,11 +76,11 @@ export async function parseOrSalvage<T>(opts: {
     try {
       salvagedRaw = await complete({
         system: SALVAGE_SYSTEM,
-        prompt: buildSalvagePrompt(opts.raw, opts.itemNoun),
+        prompt: buildSalvagePrompt(opts.raw, opts.itemNoun, opts.itemFields),
         // No search, and the input is one already-generated answer, so this is
         // small and cheap next to the call that produced the prose.
         maxTokens: 4000,
-        jsonSchema: salvageSchemaFor(opts.key, opts.itemNoun),
+        jsonSchema: salvageSchemaFor(opts.key, opts.itemNoun, opts.itemFields),
       });
     } catch (salvageErr) {
       console.error(

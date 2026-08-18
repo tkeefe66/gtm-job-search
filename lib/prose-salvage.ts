@@ -99,14 +99,39 @@ export const SALVAGE_SYSTEM =
  * Discover wants `startups`, role search wants `matches`. A hardcoded key here
  * would hand every caller an object it then has to rename.
  */
-export function salvageSchemaFor(key: string, itemNoun: string): Record<string, unknown> {
+export function salvageSchemaFor(
+  key: string,
+  itemNoun: string,
+  /**
+   * The field names the caller's own type requires.
+   *
+   * REQUIRED IN PRACTICE, optional only so a caller with no fixed shape can
+   * omit it. Handing the model prose and an item schema with no properties
+   * makes it choose its own names: a live call on 2026-08-18 returned
+   * {title, url, salary} where Role needs {role_title, job_url, salary_range},
+   * so every salvaged role would have reached ingestRoles with an undefined
+   * title. Unit tests could not catch it — their fixtures were already written
+   * with the right names.
+   */
+  itemFields?: readonly string[]
+): Record<string, unknown> {
+  // Declared, never CLOSED. additionalProperties stays open so the per-tenant
+  // prose contract's own fields survive; this only tells the model what the
+  // core names are.
+  const items: Record<string, unknown> = itemFields?.length
+    ? {
+        type: "object",
+        properties: Object.fromEntries(itemFields.map((f) => [f, { type: "string" }])),
+      }
+    : { type: "object" };
+
   return {
     type: "object",
     properties: {
       [key]: {
         type: "array",
         description: `The ${itemNoun} entries stated in the text. Empty if it states none were found.`,
-        items: { type: "object" },
+        items,
       },
       message: {
         type: "string",
@@ -121,13 +146,23 @@ export function salvageSchemaFor(key: string, itemNoun: string): Record<string, 
  * `raw` goes in verbatim. This call must not re-derive anything — it is a
  * reformat of words already paid for, not a second search.
  */
-export function buildSalvagePrompt(raw: string, itemNoun: string): string {
+export function buildSalvagePrompt(
+  raw: string,
+  itemNoun: string,
+  itemFields?: readonly string[]
+): string {
+  // Naming the fields in the PROMPT as well as the schema, because the sentence
+  // this replaces — "using the field names it uses" — was incoherent: the text
+  // is prose and has no field names, so it read as licence to invent them.
+  const fieldRule = itemFields?.length
+    ? `\n- Use exactly these field names, and no variations on them: ${itemFields.join(", ")}. Omit any whose value the text does not give — do not guess one.`
+    : "";
   return `A previous step was asked for JSON and answered in prose instead. Convert its answer, below, into the required JSON object.
 
 Rules:
 - Transcribe ONLY what the text below actually states. Do not invent ${itemNoun} entries, titles, URLs, salaries, or companies, and do not fill in fields the text does not give.
 - If the text says nothing qualifying was found, return an empty array and put its explanation in "message".
-- Keep every detail the text does give for each ${itemNoun}, using the field names it uses.
+- Keep every detail the text does give for each ${itemNoun}.${fieldRule}
 
 The answer to convert:
 ---

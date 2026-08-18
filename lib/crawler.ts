@@ -10,6 +10,7 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
 import { parseOrSalvage } from "@/lib/salvage-call";
+import { ROLE_FIELDS } from "@/lib/types";
 import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import type { Profile } from "@/lib/profile";
@@ -399,6 +400,7 @@ async function extractViaSearch(
     stopReason,
     key: "roles",
     itemNoun: "role",
+    itemFields: ROLE_FIELDS,
     label: `crawler: ${company} search tier`,
     extract: rolesFrom,
   });

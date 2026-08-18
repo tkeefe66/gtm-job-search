@@ -72,6 +72,43 @@ export interface Role {
   ic_flag: boolean;
 }
 
+/**
+ * Role's own field names, for the salvage prompt and schema.
+ *
+ * Duplicated from the interface above because TypeScript types do not survive
+ * to runtime and the salvage call needs these as data. If Role gains a field
+ * that the model should transcribe, add it here too — a missing name is not a
+ * type error, it just quietly stops being asked for.
+ */
+export const ROLE_FIELDS = [
+  "role_title",
+  "job_url",
+  "location",
+  "seniority",
+  "salary_range",
+  "description_summary",
+  "fit_signal",
+] as const;
+
+/** RoleMatch is Role plus the company it belongs to. */
+export const ROLE_MATCH_FIELDS = [...ROLE_FIELDS, "company"] as const;
+
+/** Startup's field names, same contract as ROLE_FIELDS. */
+export const STARTUP_FIELDS = [
+  "company",
+  "tagline",
+  "raised",
+  "stage",
+  "lead_investor",
+  "founded",
+  "traction",
+  "careers_url",
+  "category",
+  "headquarters",
+  "location",
+  "signal",
+] as const;
+
 export interface RolesResult {
   roles: Role[];
   message?: string;
