@@ -1,6 +1,6 @@
 # Crawl throughput for 10–25 tenants
 
-**Status:** design only. Nothing here is implemented. Revised 2026-08-17 after
+**Status:** design only. Nothing here is implemented. Revision 3, 2026-08-17, after
 Tom answered the three open questions in revision 1; the recommendation changed
 shape as a result, and the reason is in §4.
 
@@ -76,9 +76,28 @@ The real ceiling today is a chain of three:
    rotated by day number so the tenant who misses out changes nightly.
 2. **One HTTP request holds the entire nightly run.** The route loops tenants,
    and within each tenant loops companies, sequentially, in a single `GET`.
-3. **`curl --max-time 400`** in the `crawler` service's start command. At the
-   assumed 120s/company that wall sits at 3.3 companies — which is almost
-   certainly where the constant 3 really came from.
+3. **Railway's edge closes a silent request after 300s** — not `curl --max-time
+   400`, which is what the `crawler` service's start command sets and what
+   revision 2 of this document assumed was the wall. Railway's published limits
+   are: *"HTTP requests can run for up to 15 minutes if data keeps transferring
+   (for example, keep-alive heartbeats), and are otherwise closed after 5 minutes
+   with no data transferred."*
+
+   The route sends nothing until the entire batch is done and it returns
+   `NextResponse.json(...)`, so it is a silent request and gets **300 seconds**.
+   `--max-time 400` is therefore dead configuration: the edge cuts the connection
+   a hundred seconds before curl's own timeout could fire.
+
+   **At the measured 91.2s tail, 300s is 3.29 companies — and `DEFAULT_BATCH_LIMIT`
+   is 3.** The constant is accidentally right. It was chosen against a 120s guess
+   and a 400s wall, and it happens to land just under a 91.2s tail and a 300s
+   wall. There is essentially **no headroom** at the current limit, and the
+   per-tenant `repairJobLinks` pass runs inside the same request, eating into it.
+
+   Verified 2026-08-17 that no CDN is in front of this: `jobs.tomkeefe.ai` answers
+   with `server: railway-hikari` and `x-railway-edge: den1`, and `WEB_URL` — what
+   the crawler actually calls — is the `.up.railway.app` domain, so Cloudflare's
+   100s origin timeout is not in the path. Railway's edge is the only wall.
 
 **The bookkeeping is better than the scheduling, which is what makes a fix
 cheap.** `crawlCompany` advances `last_checked_at` on **every** outcome, success
@@ -88,7 +107,9 @@ and failure alike, and increments `consecutive_failures` only on failure
 - **A batch is not transactional.** Each company commits its own row as it
   finishes, so a `--max-time` timeout mid-batch loses the *report* and the
   *uncrawled remainder* — and the remainder simply stays due. Committed work
-  stands. This is what makes §4's Phase 0 low-risk rather than reckless.
+  stands. This is what lets the drain loop in §4 be interrupted at any point —
+  by a timeout, a redeploy, or a crash — without losing or double-crawling
+  anything.
 - **A drain-until-empty loop provably terminates,** because a company that breaks
   leaves the due set for another interval instead of being retried forever. **No
   queue table is needed** — `watchlist` due-ness already *is* the queue, and it is
@@ -143,21 +164,54 @@ companies each on a 7-day interval** (7.1/day needed — the next tenant breaks 
 Two or five tenants is not a problem. The worker is the answer to a question the
 platform has not yet been asked.
 
-### Phase 0 — now. Two constants, one query, one banner. No new service.
+### Phase 0 — now. One route, one loop, one query, one banner. No new service.
 
-**Raise `DEFAULT_BATCH_LIMIT` to 8 and `--max-time` to 900 together.** At the
-measured 91.2s worst case, 8 companies is ~12.2 minutes. This is a **2.7×
-capacity increase from two constants**, and by the formula above it carries the
-platform to ~10 tenants at 5 companies on a 7-day interval.
+**Revision 2 of this document proposed raising `DEFAULT_BATCH_LIMIT` to 8 and
+`--max-time` to 900. That does not work, and §2's edge limit is why.** Eight
+companies is ~730 seconds of silence, and Railway closes a silent request at 300.
+The 900s ceiling exists only for requests that keep transferring data, which this
+one does not. Raising the constants alone would produce a run that is killed
+mid-batch every night, reported as a curl failure, while the server kept working
+and committing rows — the most confusing possible failure.
 
-It is low-risk for the reason in §2: the batch is not transactional, so a timeout
-costs the uncrawled remainder and nothing already committed. **One thing to verify
-before shipping it — whether Railway's HTTP edge imposes a request timeout shorter
-than 900s.** That number is not known and must not be guessed; if the edge caps
-lower, the limit comes down to fit it and Phase 1 arrives sooner.
+Three ways out. **Take the third.**
 
-Neither constant may be raised without re-reading `crawl_runs`. Both carry the
-n=12 caveat, and 8 is chosen against a tail that §1 says is probably optimistic.
+- *Keep the batch, raise the constant.* Impossible past 3. There is no headroom
+  under 300s, so this is not an option at all.
+- *Keep the batch, stream the response* so the request stays alive to the 15-minute
+  limit — emit a progress line per company as it completes. This works and unlocks
+  ~9 companies, but it is a real change to the route (a `ReadableStream` instead of
+  `NextResponse.json`) in service of a batch shape that Phase 1 deletes anyway.
+- ***Shrink the request to one company.*** Build `GET /api/cron/crawl-next` — the
+  Phase 1 route — now, and have the existing cron container call it in a bounded
+  shell loop. Each request is ~91s worst case against a 300s silent limit, so it
+  fits with 3× margin and needs no streaming. Capacity stops being bounded by the
+  edge at all and becomes bounded by how long the loop runs.
+
+**Phase 0 and Phase 1 therefore converge, and Phase 1 shrinks to a deployment
+change.** The route, the selection query and the drain loop all land in Phase 0;
+Phase 1 becomes "flip the crawler service from cron to long-running, and add
+per-tenant quota." That is a better split than revision 2's, and it came out of
+the edge limit rather than a preference.
+
+`--max-time` drops to **300** to match the edge rather than exceed it, where it
+becomes a per-company anomaly detector against a 91.2s tail instead of dead
+configuration.
+
+**Read `consecutive_failures` in `DUE_COMPANIES_SQL`.** Independent of everything
+else and worth doing on its own: it stops a dead careers page from consuming a
+slot every cycle. This gets *more* valuable as capacity rises, not less.
+
+**Build the capacity banner.** Its user-facing job is the answer to question 3;
+its real job in Phase 0 is **instrumentation**. It turns "are we out of road?"
+from a guess into a number on a page that is already looked at, and it is the
+signal that starts Phase 1. The arithmetic needs no new data:
+
+```
+achievable_days = companies_tracked ÷ crawls_per_day_for_this_tenant
+```
+
+Compare to the configured `crawl_interval_days`; warn when achievable > configured.
 
 **Read `consecutive_failures` in `DUE_COMPANIES_SQL`.** Independent of everything
 else and worth doing on its own: it stops a dead careers page from consuming a
@@ -192,11 +246,18 @@ relabel it "earliest next check."
 
 ### Phase 1 — when the banner says the platform is short. Not before.
 
-A new route, `GET /api/cron/crawl-next`, does exactly one thing: pick the single
-most-overdue company that some tenant still has quota for, crawl it, return
-`{ crawled: true, company, companiesRemaining }` — or `{ crawled: false }` when
-there is no eligible work. The `crawler` service becomes **long-running**: drain
-until `crawled: false`, sleep, repeat.
+Most of what revision 2 put here moved into Phase 0, because the edge limit forced
+the one-company route to be built immediately. What is left is genuinely two
+things: **flip the `crawler` service from a cron run to long-running**, and **add
+per-tenant quota**.
+
+The route built in Phase 0, `GET /api/cron/crawl-next`, does exactly one thing:
+pick the single most-overdue company that some tenant still has quota for, crawl
+it, return `{ crawled: true, company, companiesRemaining }` — or
+`{ crawled: false }` when there is no eligible work. In Phase 0 a cron container
+loops it a bounded number of times and exits; in Phase 1 the service drains until
+`crawled: false`, sleeps, repeats. The route does not change between them, which
+is the point — Phase 1 is a deployment change plus a quota check, not a rewrite.
 
 Quota is enforced by counting what the tenant has already had today —
 `count(*) from watchlist where tenant_id = $1 and last_checked_at >= <UTC
@@ -214,12 +275,19 @@ hours of drain — roughly 4× headroom. **One worker covers the target with no
 concurrency.**
 
 **Costs.** The `crawler` service's logs go from one line a night to one line per
-company. `splitCrawlBatch` and `lib/crawl-fairness.ts` become dead code — with
-per-tenant quotas there is no shared pool to rotate — and should be **deleted**
-rather than left implying a fairness mechanism that no longer runs. The selection
-query must still iterate tenants round-robin rather than draining one tenant to
-exhaustion, which is where that fairness idea survives: as an ordering rule inside
-the query rather than a pre-computed split.
+company.
+
+`splitCrawlBatch` and `lib/crawl-fairness.ts` die in **Phase 0**, not here — the
+moment selection picks one company across all tenants there is no batch left to
+pre-split. They should be **deleted** rather than left implying a fairness
+mechanism that no longer runs. The idea survives as an **ordering rule inside the
+selection query**: iterate tenants round-robin rather than draining one tenant to
+exhaustion. That rule matters in Phase 0 even without quota, and it is the part of
+`lib/crawl-fairness.ts` worth reading before deleting it.
+
+The old `GET /api/cron/crawl` route also becomes redundant in Phase 0. Keep it
+until the loop has run a few nights, then delete it — leaving two routes that
+crawl is how the batch limit comes back by accident.
 
 ### Phase 2 — probably never
 
@@ -301,11 +369,16 @@ deliberately put it.
 
 ## 8. Open questions
 
-1. **Does Railway's HTTP edge cap request duration below 900s?** Phase 0's batch
-   limit of 8 depends on it. Needs checking, not guessing.
+1. ~~Does Railway's HTTP edge cap request duration below 900s?~~ **Answered
+   2026-08-17: yes — 300s silent, 900s only while data transfers.** It is the
+   single most consequential fact in this document; it killed revision 2's Phase 0
+   and merged Phase 0 with Phase 1. See §2 and §4.
 2. **Phase 0 banner copy** — the exact sentence, given the remedy changes between
    phases (§4).
 3. **Re-run §1's timing query once the sample includes a high-yield crawl.** Every
    capacity number here is sized against a 91.2s tail drawn from 3 runs that found
-   roles. If the real tail is 200s, Phase 0's limit of 8 becomes 4 and Phase 1
-   arrives roughly twice as soon.
+   roles. A 200s tail would still fit one company inside the 300s silent limit,
+   so Phase 0's shape survives it — but the margin drops from 3× to 1.5×, the
+   per-hour drain rate halves, and Phase 1 arrives roughly twice as soon. If the
+   tail ever approaches 300s, the route must stream and §4's second option comes
+   back on the table.
