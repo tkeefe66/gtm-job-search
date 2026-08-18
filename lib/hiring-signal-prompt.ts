@@ -127,10 +127,16 @@ export function buildHiringSignalPrompt(args: {
       ? `, extras (a JSON object with these additional fields, all strings: ${signal.extraFields.join(", ")})`
       : "";
 
-  // The location-preference sentence below is verbatim, unchanged by this
-  // task: it is driven by `criteria.locationRule` (a Criteria field, already
-  // per-tenant and out of this task's scope — see the module comment), not
-  // by the hiring signal, so Step 3's "replace only what the signal
-  // supplies" leaves it alone.
-  return `${focus}${searchClause} ${exampleQueries} Return up to 20 results — do not cut the list short. ${dateLine}IMPORTANT location preference (soft, for ranking — do not hard-exclude): prioritize companies that hire remotely or have a Denver/Colorado presence. For reference, the roles being sought follow this rule: ${criteria.locationRule} For each, return a JSON array of objects with these exact fields: company (string), tagline (string), careers_url (string, best guess careers page URL or empty string), headquarters (string, city and state e.g. "San Francisco, CA" or "Remote" or "New York, NY"), ${locationField}, signal (string, one legible sentence describing what happened, e.g. "Won $2.1B USAF sustainment contract" or "Raised $400M Series D led by a16z")${extrasClause}. Return ONLY the JSON array.`;
+  // The location-preference sentence below used to ALSO carry a hardcoded
+  // "prioritize companies that hire remotely or have a Denver/Colorado
+  // presence" clause ahead of `criteria.locationRule` — the previous single
+  // user's own city, rendered unconditionally into every tenant's Discover
+  // prompt. The career-neutrality guard (lib/career-neutrality.test.ts)
+  // could not see it: it is a location assumption, not one of the extracted
+  // career-vocabulary phrases. Fixed here by dropping the hardcoded clause
+  // and letting `criteria.locationRule` (a Criteria field, already
+  // per-tenant) carry the whole preference on its own, still as a SOFT
+  // ranking hint rather than a hard exclusion — that was the original
+  // intent and stays correct for every tenant's own rule, not just Denver's.
+  return `${focus}${searchClause} ${exampleQueries} Return up to 20 results — do not cut the list short. ${dateLine}IMPORTANT location preference (soft, for ranking — do not hard-exclude): prioritize companies consistent with the location rule the roles being sought follow: ${criteria.locationRule} For each, return a JSON array of objects with these exact fields: company (string), tagline (string), careers_url (string, best guess careers page URL or empty string), headquarters (string, city and state e.g. "San Francisco, CA" or "Remote" or "New York, NY"), ${locationField}, signal (string, one legible sentence describing what happened, e.g. "Won $2.1B USAF sustainment contract" or "Raised $400M Series D led by a16z")${extrasClause}. Return ONLY the JSON array.`;
 }

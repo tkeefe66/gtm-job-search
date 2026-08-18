@@ -159,10 +159,9 @@ describe("buildHiringSignalPrompt", () => {
       `funding rounds ${period}" and "funding rounds ${period}". Return up ` +
       `to 20 results — do not cut the list short. ${dateContextLine(NOW)} ` +
       `IMPORTANT location preference (soft, for ranking — do not ` +
-      `hard-exclude): prioritize companies that hire remotely or have a ` +
-      `Denver/Colorado presence. For reference, the roles being sought ` +
-      `follow this rule: ${DEFAULT_CRITERIA.locationRule} For each, return a ` +
-      `JSON array of objects with these exact fields: company (string), ` +
+      `hard-exclude): prioritize companies consistent with the location ` +
+      `rule the roles being sought follow: ${DEFAULT_CRITERIA.locationRule} ` +
+      `For each, return a JSON array of objects with these exact fields: company (string), ` +
       `tagline (string), careers_url (string, best guess careers page URL ` +
       `or empty string), headquarters (string, city and state e.g. "San ` +
       `Francisco, CA" or "Remote" or "New York, NY"), location (string, ` +
