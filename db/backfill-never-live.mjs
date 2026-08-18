@@ -78,6 +78,9 @@ try {
   }
 } catch (e) {
   console.error(`Query failed: name=${e?.name} message=${JSON.stringify(e?.message)}`);
+  for (const sub of e?.errors ?? []) {
+    console.error(`  cause: ${sub?.code} ${JSON.stringify(sub?.message)}`);
+  }
   process.exitCode = 1;
 } finally {
   await client.end();
