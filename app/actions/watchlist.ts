@@ -488,6 +488,11 @@ export async function setTracking(
   if (target.error) return { error: target.error };
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
   if (enabled) patch.consecutive_failures = 0;
+  // Cleared whichever way the switch went. Turning tracking ON restarts from a
+  // clean slate; turning it OFF by hand must not leave the row looking like one
+  // the crawler dropped, because the Watchlist tells those two apart by exactly
+  // this column.
+  patch.failing_since = null;
   const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update(patch)

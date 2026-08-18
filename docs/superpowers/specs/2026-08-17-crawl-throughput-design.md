@@ -216,35 +216,56 @@ that could spin: a post-crawl `watchlist` update that fails leaves
 again. Thirty iterations at the 91.2s tail is ~45 minutes, and a curl that errors
 produces empty output, fails the grep, and breaks the loop rather than hammering.
 
-**Read `consecutive_failures` in `DUE_COMPANIES_SQL`.** Independent of everything
-else and worth doing on its own: it stops a dead careers page from consuming a
-slot every cycle. This gets *more* valuable as capacity rises, not less.
+**Stop tracking a careers page that stays dead for a week**
+(`lib/dead-tracking.ts`, `db/migrations/010_watchlist_failing_since.sql`).
+Independent of everything else and worth doing on its own: a dead page was
+crawled on schedule forever, because nothing ever gave up.
+
+This REPLACED an exponential backoff that earlier revisions proposed, and the
+reason is worth keeping. Backing off retries a suspect page less and less often,
+which sounds like the same goal — but it delays the very evidence that proves the
+page is dead, so a "gone for a week" rule would fire a fortnight late or worse.
+Retry on the normal schedule, then stop entirely. Simpler, and it means what it
+says.
+
+Two details that are not obvious:
+
+- **It needs a column.** `consecutive_failures` and `last_checked_at` both
+  describe the LAST check, so between them they say how many failures there have
+  been and when the most recent was, never when the FIRST one was. A company on a
+  14-day interval with 2 failures could have been broken for 15 days or for 29,
+  and the difference decides the call. `failing_since` is set on the first failure
+  of a run and cleared by any success.
+- **Two failures minimum, whatever the clock says.** At a 14-day interval a
+  company that fails once is not retried until day 14, so at day 7 the only
+  evidence is a single failure — as likely a timeout or a bot-block as a dead
+  page. Dropping on that untracks a live company for one bad night.
+
+"Stop tracking" is `tracking_enabled = false`, never a delete: the row holds the
+careers URL the user may have fixed by hand and its whole crawl history, and the
+soft-disable exists so that survives. A manual toggle clears `failing_since` in
+both directions, which is what lets the Watchlist tell "we gave up" apart from
+"you turned it off" — they need different sentences and different remedies.
+
+`"empty"` is not a failure. A careers page that loads and lists nothing is
+working, and the week only counts `error` and `needs_url`.
 
 **Build the capacity banner.** Its user-facing job is the answer to question 3;
 its real job in Phase 0 is **instrumentation**. It turns "are we out of road?"
 from a guess into a number on a page that is already looked at, and it is the
-signal that starts Phase 1. The arithmetic needs no new data:
+signal that starts Phase 1.
 
-```
-achievable_days = companies_tracked ÷ crawls_per_day_for_this_tenant
-```
+It measures the SYMPTOM rather than modelling capacity. The modelled version —
+tracked companies divided by this tenant's share of throughput — needs to know
+how many tenants exist, which is a cross-tenant fact this page must not read, and
+it predicts contention instead of observing it. So: count the tenant's companies
+that are past a whole extra cycle, from their own `watchlist` rows.
 
-Compare to the configured `crawl_interval_days`; warn when achievable > configured.
-
-**Read `consecutive_failures` in `DUE_COMPANIES_SQL`.** Independent of everything
-else and worth doing on its own: it stops a dead careers page from consuming a
-slot every cycle. This gets *more* valuable as capacity rises, not less.
-
-**Build the capacity banner.** Its user-facing job is the answer to question 3;
-its real job in Phase 0 is **instrumentation**. It turns "are we out of road?"
-from a guess into a number on a page that is already looked at, and it is the
-signal that starts Phase 1. The arithmetic needs no new data:
-
-```
-achievable_days = companies_tracked ÷ crawls_per_day_for_this_tenant
-```
-
-Compare to the configured `crawl_interval_days`; warn when achievable > configured.
+The threshold is a MISSED FULL CYCLE, not "late at all" — a queue-driven crawler
+is routinely a little late on something, and a banner that fires on that is
+permanent, which makes it furniture. Companies whose last check FAILED are
+excluded, because they are dead-tracking's problem and "track fewer companies"
+would be wrong advice for them.
 
 **The banner has two lifetimes, and this is the wrinkle to know before writing the
 copy.** Per-tenant quota does not exist in Phase 0 and cannot — quota plus a

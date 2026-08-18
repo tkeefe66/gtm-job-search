@@ -67,9 +67,8 @@ describe("summarizeCrawlHealth", () => {
 
   // Without this the banner blames capacity for a company whose careers page is
   // simply broken, and the user's remedy — track fewer companies — would be
-  // wrong advice, because the backoff already stopped that company competing
-  // for slots.
-  test("a company held back by its own failure backoff is not blamed on capacity", () => {
+  // wrong advice. A broken page is dead-tracking's problem, not throughput's.
+  test("a company whose checks are failing is not blamed on capacity", () => {
     const s = summarizeCrawlHealth(
       [row({ crawlIntervalDays: 7, consecutiveFailures: 3, lastCheckedAt: "2026-08-02T12:00:00.000Z" })],
       NOW

@@ -1,0 +1,27 @@
+-- When the current unbroken run of crawl failures began.
+--
+-- WHY A COLUMN RATHER THAN ARITHMETIC ON WHAT IS ALREADY THERE. `watchlist`
+-- already has `consecutive_failures` and `last_checked_at`, and it is tempting
+-- to derive "failing for a week" from them. It cannot be derived: both describe
+-- the LAST check, so they say how many failures there have been and when the
+-- most recent one was, never when the first one was. A company checked every 14
+-- days with 2 failures could have been broken for 15 days or for 29, and the
+-- difference decides whether we stop tracking it.
+--
+-- Nullable, and null is the healthy state: set on the first failure of a run,
+-- cleared on any success. That makes "is this company currently failing, and
+-- since when" one column read instead of a join against crawl_runs.
+--
+-- Backfill is deliberately absent. Existing failing rows get a fresh clock on
+-- their next crawl rather than being retro-dated from data that cannot support
+-- it — stamping now() on every currently-failing row would be honest, but
+-- stamping a guessed start date would not, and there is no third option that
+-- reads the past. The practical effect is that an already-dead page gets one
+-- more grace period, once.
+alter table watchlist add column if not exists failing_since timestamptz;
+
+-- Migration 009 narrowed `users` to an explicit column grant list. `watchlist`
+-- was NOT narrowed — it is tenant-scoped and carries no privilege flag — so it
+-- still holds a table-level grant from 003 and this column needs no grant of its
+-- own. Stated because 009's maintenance note applies to `users` only, and the
+-- next person adding a column here should not go looking for a grant to write.

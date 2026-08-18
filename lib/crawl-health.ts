@@ -1,5 +1,3 @@
-import { backoffMultiplier } from "@/lib/crawl-schedule";
-
 /**
  * Is this tenant's watchlist actually being kept to the interval it asks for?
  *
@@ -62,11 +60,12 @@ export function summarizeCrawlHealth(
     // it is simply first in line.
     if (r.lastCheckedAt === null) continue;
 
-    // A company on failure backoff is NOT competing for slots — the backoff is
-    // what took it out of the running. Counting it as slipping would blame
-    // capacity for a broken careers page, and the banner's remedy ("track fewer
+    // A company whose last check FAILED is not behind because of capacity — it
+    // is behind because its careers page is broken, and lib/dead-tracking.ts
+    // will stop tracking it once that has held for a week. Counting it as
+    // slipping would blame capacity, and the banner's remedy ("track fewer
     // companies") would be wrong advice.
-    if (r.consecutiveFailures > 0 && backoffMultiplier(r.consecutiveFailures) > 1) {
+    if (r.consecutiveFailures > 0) {
       failing++;
       continue;
     }

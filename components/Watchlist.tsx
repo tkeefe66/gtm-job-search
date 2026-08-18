@@ -11,6 +11,7 @@ import {
 } from "@/app/actions/watchlist";
 import { isDue, nextCheckDue } from "@/lib/crawl-schedule";
 import { summarizeCrawlHealth } from "@/lib/crawl-health";
+import { stoppedTrackingReason } from "@/lib/dead-tracking";
 import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
@@ -155,8 +156,12 @@ export default function Watchlist() {
   }
 
   function renderRow(c: TrackedCompany, i: number) {
-    const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days, c.consecutive_failures);
+    const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
     const failing = c.consecutive_failures >= 3;
+    // Only the crawler leaves failing_since set on a switched-off row — a manual
+    // toggle clears it — so this distinguishes "we gave up" from "you turned it
+    // off", which need different sentences and different remedies.
+    const droppedAsDead = !c.tracking_enabled && c.failing_since !== null;
 
     return (
       <div
@@ -202,7 +207,7 @@ export default function Watchlist() {
               ? ` · Last checked ${formatDate(c.last_checked_at)}`
               : " · Never checked"}
             {c.tracking_enabled &&
-              (isDue(c.last_checked_at, c.crawl_interval_days, undefined, c.consecutive_failures)
+              (isDue(c.last_checked_at, c.crawl_interval_days)
                 ? " · Due now"
                 : due
                   ? ` · Next check ${formatDate(due.toISOString())}`
@@ -213,11 +218,18 @@ export default function Watchlist() {
             <p className="mt-1 text-xs text-ink/40">No matching roles on the last check.</p>
           )}
 
-          {failing && (
+          {droppedAsDead ? (
             <p className="mt-1 text-xs text-[#92400E]">
-              Failing — {c.consecutive_failures} checks in a row.
-              {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
+              {stoppedTrackingReason(c.consecutive_failures)}
+              {c.last_crawl_error ? ` Last error: ${c.last_crawl_error}` : ""}
             </p>
+          ) : (
+            failing && (
+              <p className="mt-1 text-xs text-[#92400E]">
+                Failing — {c.consecutive_failures} checks in a row.
+                {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
+              </p>
+            )
           )}
 
           {c.tracking_enabled && (
