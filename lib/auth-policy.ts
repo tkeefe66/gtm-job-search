@@ -146,3 +146,110 @@ export function signInView(status: string | null | undefined): SignInView {
   if (verdict.allow) return "redirect";
   return verdict.reason === "waitlist" ? "waitlist" : "refused";
 }
+
+/** What /signin should say about a failed attempt, and whether retrying can help. */
+export interface SignInNotice {
+  message: string;
+  retryable: boolean;
+}
+
+/**
+ * Turns Auth.js's `?error=` code into something the person reading it can act on.
+ *
+ * Both `pages.signIn` and `pages.error` are /signin, so EVERY refusal Auth.js
+ * raises lands here carrying a code — including the two this app raises itself by
+ * returning false from the signIn callback (an unverified Google address, and a
+ * sub collision, both AccessDenied). Before this existed the page ignored the
+ * parameter entirely and rendered the Google button, so a refused user clicked,
+ * was refused again, and circled with nothing on screen and only a console.warn
+ * in the server log. That is the same defect as the waitlist loop above, reached
+ * by a different door.
+ *
+ * An unrecognised code therefore MUST NOT return null. Auth.js's client-safe set
+ * grows between betas, and a code this build has never heard of is still a failed
+ * sign-in that owes the user a sentence.
+ */
+export function signInError(code: string | null | undefined): SignInNotice | null {
+  if (!code) return null;
+  switch (code) {
+    case "AccessDenied":
+      return {
+        // Deliberately names both causes rather than guessing between them: the
+        // server knows which one fired, but saying "that address belongs to a
+        // different Google account" to someone who merely has an unverified
+        // address is a false accusation, and the reverse understates a takeover
+        // attempt. The log line distinguishes them for the admin.
+        message:
+          "Google wouldn't let us sign you in with that account. Two things cause " +
+          "this: the address isn't verified with Google, or it's already claimed " +
+          "by a different Google account. Verify the address, or try the account " +
+          "that owns it.",
+        retryable: true,
+      };
+    case "OAuthAccountNotLinked":
+      return {
+        message:
+          "There's already an account for that address that wasn't created " +
+          "through Google. Ask the owner of this app to sort it out — signing in " +
+          "again won't fix it.",
+        retryable: false,
+      };
+    case "Configuration":
+      return {
+        message:
+          "Sign-in is misconfigured on the server, so nobody can get in right " +
+          "now. This isn't something you can fix by trying again — tell the owner " +
+          "of this app.",
+        retryable: false,
+      };
+    case "Verification":
+      return {
+        message: "That sign-in link has expired or was already used. Start again below.",
+        retryable: true,
+      };
+    default:
+      return {
+        message: `Sign-in didn't complete (${code}). Trying again is safe; if it keeps failing, tell the owner of this app and quote that code.`,
+        retryable: true,
+      };
+  }
+}
+
+/**
+ * What /signin renders below the heading, once the session and any `?error=`
+ * have both been read.
+ *
+ * `prompt` is the stock "Sign in to continue." line, which is noise next to an
+ * error notice and belongs only on a clean first visit.
+ */
+export type SignInBody =
+  | { kind: "redirect" }
+  | { kind: "waitlist" }
+  | { kind: "refused" }
+  | { kind: "notice-only" }
+  | { kind: "button"; prompt: boolean };
+
+/**
+ * The page's whole rendering decision, pure and therefore testable.
+ *
+ * Extracted for the same reason signInView was: the branch that decides whether
+ * the Google button appears is the branch that has produced the sign-in loop
+ * twice, and a server component's JSX is reachable from no test in this repo. In
+ * a ternary this logic was green under a suite that could not see it.
+ *
+ * ORDER IS THE POINT. The session is consulted BEFORE the notice, because a
+ * waitlisted user who arrives carrying any ?error= must still get the waitlist
+ * and never the button — reversing these two lines rebuilds the loop through the
+ * query string. A session that is allowed in redirects no matter what the query
+ * string claims went wrong.
+ */
+export function signInBody(
+  view: SignInView,
+  notice: SignInNotice | null
+): SignInBody {
+  if (view === "redirect") return { kind: "redirect" };
+  if (view === "waitlist") return { kind: "waitlist" };
+  if (view === "refused") return { kind: "refused" };
+  if (notice && !notice.retryable) return { kind: "notice-only" };
+  return { kind: "button", prompt: notice === null };
+}

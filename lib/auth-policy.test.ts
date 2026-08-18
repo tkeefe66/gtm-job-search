@@ -5,6 +5,8 @@ import {
   sessionVerdict,
   resolveIdentity,
   signInView,
+  signInError,
+  signInBody,
   IDLE_MS,
   ABSOLUTE_MS,
 } from "./auth-policy";
@@ -178,5 +180,92 @@ describe("the session adapter does not deny by status", () => {
       .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
       .filter((line) => /accessFor\s*\(/.test(line));
     expect(calls).toEqual([]);
+  });
+});
+
+describe("signInError", () => {
+  // Mutation this catches: a `default: return null` for codes this build does
+  // not recognise. That is the silent circle — Auth.js redirects to
+  // /signin?error=<code>, the page renders nothing but the Google button, and
+  // the click is refused again with no message. An unknown code MUST still say
+  // something.
+  test("an unrecognised code still produces a notice", () => {
+    const notice = signInError("SomethingNewInBeta33");
+    expect(notice).not.toBeNull();
+    expect(notice?.message.length).toBeGreaterThan(0);
+  });
+
+  // Mutation this catches: refusals falling through to the generic message. The
+  // two the signIn callback actually returns false for are the ones a user can
+  // act on — verify the address, or use the Google account that owns it — and a
+  // generic "something went wrong" tells them neither.
+  test("a refused Google account is told which two causes to check", () => {
+    const notice = signInError("AccessDenied");
+    expect(notice?.message).toMatch(/verif/i);
+    expect(notice?.message).toMatch(/different Google account|another Google account/i);
+  });
+
+  // Mutation this catches: `retryable` hardcoded true. A misconfigured server
+  // cannot be fixed by clicking again; offering the button there is the same
+  // silent loop wearing a message.
+  test("a server misconfiguration is not retryable, an access refusal is", () => {
+    expect(signInError("Configuration")?.retryable).toBe(false);
+    expect(signInError("AccessDenied")?.retryable).toBe(true);
+  });
+
+  // Mutation this catches: returning a notice unconditionally, which would put
+  // an error banner in front of every first-time visitor who has never failed
+  // anything.
+  test("no error param is no notice", () => {
+    expect(signInError(null)).toBeNull();
+    expect(signInError(undefined)).toBeNull();
+    expect(signInError("")).toBeNull();
+  });
+});
+
+describe("signInBody", () => {
+  // The whole reason this is a function and not a JSX ternary: the branch that
+  // decides whether the Google button appears is the branch that produced the
+  // sign-in loop twice already, and JSX in a server component is reachable from
+  // no test in this repo.
+
+  // Mutation this catches: evaluating the notice branch BEFORE the session
+  // branch. A waitlisted user who arrives carrying any ?error= would then be
+  // shown the button, click it, mint another session, and bounce off /discover
+  // — the exact loop 8d9d4a5 fixed, reached through the query string instead.
+  test("a waitlisted session never gets a button, even carrying a retryable error", () => {
+    const body = signInBody("waitlist", signInError("AccessDenied"));
+    expect(body.kind).toBe("waitlist");
+  });
+
+  test("a refused session never gets a button either", () => {
+    expect(signInBody("refused", signInError("AccessDenied")).kind).toBe("refused");
+  });
+
+  // Mutation this catches: ignoring `retryable` and always rendering the button.
+  // Clicking it cannot fix a misconfigured server, so offering it is the silent
+  // loop wearing a message.
+  test("a non-retryable notice leaves no button to click", () => {
+    expect(signInBody("signin", signInError("Configuration")).kind).toBe("notice-only");
+  });
+
+  // Mutation this catches: dropping the button for every notice, retryable or
+  // not — which strands a user whose only problem is a Google account they can
+  // switch.
+  test("a retryable notice keeps the button but drops the stock prompt", () => {
+    const body = signInBody("signin", signInError("AccessDenied"));
+    expect(body).toEqual({ kind: "button", prompt: false });
+  });
+
+  // Mutation this catches: rendering the notice-only body when there is no
+  // notice at all, which would blank the page for every first-time visitor.
+  test("no session and no error is the ordinary button, prompt and all", () => {
+    expect(signInBody("signin", null)).toEqual({ kind: "button", prompt: true });
+  });
+
+  // Mutation this catches: an unknown error code suppressing the redirect. An
+  // active session belongs on /discover no matter what is in the query string.
+  test("an active session redirects regardless of any error code", () => {
+    expect(signInBody("redirect", signInError("SomethingNewInBeta33")).kind).toBe("redirect");
   });
 });
