@@ -207,6 +207,31 @@ live role against a stranger's board. Those rows are reported and handed to the
 bulk status control for the user to decide. Only a definitive 404/410 closes
 anything, unchanged.
 
+**A role that was already dead when we found it is hidden, not deleted.**
+`ingestRoles` closes a role on two signals — a definitive 404/410 from
+`checkJobUrl`, or `unlisted` (the employer's guessed board does not list the
+title) — but only the FIRST sets `jobs.never_live`. `partitionNeverLive`
+(`lib/never-live.ts`) drops those rows in `getJobs`, which removes them from the
+`/roles` table and from BOTH tiles at once, since `tileCounts` derives from the
+same array; the count comes back as `hiddenCount` and renders as one muted line
+under the tiles. The rows must never be DELETED: `ingestRoles` dedupes against
+every existing row for the company regardless of status, so deleting them makes
+the next Find Roles run re-find, re-verify and re-insert the same dead postings
+permanently. Hiding on `unlisted` was rejected for the same reason
+`repairJobLinks` refuses to CLOSE on it — the board is found by guessing a slug,
+and a collision would disappear a live role with no way to get it back. A third
+status, `"unknown"` (403s, timeouts, rate limits — the COMMON outcome), sets
+neither: those roles are stored `New` and scored normally, and a test pins that,
+because the mutation that treats anything-but-live as dead passed the whole
+suite before it existed. This is deliberately NOT a fourth `SystemStatusKey`:
+"never live" is a provenance fact stamped at insert, not a workflow state, and a
+new system status would collide with `resolveStatuses`' `hidden: false` rule and
+force a third `StatusBucket` through `bucketFor`, `tileCounts`, the Open/Out
+filters and `link-health.ts`. The column ships as `db/migrations/008_never_live.sql`
+and NOT through `db/apply-schema.mjs`, which would re-create the `insights_cache`
+table that `006_drop_insights.sql` dropped. Design:
+`docs/superpowers/specs/2026-08-17-never-live-roles-design.md`.
+
 ## Known outstanding (career-agnostic pass)
 
 Three real gaps the career-agnostic work left behind. None is hypothetical — each is confirmed against code or against real probe data, and none should be allowed to die in a transcript.
