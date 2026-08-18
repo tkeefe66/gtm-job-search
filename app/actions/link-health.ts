@@ -42,7 +42,13 @@ export interface LinkRepairRow {
   id: string;
   company: string;
   role_title: string;
-  boardUrl: string;
+  /**
+   * Where the report should send the user for THIS row, which differs by
+   * reason: the employer board we found for `ambiguous` and `empty`, and the
+   * job-board link the row still carries for `unresolved`, where no employer
+   * board was found at all.
+   */
+  url: string;
   /**
    * Which undecidable case this is. Carried per row rather than split into two
    * report fields so the banner can group them itself (`splitUnclear`) without
@@ -60,13 +66,16 @@ export interface LinkRepairReport {
   /** Rows the employer's own board no longer lists, and are now closed. */
   closedUnlisted: number;
   /**
-   * Board found but the outcome was undecidable — reported, never auto-closed.
-   * Two reasons live here (see UnclearReason): several postings could be this
-   * role, or the board lists nothing at all.
+   * Every row this pass could not decide, with the reason on each. Three live
+   * here (see UnclearReason): several postings could be this role, the board
+   * lists nothing at all, or no employer board was found to check against.
+   *
+   * The third used to be a bare COUNT in this report — "4 still point at a job
+   * board we can't see past" — so those rows could be counted but never seen,
+   * and the user could not act on the one thing the summary told them about.
+   * None of the three is ever auto-closed.
    */
   unclear: LinkRepairRow[];
-  /** Aggregator links we could not improve at all. */
-  unresolved: number;
   error?: string;
 }
 
@@ -77,7 +86,6 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     closed: 0,
     closedUnlisted: 0,
     unclear: [],
-    unresolved: 0,
   };
 
   const { data, error } = await supabase.forTenant(await resolveTenantId()).from("jobs").select("*");
@@ -113,15 +121,19 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       if (r.relinked) report.relinked++;
       if (r.closed) report.closed++;
       if (r.closedUnlisted) report.closedUnlisted++;
-      if (r.unresolved) report.unresolved++;
-      if (r.unclear) report.unclear.push(r.unclear);
+      // Not `if (r.unclear)` alone: the 404 check below repairOne's board
+      // lookup can close a row that the lookup had already set aside as
+      // undecidable. Listing it would offer the user a decision that has
+      // already been made, on a row the table now shows as closed.
+      if (r.unclear && !r.closed) report.unclear.push(r.unclear);
     }
   }
 
   console.log(
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
       `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted), ` +
-      `unclear ${report.unclear.length}, unresolved ${report.unresolved}`
+      `unclear ${report.unclear.length} ` +
+      `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved)`
   );
   return report;
 }
@@ -130,7 +142,6 @@ interface RepairOutcome {
   relinked?: boolean;
   closed?: boolean;
   closedUnlisted?: boolean;
-  unresolved?: boolean;
   unclear?: LinkRepairRow;
 }
 
@@ -179,11 +190,21 @@ async function repairOne(job: Job): Promise<RepairOutcome> {
         id: job.id,
         company: job.company,
         role_title: job.role_title,
-        boardUrl: resolved.url,
+        url: resolved.url,
         reason: resolved.precision === "empty" ? "empty" : "ambiguous",
       };
     } else {
-      out.unresolved = true;
+      // No employer board found under any slug or vendor. The row keeps its
+      // job-board link, and that link is what the report points at — there is
+      // nothing better to send the user to. NOT closable: an unfindable board
+      // says nothing about whether the posting is live.
+      out.unclear = {
+        id: job.id,
+        company: job.company,
+        role_title: job.role_title,
+        url,
+        reason: "unresolved",
+      };
     }
   }
 

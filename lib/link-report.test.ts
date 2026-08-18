@@ -36,10 +36,22 @@ describe("splitUnclear", () => {
     const res = splitUnclear([row("a", "empty")]);
 
     expect(res.ambiguous).toEqual([]);
+    expect(res.unresolved).toEqual([]);
     expect(res.empty).toHaveLength(1);
   });
 
-  test("no rows at all still returns both groups", () => {
-    expect(splitUnclear([])).toEqual({ ambiguous: [], empty: [] });
+  test("no rows at all still returns every group", () => {
+    expect(splitUnclear([])).toEqual({ ambiguous: [], empty: [], unresolved: [] });
+  });
+
+  // Mutation caught: `unresolved` rows falling into either closable group.
+  // Those rows are NOT evidence a posting is gone — only that the link could
+  // not be checked past — and the closable groups carry a "Move to Out" button.
+  test("unresolved rows go to their own group, never a closable one", () => {
+    const res = splitUnclear([row("a", "unresolved"), row("b", "empty"), row("c", "ambiguous")]);
+
+    expect(res.unresolved.map((r) => r.id)).toEqual(["a"]);
+    expect(res.empty.map((r) => r.id)).toEqual(["b"]);
+    expect(res.ambiguous.map((r) => r.id)).toEqual(["c"]);
   });
 });

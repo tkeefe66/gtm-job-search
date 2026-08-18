@@ -545,7 +545,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         closed: 0,
         closedUnlisted: 0,
         unclear: [],
-        unresolved: 0,
         error: describeWriteFailure(
           err instanceof Error ? err.message : String(err),
           "check your role links"
@@ -742,16 +741,15 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                     ` Closed ${linkReport.closed} whose posting returned a 404.`}
                   {linkReport.closedUnlisted > 0 &&
                     ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
-                  {linkReport.unresolved > 0 &&
-                    ` ${linkReport.unresolved} still point at a job board we can't see past.`}
-                  {/* "Everything checked out" has to mean EVERYTHING, so
-                      unresolved counts too — it sat next to "7 still point at a
-                      job board we can't see past" and contradicted it. */}
+                  {/* "Everything checked out" has to mean EVERYTHING. The
+                      unresolved rows used to be counted in a clause here and
+                      nowhere else; they are listed below now, with the other
+                      two reasons, so this line no longer summarises what the
+                      reader can already see. */}
                   {linkReport.relinked === 0 &&
                     linkReport.closed === 0 &&
                     linkReport.closedUnlisted === 0 &&
                     linkReport.unclear.length === 0 &&
-                    linkReport.unresolved === 0 &&
                     " Everything checked out."}
                 </>
               )}
@@ -772,25 +770,44 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   a false sentence, and the wrong check to go and make. Neither
                   is auto-closed: closing on either would be a guess at a live
                   role, and the board itself was found by guessing a slug. */}
-              {unclearGroups.ambiguous.length > 0 && (
+              {/* Every row hedges the same way it is caveated. An earlier
+                  version stated "their board is empty" and then admitted
+                  underneath that the board might not be theirs — the row
+                  asserted what the caveat withdrew. The hedge now lives in one
+                  place: the link says which board we FOUND, never whose it is. */}
+              {unclearGroups.empty.length > 0 && (
                 <UnclearGroup
-                  rows={unclearGroups.ambiguous}
-                  clause="could be one of several postings on their board"
-                  linkLabel="their board"
-                  caveat="Titles that look alike are not the same posting — open the board before you close these."
+                  rows={unclearGroups.empty}
+                  clause="seems to no longer be listed"
+                  linkLabel="the board we found"
+                  caveat="We matched that board by company name, so it may not be theirs. Their own careers page settles it."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
                   busy={applying}
                 />
               )}
-              {unclearGroups.empty.length > 0 && (
+              {unclearGroups.ambiguous.length > 0 && (
                 <UnclearGroup
-                  rows={unclearGroups.empty}
-                  clause="seems to no longer be listed"
-                  linkLabel="their board is empty"
-                  caveat="The board was found by guessing the company's name, so it may not be theirs — their own careers page is the check."
+                  rows={unclearGroups.ambiguous}
+                  clause="could be one of several postings"
+                  linkLabel="the board we found"
+                  caveat="We matched that board by company name, and titles that look alike are not the same posting. Open it before closing these."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
+                  busy={applying}
+                />
+              )}
+              {/* No Move to Out, deliberately. These rows are not evidence of
+                  anything: we could not find an employer board to check the
+                  posting against, which is not the same as the posting being
+                  gone. A close button here would invite the user to bury live
+                  roles on the strength of a failed lookup. */}
+              {unclearGroups.unresolved.length > 0 && (
+                <UnclearGroup
+                  rows={unclearGroups.unresolved}
+                  clause="is still a job-board copy — we could not find the employer's own posting"
+                  linkLabel="where it points now"
+                  caveat="Nothing here says the role is gone; the link just can't be checked past. Open it to see."
                   busy={applying}
                 />
               )}
@@ -1212,12 +1229,13 @@ function UnclearGroup({
   onMoveOut,
   busy,
 }: {
-  rows: { id: string; company: string; role_title: string; boardUrl: string }[];
+  rows: { id: string; company: string; role_title: string; url: string }[];
   clause: string;
   linkLabel: string;
   caveat: string;
-  outLabel: string;
-  onMoveOut: (rows: { id: string }[]) => void;
+  /** Both omitted for a group that must not be closable — see `unresolved`. */
+  outLabel?: string;
+  onMoveOut?: (rows: { id: string }[]) => void;
   busy: boolean;
 }) {
   return (
@@ -1231,7 +1249,7 @@ function UnclearGroup({
           <li key={r.id}>
             <span className="font-medium">{r.company}</span> {r.role_title} {clause} &mdash;{" "}
             <a
-              href={r.boardUrl}
+              href={r.url}
               target="_blank"
               rel="noreferrer"
               className="text-ink/60 underline underline-offset-2 hover:text-ink"
@@ -1242,18 +1260,21 @@ function UnclearGroup({
         ))}
       </ul>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        {/* Acts here, on these rows. Never automatic: the board behind both of
-            these outcomes was found by GUESSING a slug from the company name,
+        {/* Acts here, on these rows. Never automatic: the board behind a
+            closable outcome was found by GUESSING a slug from the company name,
             so closing without a human looking would eventually kill a live role
-            against a stranger's board. */}
-        <button
-          onClick={() => onMoveOut(rows)}
-          disabled={busy}
-          title={`Sets ${rows.length === 1 ? "this role" : `these ${rows.length} roles`} to ${outLabel}`}
-          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
-        >
-          {rows.length === 1 ? "Move to Out" : `Move all ${rows.length} to Out`}
-        </button>
+            against a stranger's board. A group with no handler renders its
+            caveat alone — there is no decision to offer. */}
+        {onMoveOut && (
+          <button
+            onClick={() => onMoveOut(rows)}
+            disabled={busy}
+            title={`Sets ${rows.length === 1 ? "this role" : `these ${rows.length} roles`} to ${outLabel}`}
+            className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
+          >
+            {rows.length === 1 ? "Move to Out" : `Move all ${rows.length} to Out`}
+          </button>
+        )}
         <span className="text-xs text-ink/40">{caveat}</span>
       </div>
     </div>
