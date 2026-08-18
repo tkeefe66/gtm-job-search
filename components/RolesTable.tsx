@@ -1264,9 +1264,10 @@ function UnclearGroup({
   onMoveOut: (rows: { id: string }[]) => void;
   busy: boolean;
 }) {
-  // One row is its own decision, so it needs no way to say "all of them" — the
-  // button under the list IS the row's button. Several rows are several
-  // decisions: each gets its own, and the group button becomes the select-all.
+  // EVERY row carries its own button, in the same place, whatever the group's
+  // size — a one-row group that put its button underneath instead made the
+  // single most common case the odd one out. The group button is only ever the
+  // select-all, so it appears only when there is more than one thing to select.
   const many = rows.length > 1;
   return (
     <div>
@@ -1288,14 +1289,12 @@ function UnclearGroup({
                 {linkLabel}
               </a>
             </span>
-            {many && (
-              <MoveOutButton
-                label="Move to Out"
-                title={`Sets this role to ${outLabel}`}
-                disabled={busy}
-                onClick={() => onMoveOut([r])}
-              />
-            )}
+            <MoveOutButton
+              label="Move to Out"
+              title={`Sets this role to ${outLabel}`}
+              disabled={busy}
+              onClick={() => onMoveOut([r])}
+            />
           </li>
         ))}
       </ul>
@@ -1309,14 +1308,16 @@ function UnclearGroup({
           a sentence what the row already says in its wording: "seems to no
           longer be listed", against "the board we found". Hedging twice reads
           as a warning, and a warning next to every button is one nobody sees. */}
-      <div className="mt-2">
-        <MoveOutButton
-          label={many ? `Move all ${rows.length} to Out` : "Move to Out"}
-          title={`Sets ${many ? `all ${rows.length} roles` : "this role"} to ${outLabel}`}
-          disabled={busy}
-          onClick={() => onMoveOut(rows)}
-        />
-      </div>
+      {many && (
+        <div className="mt-2">
+          <MoveOutButton
+            label={`Move all ${rows.length} to Out`}
+            title={`Sets all ${rows.length} roles to ${outLabel}`}
+            disabled={busy}
+            onClick={() => onMoveOut(rows)}
+          />
+        </div>
+      )}
     </div>
   );
 }
