@@ -8,32 +8,104 @@ import { callWithWebSearch, parseJson } from "@/lib/model-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
-import { dateContextLine, loadCriteria } from "@/lib/search-criteria";
+import type { HiringSignal } from "@/lib/profile";
+import { loadCriteriaAndScoringInputs } from "@/lib/search-criteria";
+import { hiringSignalSystem, buildHiringSignalPrompt } from "@/lib/hiring-signal-prompt";
+import { legacySignalFrom } from "@/lib/legacy-signal";
+import { normalizeCompanyName } from "@/lib/role-key";
 
-const SYSTEM =
-  "You are a startup funding analyst. Your job is to find every significant AI and tech startup funding round for the given period — do not curate down to a short list, capture all notable rounds. Search multiple sources: TechCrunch, Crunchbase, The Information, Bloomberg, Forbes, VentureBeat, Reuters, WSJ, Business Insider, and X/Twitter funding announcements. Focus exclusively on Series B and above (Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO). Exclude seed, pre-seed, and Series A rounds. Prioritize completeness — it is better to return 20 results than to miss a major round. Return ONLY valid JSON, no markdown, no preamble.";
-
-export type DateRange = "7d" | "30d" | "3m" | "6m" | "6-18m";
+export type DateRange = "7d" | "30d" | "3m" | "6m" | "6-18m" | "current";
 
 // A startup annotated with the date-range window of the discovered_startups
 // row it was read from. getAllDiscoveredStartups() dedupes by company across
 // every cached window, so this is how a caller (Discover.tsx) tells a company
 // found last week apart from one found 6-18 months ago.
-export type DiscoveredStartup = Startup & { discovered_range: DateRange };
+export type DiscoveredStartup = Startup & {
+  discovered_range: DateRange;
+  /**
+   * Every distinct signal this employer triggered, across every cached row —
+   * INCLUDING duplicate returns within one search (Probe A returned RTX
+   * three times under two different name spellings, Lockheed twice) and
+   * legitimate repeats across different windows. `signal` above still holds
+   * just the most recent one; this is the full list a card renders. Never
+   * empty when `signals.length` matters — a row whose signal composed to ""
+   * (no `signal` field and nothing to compose from `legacySignalFrom`)
+   * simply contributes no entry.
+   */
+  signals: string[];
+};
 
-// 6-18m is offered as an additional option, not the default: a company that
-// closed a round last week has no RevOps req yet, while a company hiring GTM
-// systems people today more plausibly raised 6-18 months ago. 7d stays the
-// default for scanning fresh news; the wider windows are picked deliberately.
+// A company that just triggered the hiring signal has no req posted yet —
+// this app's job is to find the employer BEFORE the posting exists, and a
+// company whose signal was months ago is more likely to have opened one.
+// 6-18m is offered as an additional option for exactly that reason, not as
+// the default: 7d stays the default for scanning fresh signal, the wider
+// windows are picked deliberately by whoever wants to look further back.
 const DATE_RANGE_LABELS: Record<DateRange, string> = {
   "7d": "in the past 7 days",
   "30d": "in the past 30 days",
   "3m": "in the past 3 months",
   "6m": "in the past 6 months",
   "6-18m": "between 6 and 18 months ago",
+  // Never actually interpolated into a prompt — discoverStartupsInner only
+  // reads this map when `signal.hasRecency` is true, and "current" is used
+  // exclusively for a signal whose hasRecency is false (a standing property
+  // has no window). Present only so this Record stays total over DateRange.
+  current: "right now",
 };
 
-// Returns all saved startups across every date range, deduped by company name.
+// Compatibility shim for the Watchlist page (app/actions/watchlist.ts,
+// components/Watchlist.tsx), which still reads these six fields directly off
+// a Startup rather than from `extras`. The new schema asks the model for
+// `extras` generically, keyed by the tenant's `hiringSignal.extraFields` —
+// for the shipped funding profile those keys happen to be exactly these six
+// names (see DEFAULT_PROFILE.hiringSignal in lib/profile.ts), so copying them
+// up keeps Watchlist showing exactly what it showed before this task, with
+// no change to that file. A tenant whose extraFields name something else
+// (contract_value, awarding_agency, …) leaves these legacy fields empty on
+// Watchlist — the same quiet degradation this codebase accepts elsewhere for
+// a field a domain doesn't have.
+const LEGACY_EXTRA_KEYS = [
+  "raised",
+  "stage",
+  "lead_investor",
+  "founded",
+  "traction",
+  "category",
+] as const;
+
+function withLegacyExtraFields(s: Startup): Startup {
+  const extras = s.extras ?? {};
+  const patch: Partial<Startup> = {};
+  for (const key of LEGACY_EXTRA_KEYS) {
+    if (!s[key] && extras[key]) patch[key] = extras[key];
+  }
+  return { ...s, ...patch };
+}
+
+/** The tenant's hiring signal, for the client component to render around
+ *  (header copy, which buttons to show — hasRecency gates the whole window
+ *  UI per Binding 4). */
+export async function getHiringSignal(): Promise<{ signal: HiringSignal }> {
+  const { profile } = await loadCriteriaAndScoringInputs();
+  return { signal: profile.hiringSignal };
+}
+
+// Returns all saved startups across every date range, deduped by EMPLOYER —
+// not by row, and not by a raw lowercased company string.
+//
+// Binding 1 (probe A): one employer triggers the signal MANY times.
+// Lockheed Martin returned twice, RTX three times — twice as "RTX
+// (Raytheon)" and once as "Raytheon (RTX)", three different headquarters.
+// Funding rounds are roughly one-per-company, which is why the OLD dedupe
+// (lowercase the name, keep the first occurrence) never surfaced this: it is
+// wrong in BOTH directions for a signal that can happen to the same employer
+// repeatedly — name variants would survive as separate cards, and exact
+// duplicates would collapse while silently discarding a second real signal.
+//
+// The fix: key on normalizeCompanyName (lib/role-key.ts — the SAME
+// normalizer watchlist/ingest-roles use, not a second one) and keep a LIST
+// of every signal an employer triggered rather than overwriting to one.
 export async function getAllDiscoveredStartups(): Promise<{
   startups: DiscoveredStartup[];
   fetchedAt: string | null;
@@ -47,24 +119,32 @@ export async function getAllDiscoveredStartups(): Promise<{
   if (error) return { startups: [], fetchedAt: null, error: error.message };
   if (!data || data.length === 0) return { startups: [], fetchedAt: null };
 
-  // Flatten all startups, dedupe by company name (keep first occurrence).
-  // Rows are ordered fetched_at descending, so when the same company shows
-  // up in more than one cached window, the occurrence kept here — and the
-  // discovered_range attached to it — is whichever row was fetched most
-  // recently, not necessarily the narrowest or widest window searched.
-  const seen = new Set<string>();
-  const all: DiscoveredStartup[] = [];
+  // Rows are ordered fetched_at descending, so the FIRST time a key is seen
+  // sets the card's core fields (company/tagline/careers_url/headquarters/
+  // location) from the most-recently-fetched occurrence. Every later
+  // occurrence of the same key — whether from the same row (a search that
+  // returned one employer more than once) or a different one — never
+  // overwrites the core and never creates a second card; it only appends its
+  // signal line, deduped against exact repeats.
+  const byKey = new Map<string, DiscoveredStartup>();
   for (const row of data) {
     for (const s of row.startups as Startup[]) {
-      const key = s.company.toLowerCase().trim();
-      if (!seen.has(key)) {
-        seen.add(key);
-        all.push({ ...s, discovered_range: row.date_range as DateRange });
+      const key = normalizeCompanyName(s.company);
+      const signalLine = s.signal ?? legacySignalFrom(s);
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, {
+          ...s,
+          discovered_range: row.date_range as DateRange,
+          signals: signalLine ? [signalLine] : [],
+        });
+      } else if (signalLine && !existing.signals.includes(signalLine)) {
+        existing.signals.push(signalLine);
       }
     }
   }
 
-  return { startups: all, fetchedAt: data[0].fetched_at };
+  return { startups: Array.from(byKey.values()), fetchedAt: data[0].fetched_at };
 }
 
 export async function getDiscoveredStartups(
@@ -124,22 +204,27 @@ async function discoverStartupsInner(
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
   try {
-    const criteria = await loadCriteria();
+    const { criteria, profile } = await loadCriteriaAndScoringInputs();
+    const signal = profile.hiringSignal;
     const focus = searchTerm
       ? `Focus your search specifically on: "${searchTerm}". `
       : "";
 
-    const period = DATE_RANGE_LABELS[dateRange];
-    const prompt = `${focus}Search TechCrunch, Crunchbase, The Information, Bloomberg, Forbes, VentureBeat, Reuters, and WSJ for ALL AI and tech startup funding rounds announced ${period}. Only include Series B and above — exclude seed, pre-seed, and Series A. Do multiple searches to ensure completeness: search "Series B funding ${period}", "Series C funding ${period}", "startup raises millions ${period}", and category-specific searches like "AI startup funding ${period}". Return up to 20 results — do not cut the list short. ${dateContextLine()} IMPORTANT location preference (soft, for ranking — do not hard-exclude): prioritize companies that hire remotely or have a Denver/Colorado presence. For reference, the roles being sought follow this rule: ${criteria.locationRule} For each, return a JSON array of objects with these exact fields: company (string), tagline (string), raised (string e.g. "$400M"), stage (string e.g. "Series D"), lead_investor (string), founded (string e.g. "2023"), traction (string, one concrete metric or momentum signal), careers_url (string, best guess careers page URL or empty string), category (string e.g. "AI Infra", "Dev Tools", "Voice AI", "Agentic AI"), headquarters (string, city and state e.g. "San Francisco, CA" or "Remote" or "New York, NY"). Return ONLY the JSON array.`;
+    // hasRecency decides, not the passed dateRange directly (Binding 4): a
+    // standing-property signal gets no period clause at all, regardless of
+    // what window the caller happened to pass.
+    const period = signal.hasRecency ? DATE_RANGE_LABELS[dateRange] : null;
+
+    const prompt = buildHiringSignalPrompt({ signal, criteria, period, focus });
 
     const raw = await callWithWebSearch({
-      system: SYSTEM,
+      system: hiringSignalSystem(signal),
       prompt,
       maxTokens: 4000,
     });
 
     const startups = parseJson<Startup[]>(raw);
-    const result = Array.isArray(startups) ? startups : [];
+    const result = (Array.isArray(startups) ? startups : []).map(withLegacyExtraFields);
 
     // Persist — upsert so re-running refreshes the data.
     //

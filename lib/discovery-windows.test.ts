@@ -48,6 +48,15 @@ describe("the fetchable and charted window lists agree", () => {
     expect(PINNED_CHIPS.map((c) => c.value)).toContain("3m");
     expect(FETCHABLE_RANGES.map((r) => r.value)).not.toContain("3m");
   });
+
+  test("'current' (the hasRecency:false window) sits in NONE of the three lists", () => {
+    // It is a fourth, independent case — see the module comment above
+    // labelForRange. It must not silently end up fetchable, pinned, or
+    // legacy just because DateRange grew a member.
+    expect(FETCHABLE_RANGES.map((r) => r.value)).not.toContain("current");
+    expect(PINNED_CHIPS.map((c) => c.value)).not.toContain("current");
+    expect(LEGACY_RANGES.map((c) => c.value)).not.toContain("current");
+  });
 });
 
 describe("labelForRange", () => {
@@ -60,5 +69,9 @@ describe("labelForRange", () => {
   test("falls back to the raw range rather than rendering undefined", () => {
     // @ts-expect-error deliberately outside DateRange
     expect(labelForRange("99y")).toBe("99y");
+  });
+
+  test("names 'current' even though it is in none of the three lists", () => {
+    expect(labelForRange("current")).toBe("Current");
   });
 });

@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import {
   discoverStartups,
   getAllDiscoveredStartups,
+  getHiringSignal,
   type DateRange,
   type DiscoveredStartup,
 } from "@/app/actions/discover";
 import { findAndSaveRoles } from "@/app/actions/roles";
 import { addToWatchlist, setTracking, getWatchedCompanyKeys } from "@/app/actions/watchlist";
+import type { HiringSignal } from "@/lib/profile";
 import {
   buildWindowFilterOptions,
   filterByWindow,
@@ -30,6 +32,13 @@ import { Spinner, Tag } from "./ui";
 // lib/discovery-windows.ts so they can be tested — this component has no test
 // harness (vitest is environment: "node", no jsdom). The buttons say what is
 // fetchable; the chips say what is charted; neither reads the other.
+//
+// Company mode now runs on the tenant's hiring signal (lib/profile.ts),
+// not a hardcoded funding-round search — see lib/hiring-signal-prompt.ts.
+// `signal.hasRecency` decides the whole window UI: an EVENT signal (a
+// funding round, a contract award) keeps the two-button + chip-row layout
+// below; a STANDING PROPERTY (e.g. a hospital accreditation) has no window
+// to fetch or chart at all, so it gets one button and no chips.
 
 export default function Discover() {
   const router = useRouter();
@@ -57,15 +66,21 @@ export default function Discover() {
   // the company-mode body below. Role mode is a fully separate component
   // (RoleSearchPanel) so this file doesn't have to grow to hold both.
   const [mode, setMode] = useState<"company" | "role">("company");
+  // Loaded alongside the cached results below. Drives the header copy and
+  // which window controls render; null only for the brief instant before the
+  // initial load resolves, during which `busy` is already true so nothing
+  // that reads it renders yet.
+  const [signal, setSignal] = useState<HiringSignal | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoadingCached(true);
       setError(null);
-      const [res, watchedKeysResult] = await Promise.all([
+      const [res, watchedKeysResult, signalResult] = await Promise.all([
         getAllDiscoveredStartups(),
         getWatchedCompanyKeys(),
+        getHiringSignal(),
       ]);
       if (cancelled) return;
       setStartups(
@@ -73,6 +88,7 @@ export default function Discover() {
       );
       setFetchedAt(res.fetchedAt);
       setWatchedKeys(watchedKeysResult.keys);
+      setSignal(signalResult.signal);
       // Presence, not truthiness. An empty key set means "nothing is watched",
       // which is a plausible answer and therefore hides the failure completely:
       // every company would render un-starred with a live Track button. Saying
@@ -90,7 +106,8 @@ export default function Discover() {
 
   // Takes its window as an argument rather than reading a selection: which
   // window a click bills is now fixed by the button itself, so filtering the
-  // view can never change what the next search costs.
+  // view can never change what the next search costs. For a hasRecency:false
+  // signal the only value ever passed is "current".
   async function run(range: DateRange) {
     setLoading(true);
     setRunningRange(range);
@@ -116,7 +133,7 @@ export default function Discover() {
     if (!res.roles || res.roles.length === 0) {
       setError(
         res.message ||
-          `No remote or Denver/CO GTM / RevOps roles found at ${startup.company} right now.`
+          `No roles matching your location and role criteria were found at ${startup.company} right now.`
       );
       return;
     }
@@ -174,10 +191,13 @@ export default function Discover() {
   }
 
   const busy = loading || loadingCached;
+  const hasRecency = signal?.hasRecency !== false;
 
   // Chips for windows that actually have loaded companies, plus "All". Not
   // rendered as a control at all until there's more than one real range to
-  // pick between — a single-option toggle would just be noise.
+  // pick between — a single-option toggle would just be noise. Meaningless
+  // for a standing-property signal (there is only ever one range, "current"),
+  // so the whole row is gated on `hasRecency` below.
   const windowFilterOptions = buildWindowFilterOptions(
     startups.map((s) => s.discovered_range),
     PINNED_CHIPS,
@@ -204,7 +224,7 @@ export default function Discover() {
       <div className="mb-6 flex overflow-hidden rounded-md border border-slate sm:w-fit">
         {(
           [
-            { value: "company", label: "By company (funding)" },
+            { value: "company", label: "By company" },
             { value: "role", label: "By role (title/stack)" },
           ] as const
         ).map((m) => (
@@ -226,9 +246,13 @@ export default function Discover() {
         <>
           <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-xl font-heading font-semibold">Startup discovery</h2>
+              <h2 className="text-xl font-heading font-semibold">Employer discovery</h2>
+              {/* Binding 3: recency is ADVISORY, not enforced — the model has
+                  returned items outside the requested window before. "Found
+                  by searching" is honest; a claim that these are ALL the
+                  matches within N days is not, so this copy never makes one. */}
               <p className="text-sm text-ink/60">
-                Notable AI/tech funding rounds.
+                {signal ? `Notable ${signal.name}.` : "Notable hiring signals."}
                 {fetchedAt && !busy && (
                   <span className="ml-2 text-ink/40">
                     · Last fetched {formatFetchedAt(fetchedAt)}
@@ -236,25 +260,37 @@ export default function Discover() {
                 )}
               </p>
             </div>
-            {/* One button per fetchable window, always both shown. Only the
-                one in flight says "Discovering…"; both disable, because a
-                second search while one is running would race the cache read
-                that follows it. */}
+            {/* Event signal: one button per fetchable window, both always
+                shown. Standing-property signal: a single button, since there
+                is nothing to choose a window between. Only the button in
+                flight says "Discovering…"; all disable, because a second
+                search while one is running would race the cache read that
+                follows it. */}
             <div className="flex shrink-0 gap-2">
-              {FETCHABLE_RANGES.map(({ value, label }) => (
+              {hasRecency ? (
+                FETCHABLE_RANGES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => run(value)}
+                    disabled={busy}
+                    className="shrink-0 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+                  >
+                    {runningRange === value ? "Discovering…" : `Discover ${label}`}
+                  </button>
+                ))
+              ) : (
                 <button
-                  key={value}
-                  onClick={() => run(value)}
+                  onClick={() => run("current")}
                   disabled={busy}
                   className="shrink-0 rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
                 >
-                  {runningRange === value ? "Discovering…" : `Discover ${label}`}
+                  {runningRange === "current" ? "Discovering…" : "Discover"}
                 </button>
-              ))}
+              )}
             </div>
           </div>
 
-          {!busy && (
+          {!busy && hasRecency && (
             <div className="mb-4 flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-medium text-ink/40">Window</span>
               <div className="flex flex-wrap overflow-hidden rounded-md border border-slate">
@@ -277,7 +313,7 @@ export default function Discover() {
 
           {busy && (
             <div className="py-12">
-              <Spinner label={loading ? "Searching funding news…" : "Loading saved results…"} />
+              <Spinner label={loading ? "Searching…" : "Loading saved results…"} />
             </div>
           )}
 
@@ -309,6 +345,14 @@ export default function Discover() {
             <div className="overflow-hidden rounded-lg border border-slate bg-white">
               {displayed.map((s, i) => {
                 const watching = isCompanyWatched(s.company, watchedKeys);
+                // Where the SIGNAL happened, not the employer's headquarters
+                // — Binding 2. Amgen's HQ (Thousand Oaks, CA) for an Ohio
+                // plant expansion, or Joby's (Santa Cruz, CA) for a Dayton
+                // plant, would actively mislead a job seeker filtering on
+                // location. Falls back to headquarters only for rows that
+                // predate this field.
+                const place = s.location || s.headquarters;
+                const extraEntries = Object.entries(s.extras ?? {}).filter(([, v]) => v);
                 return (
                 <div
                   key={`${s.company}-${i}`}
@@ -316,21 +360,36 @@ export default function Discover() {
                     i > 0 ? "border-t border-slate" : ""
                   }`}
                 >
-                  {/* Company + meta */}
+                  {/* Company + signals */}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-heading font-semibold">{s.company}</span>
-                      {s.stage && <Tag>{s.stage}</Tag>}
-                      {s.raised && <Tag>{s.raised}</Tag>}
-                      {s.category && <Tag>{s.category}</Tag>}
                       <Tag>{rangeLabel(s.discovered_range)}</Tag>
-                      {s.headquarters && (
-                        <span className="text-xs text-ink/40">{s.headquarters}</span>
-                      )}
+                      {place && <span className="text-xs text-ink/40">{place}</span>}
                     </div>
-                    <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{s.tagline}</p>
-                    {s.traction && (
-                      <p className="mt-0.5 text-xs text-ink/40 line-clamp-1">{s.traction}</p>
+                    {s.tagline && (
+                      <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{s.tagline}</p>
+                    )}
+                    {/* One line per distinct signal this employer triggered —
+                        Binding 1. A single employer can win a signal
+                        repeatedly (three separate contract awards), and
+                        collapsing that to one line would silently drop real
+                        news the old per-row dedupe was throwing away. */}
+                    {s.signals.length > 0 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {s.signals.map((line, idx) => (
+                          <li key={idx} className="text-xs text-ink/70">
+                            {line}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {extraEntries.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {extraEntries.map(([k, v]) => (
+                          <Tag key={k}>{v}</Tag>
+                        ))}
+                      </div>
                     )}
                   </div>
 

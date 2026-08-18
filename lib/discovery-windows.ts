@@ -45,7 +45,20 @@ export const LEGACY_RANGES: { value: DateRange; label: string }[] = [
   { value: "6-18m", label: "6–18 mo" },
 ];
 
+// "current" is a FOURTH, independent case — not fetchable, pinned, or
+// legacy. It exists for a hiring signal whose `hasRecency` is false (a
+// standing property, like a hospital's accreditation, rather than a dated
+// event): there is no time window to fetch or chart at all, so it belongs in
+// none of the three lists above. Discover.tsx renders a single button for
+// such a profile instead of the FETCHABLE_RANGES pair, and no window filter
+// row, because there is only ever one range in play. Deliberately excluded
+// from FETCHABLE_RANGES/PINNED_CHIPS/LEGACY_RANGES so it cannot violate the
+// invariants pinned in lib/discovery-windows.test.ts (which are about the
+// EVENT-window pairs specifically); labelForRange still names it below so a
+// card for a hasRecency:false profile renders "Current" rather than the raw
+// string.
 export function labelForRange(range: DateRange): string {
+  if (range === "current") return "Current";
   return (
     [...PINNED_CHIPS, ...LEGACY_RANGES].find((o) => o.value === range)?.label ??
     range
