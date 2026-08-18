@@ -1220,6 +1220,38 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 // `rows` is structural, not LinkRepairRow: this component needs an id, a
 // company, a title and a URL, and typing it that way keeps the "use server"
 // module out of a client component's import graph for a type it can infer.
+/**
+ * The report's one action, in the one shape it has.
+ *
+ * Extracted because it renders twice per group — once per row when there are
+ * several, once under the list — and the two drifted apart on the first go: the
+ * row version was an underlined text link while the group version was a
+ * bordered button, so the same action read as two different kinds of thing on
+ * one screen.
+ */
+function MoveOutButton({
+  label,
+  title,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="shrink-0 rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
+    >
+      {label}
+    </button>
+  );
+}
+
 function UnclearGroup({
   rows,
   clause,
@@ -1247,30 +1279,27 @@ function UnclearGroup({
           sentence this replaced ("1 point at an employer board that lists no
           jobs at all…") made the reader work out which row it meant and what to
           do about it, for a list that is usually one line long. */}
-      <ul className="space-y-0.5 text-sm text-ink">
+      <ul className="space-y-1 text-sm text-ink">
         {rows.map((r) => (
-          <li key={r.id}>
-            <span className="font-medium">{r.company}</span> {r.role_title} {clause} &mdash;{" "}
-            <a
-              href={r.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-ink/60 underline underline-offset-2 hover:text-ink"
-            >
-              {linkLabel}
-            </a>
+          <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>
+              <span className="font-medium">{r.company}</span> {r.role_title} {clause} &mdash;{" "}
+              <a
+                href={r.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-ink/60 underline underline-offset-2 hover:text-ink"
+              >
+                {linkLabel}
+              </a>
+            </span>
             {many && (
-              <>
-                {" · "}
-                <button
-                  onClick={() => onMoveOut([r])}
-                  disabled={busy}
-                  title={`Sets this role to ${outLabel}`}
-                  className="text-ink/60 underline underline-offset-2 transition hover:text-ink disabled:opacity-50"
-                >
-                  Move to Out
-                </button>
-              </>
+              <MoveOutButton
+                label="Move to Out"
+                title={`Sets this role to ${outLabel}`}
+                disabled={busy}
+                onClick={() => onMoveOut([r])}
+              />
             )}
           </li>
         ))}
@@ -1280,14 +1309,12 @@ function UnclearGroup({
             outcomes was found by GUESSING a slug from the company name, so
             closing without a human looking would eventually kill a live role
             against a stranger's board. */}
-        <button
-          onClick={() => onMoveOut(rows)}
-          disabled={busy}
+        <MoveOutButton
+          label={many ? `Move all ${rows.length} to Out` : "Move to Out"}
           title={`Sets ${many ? `all ${rows.length} roles` : "this role"} to ${outLabel}`}
-          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
-        >
-          {many ? `Move all ${rows.length} to Out` : "Move to Out"}
-        </button>
+          disabled={busy}
+          onClick={() => onMoveOut(rows)}
+        />
         <span className="text-xs text-ink/40">{caveat}</span>
       </div>
     </div>
