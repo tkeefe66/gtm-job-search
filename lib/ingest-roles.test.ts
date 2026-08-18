@@ -9,6 +9,15 @@ const h = vi.hoisted(() => ({
     job?: { id: string };
     error?: string;
   },
+  // The two independent signals ingestRoles closes a role on. Defaults are the
+  // healthy path, so every pre-existing test in this file keeps its meaning.
+  urlStatus: "live" as "live" | "dead" | "unknown",
+  resolved: null as {
+    url: string;
+    vendor: string;
+    slug: string;
+    precision: "posting" | "absent" | "ambiguous";
+  } | null,
 }));
 
 vi.mock("@/lib/supabase", () => ({
@@ -25,10 +34,18 @@ vi.mock("@/app/actions/parse-role", () => ({
 vi.mock("@/lib/tenant", () => ({
   resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
 }));
-vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => "alive") }));
+vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => h.urlStatus) }));
+// Not mocked before: ROLE's example.com link classifies as "other", so
+// upgradeLink returned early and never reached this module. The unlisted case
+// below uses an aggregator link, which does reach it.
+vi.mock("@/lib/resolve-job-link", () => ({
+  resolveEmployerLink: vi.fn(async () => h.resolved),
+}));
 
 import { ingestRoles } from "./ingest-roles";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
+import { addJob } from "@/app/actions/jobs";
+import { scoreFit } from "@/app/actions/parse-role";
 import type { Role } from "@/lib/types";
 
 const ROLE: Role = {
@@ -51,6 +68,8 @@ const OPTS = {
 
 beforeEach(() => {
   h.addJobResult = { job: undefined, error: undefined };
+  h.urlStatus = "live";
+  h.resolved = null;
   vi.clearAllMocks();
 });
 
@@ -94,5 +113,73 @@ describe("a role whose insert failed is not reported as added", () => {
     const res = await ingestRoles(OPTS);
 
     expect(res.added).toEqual([ROLE]);
+  });
+});
+
+/** The payload of the only addJob call this ingest made. */
+const insertedRow = () => vi.mocked(addJob).mock.calls[0][0];
+
+// never_live is NARROWER than the condition that closes a role, and the gap is
+// the whole point. A guessed board slug is not proof a posting never existed,
+// and a hidden row can never come back: ingestRoles' dedupe reads every row
+// regardless of status, so the next run skips it as already seen.
+describe("never_live records only the definitive death signal", () => {
+  test("a role whose URL 404s is stored closed AND flagged never_live", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "dead";
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().status).toBe("Posting Closed");
+    expect(insertedRow().never_live).toBe(true);
+  });
+
+  test("a role missing from the employer's guessed board is closed but NOT flagged", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "live";
+    h.resolved = {
+      url: "https://job-boards.greenhouse.io/clay",
+      vendor: "greenhouse",
+      slug: "clay",
+      precision: "absent",
+    };
+
+    // An aggregator link, so upgradeLink actually consults the board. ROLE's
+    // own example.com link classifies as "other" and would return early.
+    await ingestRoles({
+      ...OPTS,
+      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+    });
+
+    expect(insertedRow().status).toBe("Posting Closed");
+    expect(insertedRow().never_live).toBe(false);
+  });
+
+  test("a live role is stored New and not flagged", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().status).toBe("New");
+    expect(insertedRow().never_live).toBe(false);
+  });
+
+  test("a role found dead is still not fit-scored", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "dead";
+
+    await ingestRoles(OPTS);
+
+    expect(vi.mocked(scoreFit)).not.toHaveBeenCalled();
+  });
+
+  test("a role whose URL check was inconclusive is New and not flagged", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "unknown"; // 403 / timeout — the common case
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().status).toBe("New");
+    expect(insertedRow().never_live).toBe(false);
   });
 });

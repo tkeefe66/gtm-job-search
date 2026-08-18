@@ -137,12 +137,27 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       // Two independent ways to already be closed: the link 404s, or the
       // employer's own board does not list the role. The second is what
       // actually catches reseller links, which rarely 404.
-      const isDead = urlStatuses[i] === "dead" || links[i].unlisted;
+      //
+      // checkJobUrl runs on links[i].url, which after upgradeLink may be a
+      // "posting"-precision URL built from a GUESSED board slug rather than
+      // the URL the search actually returned. That does not weaken this
+      // signal: a "posting" URL is read off the board API's own listing, so a
+      // wrong guess would land on a live stranger's posting (a 200) rather
+      // than a 404 — a guess can produce a false "live", never a false "dead".
+      const deadUrl = urlStatuses[i] === "dead";
+      const isDead = deadUrl || links[i].unlisted;
 
       const jobRes = await addJob({
         company,
         role_title: role.role_title,
         status: isDead ? "Posting Closed" : "New",
+        // NARROWER than isDead, deliberately. `unlisted` means a board found by
+        // GUESSING a slug from the company name did not list this title —
+        // link-health already refuses to CLOSE a role on that signal, and
+        // hiding on it is worse: the dedupe above reads every row regardless of
+        // status, so a hidden row can never be re-found. A wrong guess would
+        // disappear a live role permanently, with nothing on screen.
+        never_live: deadUrl,
         seniority: role.seniority || null,
         location: role.location || null,
         job_url: links[i].url || null,

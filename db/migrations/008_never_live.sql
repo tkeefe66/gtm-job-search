@@ -1,0 +1,11 @@
+-- A role that was ALREADY dead when ingest first saw it — checkJobUrl returned
+-- a definitive 404/410 at save time, so it was stored closed and never scored.
+-- It is noise, not history: the user never had the option to apply. Hidden from
+-- the table and both tiles by getJobs (lib/never-live.ts), but never DELETED —
+-- ingestRoles dedupes against every row regardless of status, so deleting these
+-- makes the next Find Roles run re-find and re-insert them permanently.
+--
+-- Deliberately narrower than the condition that CLOSES a role: `unlisted` (the
+-- employer's guessed board does not list the title) also closes, but does not
+-- hide. See lib/ingest-roles.ts.
+alter table jobs add column if not exists never_live boolean not null default false;

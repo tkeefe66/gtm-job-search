@@ -113,6 +113,13 @@ export interface Job {
    * relink can always be traced back or undone.
    */
   source_url: string | null;
+  /**
+   * The role was already dead the first time ingest saw it — a definitive
+   * 404/410 from checkJobUrl at save time. Hidden from the table and both
+   * tiles; see lib/never-live.ts. Rows read from a database that predates the
+   * column arrive without this key, which partitionNeverLive treats as false.
+   */
+  never_live: boolean;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;
