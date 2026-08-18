@@ -52,23 +52,59 @@ describe("hiringSignalSystem", () => {
   test("renders the default (funding) profile deterministically", () => {
     const sources = joinSources(D.hiringSignal.sources);
     const expected =
-      `You are a funding rounds analyst. Your job is to find all significant ` +
-      `funding rounds for the given period — do not curate down to a short ` +
-      `list, capture all notable ones. Search multiple sources: ${sources}. ` +
-      `Focus exclusively on Series B and above. Prioritize completeness — it ` +
-      `is better to return 20 results than to miss a major one. Return ONLY ` +
-      `valid JSON, no markdown, no preamble.`;
+      `You are a funding rounds analyst. Your job is to find every employer ` +
+      `showing this signal for the given period: funding rounds — do not ` +
+      `curate down to a short list, capture all notable ones. Search ` +
+      `multiple sources: ${sources}. Focus exclusively on Series B and ` +
+      `above. Prioritize completeness — it is better to return 20 results ` +
+      `than to miss a major one. Return ONLY valid JSON, no markdown, no ` +
+      `preamble.`;
     expect(hiringSignalSystem(D.hiringSignal)).toBe(expected);
   });
 
-  // FIX 1 (review round 1): "find every significant funding rounds" put a
-  // singular determiner in front of a plural signal name. "all" reads
-  // correctly for every probed signal — funding rounds, contract awards,
-  // plant openings, a standing designation — where "every" would not.
-  test("says 'find all significant', not 'find every significant'", () => {
-    const rendered = hiringSignalSystem(D.hiringSignal);
-    expect(rendered).toContain("find all significant funding rounds");
-    expect(rendered).not.toContain("find every significant");
+  // FIX 1, round 2. Round 0 ("find every significant ${name}") and round 1
+  // ("find all significant ${name}") each put a determiner directly against
+  // `signal.name` and each broke on one of the three probe names — "every"
+  // is wrong for a plural name, "all" is wrong for the singular standing
+  // designation. `signal.name` is per-tenant free text; its grammatical
+  // number cannot be known, so no determiner choice works for all of it.
+  //
+  // This construction ("every employer showing this signal: ${name}") never
+  // puts a determiner against `signal.name` at all — "every" quantifies
+  // "employer", and `signal.name` sits in an appositive slot after the
+  // colon, where singular and plural both read correctly. Pinned here
+  // against exact renderings of all three probe names, not asserted in
+  // prose — the previous two rounds both shipped an unverified prose claim
+  // about grammar, which is exactly the defect class this project keeps
+  // producing.
+  describe("reads correctly regardless of signal.name's grammatical number", () => {
+    const cases: [string, string, boolean][] = [
+      ["funding rounds", "plural — the shipped default", true],
+      ["large defence contract awards", "plural — Probe A", true],
+      ["Magnet Recognition Program designation", "singular — Probe C, hasRecency:false", false],
+    ];
+
+    for (const [name, label, hasRecency] of cases) {
+      test(label, () => {
+        const signal = {
+          name,
+          sources: ["Source A"],
+          qualifier: "the qualifying tier",
+          hasRecency,
+          extraFields: [],
+        };
+        const periodClause = hasRecency ? " for the given period" : "";
+        const expected =
+          `You are a ${name} analyst. Your job is to find every employer ` +
+          `showing this signal${periodClause}: ${name} — do not curate down ` +
+          `to a short list, capture all notable ones. Search multiple ` +
+          `sources: Source A. Focus exclusively on the qualifying tier. ` +
+          `Prioritize completeness — it is better to return 20 results than ` +
+          `to miss a major one. Return ONLY valid JSON, no markdown, no ` +
+          `preamble.`;
+        expect(hiringSignalSystem(signal)).toBe(expected);
+      });
+    }
   });
 
   test("carries every one of the 10 shipped sources — the Ruling 3 superset", () => {
@@ -116,8 +152,9 @@ describe("buildHiringSignalPrompt", () => {
     });
     const sources = joinSources(D.hiringSignal.sources);
     const expected =
-      `Search ${sources} for ALL funding rounds announced ${period}. Only ` +
-      `include Series B and above. Do multiple searches to ensure ` +
+      `Search ${sources} for every employer showing this signal: funding ` +
+      `rounds, announced ${period}. Only include Series B and above. Do ` +
+      `multiple searches to ensure ` +
       `completeness — vary the query wording, e.g. "Series B and above ` +
       `funding rounds ${period}" and "funding rounds ${period}". Return up ` +
       `to 20 results — do not cut the list short. ${dateContextLine(NOW)} ` +
@@ -148,6 +185,32 @@ describe("buildHiringSignalPrompt", () => {
       now: NOW,
     });
     expect(rendered.startsWith(`Focus your search specifically on: "widgets". Search`)).toBe(true);
+  });
+
+  // Same number-agreement bug class as hiringSignalSystem (FIX 1, round 2),
+  // found here while auditing this file for it — "Search ... for ALL
+  // ${name} announced ..." put a determiner against per-tenant free text of
+  // unknown grammatical number. Restructured the same way; verified against
+  // the singular probe name here too, not just the plural default above.
+  test("the search clause reads correctly for a singular signal name", () => {
+    const rendered = buildHiringSignalPrompt({
+      signal: {
+        name: "Magnet Recognition Program designation",
+        sources: ["Source A"],
+        qualifier: "the qualifying tier",
+        hasRecency: true,
+        extraFields: [],
+      },
+      criteria: DEFAULT_CRITERIA,
+      period: "in the past 7 days",
+      focus: "",
+      now: NOW,
+    });
+    expect(rendered.startsWith(
+      "Search Source A for every employer showing this signal: " +
+        "Magnet Recognition Program designation, announced in the past 7 days. " +
+        "Only include the qualifying tier."
+    )).toBe(true);
   });
 
   // BINDING 4. hasRecency:false means no period clause anywhere in the

@@ -60,13 +60,17 @@ export function hiringSignalSystem(signal: HiringSignal): string {
   // holders of a standing property rather than announcements "for the given
   // period" when there is no period at all.
   const periodClause = signal.hasRecency ? " for the given period" : "";
-  // "find all significant ${name}", not "find every significant ${name}" —
-  // `signal.name` is a per-tenant plural noun phrase ("funding rounds",
-  // "large defence contract awards"), and "every significant X" put a
-  // singular determiner in front of a plural noun. "all" reads correctly
-  // for a plural name across every probed signal, including the
-  // hasRecency:false case where periodClause is empty.
-  return `You are a ${signal.name} analyst. Your job is to find all significant ${signal.name}${periodClause} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}. Focus exclusively on ${signal.qualifier}. Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
+  // NOT "find every/all significant ${name}" — that puts a determiner
+  // directly against `signal.name`, and `signal.name`'s grammatical number
+  // is per-tenant free text this code cannot know (round 1 of this fix
+  // tried "all" on the theory the shipped signals are plural; the standing
+  // designation is singular, so that broke too — see the round-2 note in
+  // this task's report). Restructured instead so no determiner ever sits
+  // next to `signal.name`: "every employer" carries the quantifier, and the
+  // name sits in an appositive slot after the colon, where singular or
+  // plural both read correctly. This avoids the whole class of agreement
+  // bug rather than picking a determiner and hoping.
+  return `You are a ${signal.name} analyst. Your job is to find every employer showing this signal${periodClause}: ${signal.name} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}. Focus exclusively on ${signal.qualifier}. Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
 export function buildHiringSignalPrompt(args: {
@@ -85,8 +89,15 @@ export function buildHiringSignalPrompt(args: {
   const { signal, criteria, period, focus, now } = args;
   const sources = joinSources(signal.sources);
 
+  // Same restructuring as hiringSignalSystem, applied here for the same
+  // reason: "Search ... for ALL ${signal.name} announced ..." put a
+  // determiner directly against per-tenant free text of unknown number.
+  // "every employer showing this signal: ${signal.name}" sidesteps it —
+  // found while auditing this file for the same bug class after round 2 of
+  // this task's review, not asked for directly, but the exact defect the
+  // review just flagged next door.
   const searchClause = period
-    ? `Search ${sources} for ALL ${signal.name} announced ${period}. Only include ${signal.qualifier}.`
+    ? `Search ${sources} for every employer showing this signal: ${signal.name}, announced ${period}. Only include ${signal.qualifier}.`
     : `Search ${sources} for current holders of this property: ${signal.name}. Only include ${signal.qualifier}.`;
 
   const exampleQueries = period
