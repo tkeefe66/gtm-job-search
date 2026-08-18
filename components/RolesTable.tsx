@@ -764,17 +764,20 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 
           {linkReport.unclear.length > 0 && (
             <div className="mt-3 space-y-3 border-t border-slate pt-3">
-              {/* Two reasons, two sentences. They were one bucket reading "could
-                  be more than one posting on the employer's board" until
-                  someone clicked through to a board with no jobs on it at all —
-                  a false sentence, and the wrong check to go and make. Neither
-                  is auto-closed: closing on either would be a guess at a live
-                  role, and the board itself was found by guessing a slug. */}
-              {/* Every row hedges the same way it is caveated. An earlier
-                  version stated "their board is empty" and then admitted
-                  underneath that the board might not be theirs — the row
-                  asserted what the caveat withdrew. The hedge now lives in one
-                  place: the link says which board we FOUND, never whose it is. */}
+              {/* One group per reason, each row saying what is wrong with
+                  itself. This was a single bucket reading "N could be more than
+                  one posting on the employer's board" — a sentence that was
+                  false for the empty-board rows and invisible for the rows we
+                  could not resolve at all, which were only a count.
+
+                  Every row hedges the same way its caveat does. An earlier pass
+                  stated "their board is empty" and then admitted underneath
+                  that the board might not be theirs, so the row asserted what
+                  the caveat withdrew. The hedge lives in one place now: the
+                  link says which board we FOUND, never whose it is.
+
+                  Nothing here is auto-closed. Every board behind these outcomes
+                  was found by guessing a slug from the company name. */}
               {unclearGroups.empty.length > 0 && (
                 <UnclearGroup
                   rows={unclearGroups.empty}
@@ -791,23 +794,20 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   rows={unclearGroups.ambiguous}
                   clause="could be one of several postings"
                   linkLabel="the board we found"
-                  caveat="We matched that board by company name, and titles that look alike are not the same posting. Open it before closing these."
+                  caveat="We matched that board by company name, and lookalike titles are not the same posting."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
                   busy={applying}
                 />
               )}
-              {/* No Move to Out, deliberately. These rows are not evidence of
-                  anything: we could not find an employer board to check the
-                  posting against, which is not the same as the posting being
-                  gone. A close button here would invite the user to bury live
-                  roles on the strength of a failed lookup. */}
               {unclearGroups.unresolved.length > 0 && (
                 <UnclearGroup
                   rows={unclearGroups.unresolved}
-                  clause="is still a job-board copy — we could not find the employer's own posting"
-                  linkLabel="where it points now"
-                  caveat="Nothing here says the role is gone; the link just can't be checked past. Open it to see."
+                  clause="— only a job-board copy"
+                  linkLabel="where it points"
+                  caveat="No employer posting found to check against. Not evidence the role is gone."
+                  outLabel={labelFor(statuses, "Posting Closed")}
+                  onMoveOut={moveUnclearOut}
                   busy={applying}
                 />
               )}
@@ -1233,11 +1233,14 @@ function UnclearGroup({
   clause: string;
   linkLabel: string;
   caveat: string;
-  /** Both omitted for a group that must not be closable — see `unresolved`. */
-  outLabel?: string;
-  onMoveOut?: (rows: { id: string }[]) => void;
+  outLabel: string;
+  onMoveOut: (rows: { id: string }[]) => void;
   busy: boolean;
 }) {
+  // One row is its own decision, so it needs no way to say "all of them" — the
+  // button under the list IS the row's button. Several rows are several
+  // decisions: each gets its own, and the group button becomes the select-all.
+  const many = rows.length > 1;
   return (
     <div>
       {/* The rows lead, and each says what is wrong with ITSELF. The count-led
@@ -1256,25 +1259,35 @@ function UnclearGroup({
             >
               {linkLabel}
             </a>
+            {many && (
+              <>
+                {" · "}
+                <button
+                  onClick={() => onMoveOut([r])}
+                  disabled={busy}
+                  title={`Sets this role to ${outLabel}`}
+                  className="text-ink/60 underline underline-offset-2 transition hover:text-ink disabled:opacity-50"
+                >
+                  Move to Out
+                </button>
+              </>
+            )}
           </li>
         ))}
       </ul>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        {/* Acts here, on these rows. Never automatic: the board behind a
-            closable outcome was found by GUESSING a slug from the company name,
-            so closing without a human looking would eventually kill a live role
-            against a stranger's board. A group with no handler renders its
-            caveat alone — there is no decision to offer. */}
-        {onMoveOut && (
-          <button
-            onClick={() => onMoveOut(rows)}
-            disabled={busy}
-            title={`Sets ${rows.length === 1 ? "this role" : `these ${rows.length} roles`} to ${outLabel}`}
-            className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
-          >
-            {rows.length === 1 ? "Move to Out" : `Move all ${rows.length} to Out`}
-          </button>
-        )}
+        {/* Acts here, on these rows. Never automatic: every board behind these
+            outcomes was found by GUESSING a slug from the company name, so
+            closing without a human looking would eventually kill a live role
+            against a stranger's board. */}
+        <button
+          onClick={() => onMoveOut(rows)}
+          disabled={busy}
+          title={`Sets ${many ? `all ${rows.length} roles` : "this role"} to ${outLabel}`}
+          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
+        >
+          {many ? `Move all ${rows.length} to Out` : "Move to Out"}
+        </button>
         <span className="text-xs text-ink/40">{caveat}</span>
       </div>
     </div>
