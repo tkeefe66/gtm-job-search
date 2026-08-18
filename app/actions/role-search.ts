@@ -4,7 +4,8 @@ import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
-import { callWithWebSearch, parseJson } from "@/lib/model-call";
+import { callWithWebSearchDetailed } from "@/lib/model-call";
+import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
 import { ingestRoles } from "@/lib/ingest-roles";
@@ -187,7 +188,7 @@ async function findRolesByCriteriaInner(
         `(${reason}) — ${queries.join(" | ")}`
     );
 
-    const raw = await callWithWebSearch({
+    const { text: raw, stopReason } = await callWithWebSearchDetailed({
       system: roleSearchSystem(profile.searchSubject),
       prompt: buildRoleSearchPrompt({
         family,
@@ -206,10 +207,18 @@ async function findRolesByCriteriaInner(
       maxSearches,
     });
 
-    const parsed = parseJson<RoleMatch[]>(raw);
-    const matches = (Array.isArray(parsed) ? parsed : []).filter(
-      (m) => m.company && m.role_title
-    );
+    // Recovered rather than thrown: this call is the most expensive in the app
+    // (uncapped searches unless the user set a ceiling), so discarding it over
+    // a formatting slip throws away everything it just paid for.
+    const { items } = await parseOrSalvage<RoleMatch>({
+      raw,
+      stopReason,
+      key: "matches",
+      itemNoun: "role match",
+      label: `findRolesByCriteria(${family})`,
+      extract: arrayUnder<RoleMatch>("matches"),
+    });
+    const matches = items.filter((m) => m.company && m.role_title);
 
     const fetchedAt = new Date().toISOString();
     const { error: cacheError } = await supabase.forTenant(await resolveTenantId()).from("role_searches").upsert(

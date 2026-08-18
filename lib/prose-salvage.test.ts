@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
-  SALVAGE_SCHEMA,
   SALVAGE_SYSTEM,
   buildSalvagePrompt,
   salvageDecisionFor,
+  salvageSchemaFor,
 } from "./prose-salvage";
 
 // The failure this exists for: on 2026-08-18 a crawler search-tier run against
@@ -37,42 +37,75 @@ describe("salvageDecisionFor", () => {
 
 describe("buildSalvagePrompt", () => {
   test("carries the model's own words into the prompt verbatim", () => {
+    // Mutation this catches: summarising or truncating `raw` instead of
+    // passing it through. A salvage that re-describes the prose is a second
+    // generation, not a transcription.
     const prose = "I found a careers page but no qualifying roles at this time.";
-    expect(buildSalvagePrompt(prose)).toContain(prose);
+    expect(buildSalvagePrompt(prose, "role")).toContain(prose);
   });
 
-  test("forbids inventing roles that were not in the prose", () => {
-    // The whole risk of this call: a model handed prose about a careers page
-    // could helpfully produce plausible-looking roles nobody found.
-    const prompt = buildSalvagePrompt("some prose").toLowerCase();
-    expect(prompt).toContain("do not invent");
+  test("forbids inventing entries that were not in the prose", () => {
+    // Mutation this catches: dropping the anti-fabrication rule. The whole
+    // risk of this call is a model helpfully producing plausible roles nobody
+    // found, which would then be ingested as real postings.
+    expect(buildSalvagePrompt("some prose", "role").toLowerCase()).toContain("do not invent");
   });
 
-  test("states that an empty list is a valid answer", () => {
-    // Without this the model is pushed toward manufacturing a non-empty array.
-    expect(buildSalvagePrompt("some prose").toLowerCase()).toContain("empty");
+  test("states that an empty result is a valid answer", () => {
+    // Mutation this catches: removing the empty-is-allowed sentence, which
+    // pushes the model toward manufacturing a non-empty array rather than
+    // reporting that the prose said nothing was found.
+    expect(buildSalvagePrompt("some prose", "role").toLowerCase()).toContain("empty");
+  });
+
+  test("names the CALLER'S item noun, not a hardcoded 'role'", () => {
+    // Mutation this catches: ignoring itemNoun and hardcoding "role" in the
+    // wording. Discover salvages companies and role search salvages matches;
+    // a prompt that talks about roles to a Discover salvage is describing the
+    // wrong task. Asserting "company" appears is what discriminates — a
+    // hardcoded-"role" build contains neither the noun nor anything like it.
+    const prompt = buildSalvagePrompt("some prose", "company");
+    expect(prompt).toContain("company");
   });
 });
 
-describe("SALVAGE_SCHEMA", () => {
-  test("forces an object with a roles array", () => {
-    expect(SALVAGE_SCHEMA.type).toBe("object");
-    const props = SALVAGE_SCHEMA.properties as Record<string, { type?: string }>;
-    expect(props.roles?.type).toBe("array");
-    expect(SALVAGE_SCHEMA.required).toContain("roles");
+describe("salvageSchemaFor", () => {
+  test("puts the array under the caller's key", () => {
+    // Mutation this catches: returning a fixed `roles` key regardless of the
+    // argument. Discover would then get {roles: [...]} for startups and its
+    // extract step would read undefined — a silent empty result from a
+    // salvage that actually succeeded.
+    const schema = salvageSchemaFor("startups", "company");
+    const props = schema.properties as Record<string, { type?: string }>;
+    expect(props.startups?.type).toBe("array");
+    expect(props.roles).toBeUndefined();
   });
 
-  test("lets role objects keep whatever fields the extraction prompt asked for", () => {
-    // roleExtractionSchema is PROSE in the prompt, not a JSON Schema, so this
-    // schema cannot enumerate the fields. Pinning them here would silently drop
-    // every field the prose schema adds.
-    const props = SALVAGE_SCHEMA.properties as Record<string, { items?: Record<string, unknown> }>;
+  test("requires the caller's key, not a fixed one", () => {
+    // Mutation this catches: `required: ["roles"]` hardcoded. Constrained
+    // decoding would then force a key the caller never reads while leaving
+    // the one it does read optional.
+    expect(salvageSchemaFor("matches", "role match").required).toEqual(["matches"]);
+  });
+
+  test("lets items keep whatever fields the extraction prompt asked for", () => {
+    // Mutation this catches: `additionalProperties: false` on the item shape.
+    // The real extraction contract is PROSE in the prompt and is per-tenant,
+    // so a closed item schema would strip every field it does not enumerate —
+    // silently, since the call still succeeds.
+    const props = salvageSchemaFor("roles", "role").properties as Record<
+      string,
+      { items?: Record<string, unknown> }
+    >;
     expect(props.roles?.items?.additionalProperties).not.toBe(false);
   });
 });
 
 describe("SALVAGE_SYSTEM", () => {
   test("frames the task as transcription, not research", () => {
+    // Mutation this catches: a system prompt that invites the model to look
+    // things up. This call must never search — it is a reformat of words
+    // already paid for.
     expect(SALVAGE_SYSTEM.toLowerCase()).toContain("transcrib");
   });
 });

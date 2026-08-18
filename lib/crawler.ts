@@ -2,7 +2,6 @@ import {
   callStructured,
   callWithWebSearch,
   callWithWebSearchDetailed,
-  complete,
   parseJson,
 } from "@/lib/model-call";
 import { resolveTenantId } from "@/lib/tenant";
@@ -10,12 +9,7 @@ import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { isDisallowed, robotsUrlFor } from "@/lib/robots";
-import {
-  SALVAGE_SCHEMA,
-  SALVAGE_SYSTEM,
-  buildSalvagePrompt,
-  salvageDecisionFor,
-} from "@/lib/prose-salvage";
+import { parseOrSalvage } from "@/lib/salvage-call";
 import { normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import type { Profile } from "@/lib/profile";
@@ -225,6 +219,15 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
 // Exported for testing: pure function of a raw model response string, no
 // network involved, so the parse-failure logging (fix 7, 2026-08-12
 // consolidated wave) can be pinned directly.
+export function rolesFrom(parsed: unknown): { items: Role[]; message?: string } {
+  if (Array.isArray(parsed)) return { items: parsed as Role[] };
+  if (parsed && typeof parsed === "object" && "roles" in parsed) {
+    const obj = parsed as RolesResult;
+    return { items: obj.roles ?? [], message: obj.message };
+  }
+  return { items: [] };
+}
+
 export function rolesFromRaw(raw: string): Role[] {
   let parsed: Role[] | RolesResult;
   try {
@@ -387,58 +390,19 @@ async function extractViaSearch(
     maxTokens: 8000,
   });
 
-  try {
-    return rolesFromRaw(raw);
-  } catch (err) {
-    // The model answered in prose. Whether that is recoverable depends
-    // ENTIRELY on stopReason, which is why the adapter now carries it:
-    // truncation means the answer is incomplete and must stay a failure,
-    // while a completed prose answer is a formatting slip over real content.
-    // lib/prose-salvage.ts carries the full reasoning, including why the
-    // obvious fix — calling this "empty" — would close live roles.
-    if (salvageDecisionFor(stopReason) === "fail") {
-      console.error(
-        `crawler: ${company} search response was truncated (stop_reason=${stopReason}); ` +
-          `not salvaging — raise maxTokens if this recurs`
-      );
-      throw err;
-    }
-    console.warn(
-      `crawler: ${company} search response was prose, not JSON (stop_reason=${stopReason}); ` +
-        `re-reading it under constrained decoding`
-    );
-    return await salvageRolesFromProse(company, raw);
-  }
-}
-
-/**
- * Re-ask for the SAME answer in the required shape, with no search and no new
- * research — a forced tool call, so prose is structurally impossible.
- *
- * A salvage that itself fails rethrows the ORIGINAL parse error, not its own:
- * the first failure is what actually happened to the crawl, and replacing it
- * would hide the real response behind a second-order message.
- */
-async function salvageRolesFromProse(company: string, raw: string): Promise<Role[]> {
-  try {
-    const salvaged = await complete({
-      system: SALVAGE_SYSTEM,
-      prompt: buildSalvagePrompt(raw),
-      // No search, and the input is one already-generated answer, so this is
-      // small and cheap next to the search call that produced the prose.
-      maxTokens: 4000,
-      jsonSchema: SALVAGE_SCHEMA,
-    });
-    const roles = rolesFromRaw(salvaged);
-    console.log(`crawler: ${company} salvaged ${roles.length} role(s) from a prose response`);
-    return roles;
-  } catch (salvageErr) {
-    console.error(
-      `crawler: ${company} could not salvage the prose response — ` +
-        `${salvageErr instanceof Error ? salvageErr.message : String(salvageErr)}`
-    );
-    throw salvageErr;
-  }
+  // A prose response is recoverable; a TRUNCATED one is not, and parseOrSalvage
+  // is where that distinction lives for all four search surfaces. Rethrowing on
+  // truncation preserves the old behaviour exactly — the run scores "error" and
+  // stamps failing_since, which is correct when the model genuinely got cut off.
+  const { items } = await parseOrSalvage<Role>({
+    raw,
+    stopReason,
+    key: "roles",
+    itemNoun: "role",
+    label: `crawler: ${company} search tier`,
+    extract: rolesFrom,
+  });
+  return items;
 }
 
 // Exported (rather than inlined) so the 'ok'/'empty' scoping — the whole

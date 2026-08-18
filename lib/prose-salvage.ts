@@ -70,33 +70,51 @@ export const SALVAGE_SYSTEM =
  * constrains only what the pipeline actually depends on — an object with a
  * `roles` array — and lets each role carry whatever the model transcribed.
  */
-export const SALVAGE_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    roles: {
-      type: "array",
-      description: "The roles stated in the text. Empty if it states none were found.",
-      items: { type: "object" },
+/**
+ * Deliberately permissive about the SHAPE OF AN ITEM, and it has to be.
+ *
+ * The extraction contracts these callers use (roleExtractionSchema in
+ * lib/search-criteria.ts, and the hiring-signal and role-search prompts) are
+ * PROSE embedded in the prompt, not JSON Schema objects — and they are
+ * per-tenant, since they render the profile's persona and building concept.
+ * Enumerating fields here would silently drop every field that prose asks for
+ * and every field a future profile adds. So this constrains only what the
+ * caller actually depends on — an object with an array under a known key — and
+ * lets each item carry whatever the model transcribed.
+ *
+ * `key` is the caller's, NOT a shared constant: the crawler wants `roles`,
+ * Discover wants `startups`, role search wants `matches`. A hardcoded key here
+ * would hand every caller an object it then has to rename.
+ */
+export function salvageSchemaFor(key: string, itemNoun: string): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      [key]: {
+        type: "array",
+        description: `The ${itemNoun} entries stated in the text. Empty if it states none were found.`,
+        items: { type: "object" },
+      },
+      message: {
+        type: "string",
+        description: "The explanation given, if the text explains why nothing was found.",
+      },
     },
-    message: {
-      type: "string",
-      description: "The explanation given, if the text explains why nothing was found.",
-    },
-  },
-  required: ["roles"],
-};
+    required: [key],
+  };
+}
 
 /**
  * `raw` goes in verbatim. This call must not re-derive anything — it is a
  * reformat of words already paid for, not a second search.
  */
-export function buildSalvagePrompt(raw: string): string {
+export function buildSalvagePrompt(raw: string, itemNoun: string): string {
   return `A previous step was asked for JSON and answered in prose instead. Convert its answer, below, into the required JSON object.
 
 Rules:
-- Transcribe ONLY what the text below actually states. Do not invent roles, titles, URLs, salaries, or companies, and do not fill in fields the text does not give.
-- If the text says no qualifying roles were found, return an empty roles array and put its explanation in "message".
-- Keep every detail the text does give for each role, using the field names it uses.
+- Transcribe ONLY what the text below actually states. Do not invent ${itemNoun} entries, titles, URLs, salaries, or companies, and do not fill in fields the text does not give.
+- If the text says nothing qualifying was found, return an empty array and put its explanation in "message".
+- Keep every detail the text does give for each ${itemNoun}, using the field names it uses.
 
 The answer to convert:
 ---

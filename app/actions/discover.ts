@@ -4,7 +4,8 @@ import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
-import { callWithWebSearch, parseJson } from "@/lib/model-call";
+import { callWithWebSearchDetailed } from "@/lib/model-call";
+import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
 import type { Startup } from "@/lib/types";
@@ -238,14 +239,24 @@ async function discoverStartupsInner(
 
     const prompt = buildHiringSignalPrompt({ signal, criteria, period, focus });
 
-    const raw = await callWithWebSearch({
+    const { text: raw, stopReason } = await callWithWebSearchDetailed({
       system: hiringSignalSystem(signal),
       prompt,
       maxTokens: 4000,
     });
 
-    const startups = parseJson<Startup[]>(raw);
-    const result = (Array.isArray(startups) ? startups : []).map(withLegacyExtraFields);
+    // maxTokens here is 4000, the lowest of the three search actions, so a
+    // TRUNCATED response is likeliest on this path — and parseOrSalvage
+    // deliberately does not salvage that one, it rethrows.
+    const { items: startups } = await parseOrSalvage<Startup>({
+      raw,
+      stopReason,
+      key: "startups",
+      itemNoun: "company",
+      label: `discoverStartups(${dateRange})`,
+      extract: arrayUnder<Startup>("startups"),
+    });
+    const result = startups.map(withLegacyExtraFields);
 
     // Persist — upsert so re-running refreshes the data.
     //

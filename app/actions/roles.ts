@@ -4,7 +4,8 @@ import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
-import { callWithWebSearch, parseJson } from "@/lib/model-call";
+import { callWithWebSearchDetailed } from "@/lib/model-call";
+import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { supabase } from "@/lib/supabase";
@@ -111,7 +112,7 @@ async function findAndSaveRolesInner(
       buildingUpside: profile.buildingUpside,
     });
 
-    const raw = await callWithWebSearch({
+    const { text: raw, stopReason } = await callWithWebSearchDetailed({
       system: roleSearchSystem(profile.searchSubject),
       prompt,
       // The role search runs many web_search calls (often 10+); 2000 tokens
@@ -121,16 +122,17 @@ async function findAndSaveRolesInner(
       maxTokens: 8000,
     });
 
-    const parsed = parseJson<Role[] | RolesResult>(raw);
-    let roles: Role[] = [];
-    let message: string | undefined;
-
-    if (Array.isArray(parsed)) {
-      roles = parsed;
-    } else if (parsed && typeof parsed === "object" && "roles" in parsed) {
-      roles = parsed.roles ?? [];
-      message = parsed.message;
-    }
+    // A prose answer is recovered rather than thrown: without this the outer
+    // catch returns err.message to the UI as a raw JSON.parse complaint, and
+    // the web search above — often 10+ billed searches — is discarded.
+    const { items: roles, message } = await parseOrSalvage<Role>({
+      raw,
+      stopReason,
+      key: "roles",
+      itemNoun: "role",
+      label: `findAndSaveRoles(${startup.company})`,
+      extract: arrayUnder<Role>("roles"),
+    });
 
     // Persist roles to discovered_roles table.
     //

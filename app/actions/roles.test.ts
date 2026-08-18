@@ -69,7 +69,12 @@ vi.mock("@/lib/metered", () => ({
   withBudget: async (o: { fn: () => Promise<unknown> }) => ({ result: await o.fn() }),
 }));
 vi.mock("@/lib/model-call", () => ({
-  callWithWebSearch: vi.fn(),
+  callWithWebSearchDetailed: vi.fn(),
+  // `complete` is the salvage call. It is mocked but never configured here:
+  // these fixtures all return parseable JSON, so a salvage would mean the
+  // parse path broke — and an unconfigured mock resolving undefined makes
+  // that fail loudly rather than quietly returning nothing.
+  complete: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),
 }));
 vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
@@ -95,10 +100,23 @@ vi.mock("@/lib/search-criteria", () => ({
 }));
 
 import { findAndSaveRoles } from "./roles";
-import { callWithWebSearch } from "@/lib/model-call";
+import { callWithWebSearchDetailed } from "@/lib/model-call";
 import type { Startup } from "@/lib/types";
 
-const search = vi.mocked(callWithWebSearch);
+const searchRaw = vi.mocked(callWithWebSearchDetailed);
+
+/**
+ * The action now reads `stopReason` alongside the text, so fixtures set both.
+ * Defaulting to "end_turn" keeps every existing fixture meaning what it meant:
+ * a complete response, which is what they were all implicitly describing.
+ */
+const search = {
+  mockResolvedValue: (text: string) => searchRaw.mockResolvedValue({ text, stopReason: "end_turn" }),
+  mockResolvedValueOnce: (text: string) =>
+    searchRaw.mockResolvedValueOnce({ text, stopReason: "end_turn" }),
+  mockRejectedValue: (e: unknown) => searchRaw.mockRejectedValue(e),
+  mockReset: () => searchRaw.mockReset(),
+};
 
 const STARTUP: Startup = {
   company: "Clay",
