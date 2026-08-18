@@ -16,10 +16,10 @@ import { getSettings, markCompScoringRescored, rescoreAll } from "@/app/actions/
 
 // Type-only imports. lib/profile.ts and lib/onboarding-rules.ts are safe to
 // pull in at RUNTIME too (see their own header comments — neither reaches
-// `pg`), which is what makes DEFAULT_PROFILE, profileToFitInputs, and
-// sampleRoleFor usable as real values below rather than just types.
+// `pg`), which is what makes DEFAULT_PROFILE, profileToFitInputs, keyStepCopy,
+// and sampleRoleFor usable as real values below rather than just types.
 import { DEFAULT_PROFILE, profileToFitInputs, type OnboardingAnswers } from "@/lib/profile";
-import { answersAreComplete, sampleRoleFor } from "@/lib/onboarding-rules";
+import { answersAreComplete, keyStepCopy, sampleRoleFor } from "@/lib/onboarding-rules";
 import {
   draftFromGenerated,
   payloadFrom,
@@ -45,7 +45,10 @@ import { Spinner } from "./ui";
 // "rescore" is the re-run offer Task 8's review added on top of Step 4.
 type Step = "loading" | "key" | "door" | "answers" | "generating" | "review" | "rescore";
 
-type Section = "key" | "answers" | "generate" | "sample" | "finish" | "rescore";
+// "key" was removed from here when Step 0 stopped being a gate: nothing sets
+// busy/errors under that key any more (see handleKeyContinue), so keeping it
+// in this union would be dead surface with nothing to test.
+type Section = "answers" | "generate" | "sample" | "finish" | "rescore";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -167,25 +170,18 @@ export default function Onboarding() {
     return base + 3; // review
   };
 
-  async function handleKeyContinue() {
-    setBusy((b) => ({ ...b, key: true }));
-    setErrors((e) => ({ ...e, key: undefined }));
-    try {
-      const status = await getApiKeyStatus();
-      if (status.error !== undefined) {
-        setErrors((e) => ({ ...e, key: status.error }));
-        return;
-      }
-      if (!status.present) {
-        setErrors((e) => ({ ...e, key: "Add and save a key above before continuing." }));
-        return;
-      }
-      setStep("door");
-    } catch (err) {
-      setErrors((e) => ({ ...e, key: message(err) }));
-    } finally {
-      setBusy((b) => ({ ...b, key: false }));
-    }
+  // Step 0 is a pre-flight HINT ("a key is useful"), not a gate ("a key is
+  // required") — see keyStepCopy's own comment in lib/onboarding-rules.ts.
+  // The authoritative refusal is `capped` from generateProfile (tier "none"
+  // in lib/metered.ts), which the review step already renders with the key
+  // field attached, so Continue always advances regardless of whether a key
+  // is stored. This function does not call getApiKeyStatus(): ApiKeyPanel
+  // already reads and surfaces its own load failures (see its `load()`), so
+  // duplicating that read here would only add a second, redundant fetch with
+  // nowhere new to show the result — the mount effect above is what decides
+  // whether Step 0 is shown at all.
+  function handleKeyContinue() {
+    setStep("door");
   }
 
   function chooseMode(mode: OnboardingAnswers["mode"]) {
@@ -463,19 +459,14 @@ export default function Onboarding() {
           <h2 className="font-heading text-lg font-semibold">
             Step {stepNumber("key")} of {totalSteps} — your API key
           </h2>
-          <p className="mt-1 max-w-2xl text-sm text-ink/60">
-            This app runs entirely on your own model API key — nothing you do here bills
-            anyone but you, and there is no free tier to fall back on.
-          </p>
+          <p className="mt-1 max-w-2xl text-sm text-ink/60">{keyStepCopy()}</p>
           <ApiKeyPanel />
-          {errors.key && <p className="mt-3 text-sm text-[#92400E]">{errors.key}</p>}
           <div className="mt-4">
             <button
-              onClick={() => void handleKeyContinue()}
-              disabled={!!busy.key}
-              className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+              onClick={handleKeyContinue}
+              className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90"
             >
-              {busy.key ? "Checking…" : "Continue"}
+              Continue
             </button>
           </div>
         </section>

@@ -81,6 +81,30 @@ export function generationFailure(): string {
  * being fabricated, matching FitPromptRole's own contract that "" means the
  * posting published nothing.
  */
+/**
+ * Step 0's copy, under the API key panel.
+ *
+ * MUST be true for both a BYO tenant and an admin. The previous wording —
+ * "This app runs entirely on your own model API key — nothing you do here
+ * bills anyone but you, and there is no free tier to fall back on" — is false
+ * for an admin: resolveTier (lib/budget.ts) gives an admin the platform key
+ * regardless of whether one is stored, so an admin with no key is tier
+ * "admin", never tier "none". Step 0 is a pre-flight HINT that a key is USEFUL,
+ * not a promise that one is required — the authoritative refusal is `capped`
+ * from generateProfile, which lib/metered.ts returns only for tier "none" (a
+ * non-admin with no key), and the review step already renders that with the
+ * key field attached. This copy says what is true for everyone and points at
+ * that later, real check instead of asserting a requirement client-side
+ * onboarding cannot verify.
+ */
+export function keyStepCopy(): string {
+  return (
+    "A key is how most accounts pay for their own model usage — you can add " +
+    "yours below. If your account can't generate a profile without one, " +
+    "you'll be told at the next step, with this field right there."
+  );
+}
+
 export function sampleRoleFor(input: {
   titles: string[];
   locations: string[];
