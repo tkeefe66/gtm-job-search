@@ -783,7 +783,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   rows={unclearGroups.empty}
                   clause="seems to no longer be listed"
                   linkLabel="the board we found"
-                  caveat="We matched that board by company name, so it may not be theirs. Their own careers page settles it."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
                   busy={applying}
@@ -794,7 +793,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   rows={unclearGroups.ambiguous}
                   clause="could be one of several postings"
                   linkLabel="the board we found"
-                  caveat="We matched that board by company name, and lookalike titles are not the same posting."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
                   busy={applying}
@@ -805,7 +803,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                   rows={unclearGroups.unresolved}
                   clause="— only a job-board copy"
                   linkLabel="where it points"
-                  caveat="No employer posting found to check against. Not evidence the role is gone."
                   outLabel={labelFor(statuses, "Posting Closed")}
                   onMoveOut={moveUnclearOut}
                   busy={applying}
@@ -1256,7 +1253,6 @@ function UnclearGroup({
   rows,
   clause,
   linkLabel,
-  caveat,
   outLabel,
   onMoveOut,
   busy,
@@ -1264,7 +1260,6 @@ function UnclearGroup({
   rows: { id: string; company: string; role_title: string; url: string }[];
   clause: string;
   linkLabel: string;
-  caveat: string;
   outLabel: string;
   onMoveOut: (rows: { id: string }[]) => void;
   busy: boolean;
@@ -1304,18 +1299,23 @@ function UnclearGroup({
           </li>
         ))}
       </ul>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        {/* Acts here, on these rows. Never automatic: every board behind these
-            outcomes was found by GUESSING a slug from the company name, so
-            closing without a human looking would eventually kill a live role
-            against a stranger's board. */}
+      {/* Acts here, on these rows. Never automatic: every board behind these
+          outcomes was found by GUESSING a slug from the company name, so
+          closing without a human looking would eventually kill a live role
+          against a stranger's board.
+
+          The caveat that used to sit beside this button — "we matched that
+          board by company name, so it may not be theirs" — is gone. It said in
+          a sentence what the row already says in its wording: "seems to no
+          longer be listed", against "the board we found". Hedging twice reads
+          as a warning, and a warning next to every button is one nobody sees. */}
+      <div className="mt-2">
         <MoveOutButton
           label={many ? `Move all ${rows.length} to Out` : "Move to Out"}
           title={`Sets ${many ? `all ${rows.length} roles` : "this role"} to ${outLabel}`}
           disabled={busy}
           onClick={() => onMoveOut(rows)}
         />
-        <span className="text-xs text-ink/40">{caveat}</span>
       </div>
     </div>
   );
