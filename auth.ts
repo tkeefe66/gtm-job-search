@@ -3,7 +3,7 @@ import Google from "next-auth/providers/google";
 import PostgresAdapter from "@auth/pg-adapter";
 import type { Adapter } from "next-auth/adapters";
 import { authPool } from "@/lib/supabase";
-import { accessFor, sessionVerdict, resolveIdentity } from "@/lib/auth-policy";
+import { sessionVerdict, resolveIdentity } from "@/lib/auth-policy";
 
 /**
  * Google sign-in, database sessions, and the two rules Auth.js does not provide.
@@ -112,13 +112,22 @@ function guardedAdapter(): Adapter {
         return null;
       }
 
-      // Status is re-read on EVERY request, not just at sign-in. Checking only at
-      // sign-in would mean a suspension takes up to the sliding window (7 days)
-      // to bite, because the session keeps renewing itself in the meantime.
-      // The user row is already joined here, so this costs nothing.
-      const status = (result.user as unknown as { status?: string }).status ?? "pending";
-      if (!accessFor(status).allow) return null;
-
+      // STATUS IS NOT CHECKED HERE, DELIBERATELY. It used to be, and that was the
+      // sign-in loop of 2026-08-18: refusing here returns null, so `auth()` reports
+      // NO SESSION rather than a refused one, and /signin — the waitlist screen —
+      // could not tell a pending user apart from a stranger. It showed them the
+      // Google button, the click minted another session, /discover bounced them
+      // back, forever. One account had three sessions inside three minutes.
+      //
+      // The refusal lives at the surfaces instead, where it can still say why:
+      // readActor (lib/require-actor.ts) gates every page and every server action,
+      // and signInView (lib/auth-policy.ts) gates this page. Both call accessFor,
+      // so the fail-closed rule is unchanged.
+      //
+      // The property this check was written for survives: status arrives on the
+      // session from the user row joined RIGHT HERE, on every request, so a
+      // suspension still bites on the next request rather than at the end of the
+      // 7-day sliding window. What changed is who acts on it, not when it is read.
       return result;
     },
   };

@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, test, expect } from "vitest";
 import {
   accessFor,
   sessionVerdict,
   resolveIdentity,
+  signInView,
   IDLE_MS,
   ABSOLUTE_MS,
 } from "./auth-policy";
@@ -122,5 +124,59 @@ describe("resolveIdentity", () => {
       kind: "sub-collision",
       existingUserId: "admin",
     });
+  });
+});
+
+describe("signInView", () => {
+  // Mutation this catches: signInView returning "signin" for a pending session —
+  // which is exactly what the app did on 2026-08-18, because the adapter nulled
+  // a pending user's session before /signin could read its status. The button
+  // came back, the click minted another session, and the user circled forever.
+  // Three sessions in three minutes for one account are in the sessions table.
+  test("a pending session lands on the waitlist, NEVER back on the button", () => {
+    expect(signInView("pending")).toBe("waitlist");
+  });
+
+  // Mutation this catches: collapsing the refused statuses into the waitlist
+  // branch. "You're on the waitlist" is a false promise to a denied account.
+  test("suspended and denied are refused, not queued", () => {
+    expect(signInView("suspended")).toBe("refused");
+    expect(signInView("denied")).toBe("refused");
+  });
+
+  // Mutation this catches: treating any session as good enough to bounce to
+  // /discover, which sends a pending user into the redirect loop from the other
+  // direction — /discover refuses them straight back to here.
+  test("only an active session is bounced into the app", () => {
+    expect(signInView("active")).toBe("redirect");
+  });
+
+  // The sign-in button is for people with NO session. A session whose status
+  // this build cannot read is refused (accessFor fails closed); showing the
+  // button there would re-mint the same unreadable session on every click.
+  test("no session shows the button; an unknown status does not", () => {
+    expect(signInView(null)).toBe("signin");
+    expect(signInView(undefined)).toBe("signin");
+    expect(signInView("trialing")).toBe("refused");
+  });
+});
+
+/**
+ * A SOURCE guard, not a unit test, because auth.ts imports next-auth and cannot
+ * be loaded in this suite's plain node environment (the same constraint that
+ * makes readActor import it lazily).
+ */
+describe("the session adapter does not deny by status", () => {
+  // Mutation this catches: re-adding `if (!accessFor(status).allow) return null`
+  // to getSessionAndUser. That reads as defence in depth and is not — it nulls a
+  // pending user's session before /signin can read it, and every surface then
+  // treats a waitlisted user as a signed-out one. That IS the loop.
+  test("auth.ts never calls accessFor", () => {
+    const src = readFileSync(new URL("../auth.ts", import.meta.url), "utf8");
+    const calls = src
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .filter((line) => /accessFor\s*\(/.test(line));
+    expect(calls).toEqual([]);
   });
 });

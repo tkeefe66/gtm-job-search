@@ -1,25 +1,34 @@
 import { signIn, auth } from "@/auth";
 import { redirect } from "next/navigation";
-import { accessFor } from "@/lib/auth-policy";
+import { signInView } from "@/lib/auth-policy";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Sign-in and waitlist are ONE page on purpose.
  *
- * A pending user genuinely holds a session — they are created and then denied at
- * session read, because refusing them earlier (in the signIn callback) aborts
- * before the adapter writes a row, leaving the admin nothing to approve. So
- * "signed in but not allowed in" is a real state and needs somewhere to land.
+ * A pending user genuinely holds a session — they are created and then denied by
+ * the surfaces they ask for, because refusing them earlier (in the signIn
+ * callback) aborts before the adapter writes a row, leaving the admin nothing to
+ * approve. So "signed in but not allowed in" is a real state and needs somewhere
+ * to land.
+ *
+ * That state has to remain READABLE here, which is why the adapter no longer
+ * refuses by status (see auth.ts): a denial that returns a null session makes
+ * this page indistinguishable from a signed-out one, and the button it then
+ * shows loops the user back through Google forever.
  */
 export default async function SignIn() {
   const session = await auth();
-  const status = (session as unknown as { status?: string } | null)?.status;
+  // A session with no status is not a session for these purposes: the view rule
+  // takes null to mean "nobody is signed in", which is the only state the Google
+  // button belongs to.
+  const view = signInView(session ? (session as unknown as { status?: string }).status ?? null : null);
 
-  if (session && status && accessFor(status).allow) redirect("/discover");
+  if (view === "redirect") redirect("/discover");
 
-  const waiting = Boolean(session) && status === "pending";
-  const refused = Boolean(session) && (status === "suspended" || status === "denied");
+  const waiting = view === "waitlist";
+  const refused = view === "refused";
 
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-sm flex-col justify-center">

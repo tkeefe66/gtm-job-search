@@ -122,3 +122,27 @@ export function resolveIdentity(
   }
   return { kind: "known-user", userId: existing.userId };
 }
+
+/** What /signin should render for whatever session (if any) the request carries. */
+export type SignInView = "redirect" | "waitlist" | "refused" | "signin";
+
+/**
+ * Sign-in and waitlist are ONE page, so this is the whole of that page's logic.
+ *
+ * Pure and exported because the page itself is a server component that reads a
+ * session and can be reached from no test in this repo — and because the branch
+ * that matters is the one that was unreachable in production: a PENDING session
+ * must show the waitlist, never the sign-in button. Showing the button to a user
+ * who already holds a session is the sign-in loop: the click mints another
+ * session, /discover refuses it, and the redirect lands back here.
+ *
+ * `status` is null/undefined when there is no session at all — the only state
+ * the button belongs to. An unrecognised status is refused rather than offered a
+ * retry, for the same reason accessFor fails closed on it.
+ */
+export function signInView(status: string | null | undefined): SignInView {
+  if (status === null || status === undefined) return "signin";
+  const verdict = accessFor(status);
+  if (verdict.allow) return "redirect";
+  return verdict.reason === "waitlist" ? "waitlist" : "refused";
+}

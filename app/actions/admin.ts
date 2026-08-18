@@ -71,7 +71,8 @@ async function setStatus(
   const described = describeWriteFailure(error ? error.message : undefined, "update that account");
   if (described !== undefined) return { error: described };
 
-  // Sessions are checked against `status` on every read (auth.ts), so a
+  // The user row is re-joined on every session read (auth.ts) and the status it
+  // carries is enforced at every surface (readActor, signInView), so a
   // suspension takes effect on the suspended user's very next request without
   // deleting their session row. Revalidate so THIS page reflects the change.
   revalidatePath("/admin");

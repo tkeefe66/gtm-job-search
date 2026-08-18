@@ -4,6 +4,7 @@ import Nav from "@/components/Nav";
 import { auth } from "@/auth";
 import NeedsKeyBanner from "@/components/NeedsKeyBanner";
 import { rawQuery } from "@/lib/supabase";
+import { accessFor } from "@/lib/auth-policy";
 import "./globals.css";
 
 const inter = Inter({
@@ -38,7 +39,13 @@ export default async function RootLayout({
   // otherwise meet the requirement one failed click at a time.
   //
   // The admin uses the platform key, so they are never keyless.
-  const tenantId = (session as unknown as { userId?: string } | null)?.userId;
+  //
+  // Gated on the status too, not just on having a session: a pending user holds
+  // a real session (auth.ts no longer nulls it, so the waitlist screen can read
+  // it), and they are not a tenant yet — telling them to add an API key while
+  // they wait for approval is an instruction they cannot act on.
+  const s = session as unknown as { userId?: string; status?: string } | null;
+  const tenantId = s && accessFor(s.status ?? "pending").allow ? s.userId : undefined;
   let needsKey = false;
   if (tenantId && !isAdmin) {
     const { data, error } = await rawQuery<{ tenant_id: string }>(
