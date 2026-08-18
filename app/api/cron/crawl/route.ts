@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { crawlCompany, loadRunContext, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT } from "@/lib/crawl-schedule";
@@ -8,6 +7,7 @@ import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
 import { splitCrawlBatch } from "@/lib/crawl-fairness";
 import { withBudget } from "@/lib/metered";
 import { listCrawlableTenants } from "@/app/actions/admin";
+import { cronAuthorized } from "@/lib/cron-auth";
 
 // Ceiling on caller-supplied `?limit=`. Without one, `?limit=100000` (or a
 // typo in the cron command) selects every due company and crawls them all
@@ -19,27 +19,8 @@ const MAX_BATCH_LIMIT = 50;
 
 export const dynamic = "force-dynamic";
 
-// This is the only API route in the app. It both mutates the database and
-// spends Anthropic credits, and the app has no auth, so the shared secret is
-// the only thing standing between a public URL and unbounded spend.
-function authorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const header = req.headers.get("authorization") ?? "";
-  const provided =
-    header.slice(0, 7).toLowerCase() === "bearer " ? header.slice(7) : "";
-  // Hash both sides to fixed-width digests before comparing: this removes
-  // the length as an observable side channel (timingSafeEqual would
-  // otherwise require an explicit length-equality check, and a length
-  // mismatch on the raw values would throw) and keeps the comparison itself
-  // genuinely constant-time regardless of what the caller sent.
-  const a = createHash("sha256").update(provided).digest();
-  const b = createHash("sha256").update(secret).digest();
-  return timingSafeEqual(a, b);
-}
-
 export async function GET(req: Request) {
-  if (!authorized(req)) {
+  if (!cronAuthorized(req)) {
     return new NextResponse(null, { status: 401 });
   }
 

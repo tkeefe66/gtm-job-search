@@ -15,6 +15,7 @@ import {
   type Criteria,
 } from "@/lib/search-criteria";
 import { readCriteriaChangedAt } from "@/lib/settings-store";
+import { shouldStopTracking, stoppedTrackingReason } from "@/lib/dead-tracking";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type {
   CrawlMethod,
@@ -733,17 +734,58 @@ export async function crawlCompany(
     }
 
     const failed = status === "error" || status === "needs_url";
-    const { error: watchlistUpdateError } = await rawQuery(
+    // `failing_since` starts the clock on the FIRST failure of a run and is
+    // cleared by any success. coalesce, not now(), or every failure would reset
+    // the clock and a page could never be dead for a week. Note "empty" is NOT
+    // a failure: a careers page that loads and lists nothing is working.
+    const { data: updated, error: watchlistUpdateError } = await rawQuery<{
+      tracking_enabled: boolean;
+      consecutive_failures: number;
+      failing_since: string | null;
+    }>(
       `update watchlist
           set last_checked_at = now(),
               crawl_method = coalesce($2, crawl_method),
               last_crawl_status = $3,
               last_crawl_error = $4,
-              consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end
-        where company = $1 and tenant_id = $6`,
+              consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end,
+              failing_since = case when $5 then coalesce(failing_since, now()) else null end
+        where company = $1 and tenant_id = $6
+    returning tracking_enabled, consecutive_failures, failing_since`,
       [company, learnedMethod, status, errorMessage ?? null, failed, await resolveTenantId()],
       await resolveTenantId()
     );
+    // A page dead long enough stops being crawled at all. The decision lives in
+    // lib/dead-tracking.ts rather than in this statement's WHERE clause,
+    // deliberately: a rule expressed in SQL here and in TypeScript on the
+    // Watchlist page is the drift CLAUDE.md warns about, and only one of the two
+    // can be unit-tested. The row read back above is the POST-update state, so
+    // the first failure of a run always evaluates to false.
+    const after = updated[0];
+    if (failed && after && shouldStopTracking({
+      trackingEnabled: after.tracking_enabled,
+      consecutiveFailures: after.consecutive_failures,
+      failingSince: after.failing_since,
+    })) {
+      const { error: untrackError } = await rawQuery(
+        `update watchlist set tracking_enabled = false
+          where company = $1 and tenant_id = $2`,
+        [company, await resolveTenantId()],
+        await resolveTenantId()
+      );
+      if (untrackError) {
+        // Not fatal: the crawl itself succeeded in being recorded, and the row
+        // will be reconsidered on its next check. Logged because a company that
+        // should have been dropped and was not will otherwise keep taking slots
+        // with nothing saying why.
+        console.error(
+          `crawler: ${company} should have been untracked but the write failed — ${untrackError.message}`
+        );
+      } else {
+        console.log(`crawler: ${company} — ${stoppedTrackingReason(after.consecutive_failures)}`);
+      }
+    }
+
     if (watchlistUpdateError) {
       // last_checked_at did not advance, so the batch scheduler will see this
       // company as still due and may re-crawl (and re-bill ~10 searches for

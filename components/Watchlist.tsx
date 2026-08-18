@@ -10,6 +10,8 @@ import {
   trackCompanyByName,
 } from "@/app/actions/watchlist";
 import { isDue, nextCheckDue } from "@/lib/crawl-schedule";
+import { summarizeCrawlHealth } from "@/lib/crawl-health";
+import { stoppedTrackingReason } from "@/lib/dead-tracking";
 import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
@@ -156,6 +158,10 @@ export default function Watchlist() {
   function renderRow(c: TrackedCompany, i: number) {
     const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
     const failing = c.consecutive_failures >= 3;
+    // Only the crawler leaves failing_since set on a switched-off row — a manual
+    // toggle clears it — so this distinguishes "we gave up" from "you turned it
+    // off", which need different sentences and different remedies.
+    const droppedAsDead = !c.tracking_enabled && c.failing_since !== null;
 
     return (
       <div
@@ -212,11 +218,18 @@ export default function Watchlist() {
             <p className="mt-1 text-xs text-ink/40">No matching roles on the last check.</p>
           )}
 
-          {failing && (
+          {droppedAsDead ? (
             <p className="mt-1 text-xs text-[#92400E]">
-              Failing — {c.consecutive_failures} checks in a row.
-              {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
+              {stoppedTrackingReason(c.consecutive_failures)}
+              {c.last_crawl_error ? ` Last error: ${c.last_crawl_error}` : ""}
             </p>
+          ) : (
+            failing && (
+              <p className="mt-1 text-xs text-[#92400E]">
+                Failing — {c.consecutive_failures} checks in a row.
+                {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
+              </p>
+            )
           )}
 
           {c.tracking_enabled && (
@@ -296,6 +309,19 @@ export default function Watchlist() {
     );
   }
 
+  // Measures the SYMPTOM (companies actually past their schedule) rather than
+  // modelling capacity, which would need to know how many other tenants exist —
+  // a cross-tenant fact this page must not read. lib/crawl-health.ts explains.
+  const health = summarizeCrawlHealth(
+    companies.map((c) => ({
+      trackingEnabled: c.tracking_enabled,
+      crawlIntervalDays: c.crawl_interval_days,
+      consecutiveFailures: c.consecutive_failures,
+      lastCheckedAt: c.last_checked_at,
+      failingSince: c.failing_since,
+    }))
+  );
+
   return (
     <div>
       <div className="mb-6">
@@ -305,6 +331,42 @@ export default function Watchlist() {
           land in Roles, already scored.
         </p>
       </div>
+
+      {health.dropped > 0 && (
+        <div className="mb-4 rounded-md border border-slate bg-[#F8FAFC] p-4">
+          <p className="text-sm font-medium">
+            {health.dropped === 1
+              ? "1 company was dropped because its careers page stopped working."
+              : `${health.dropped} companies were dropped because their careers pages stopped working.`}
+          </p>
+          <p className="mt-1 text-xs text-ink/60">
+            {health.dropped === 1 ? "It is" : "They are"} under Not tracked below,
+            with the reason. Fix the careers URL or press Resume to start checking{" "}
+            {health.dropped === 1 ? "it" : "them"} again.
+          </p>
+        </div>
+      )}
+
+      {health.behind && (
+        <div className="mb-6 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4">
+          <p className="text-sm font-medium text-[#92400E]">
+            {health.slipping} of your {health.tracked} tracked{" "}
+            {health.tracked === 1 ? "company is" : "companies are"} behind schedule
+            {health.worstDaysLate > 0
+              ? `, the worst by ${health.worstDaysLate} day${health.worstDaysLate === 1 ? "" : "s"}`
+              : ""}
+            .
+          </p>
+          <p className="mt-1 text-xs text-[#92400E]/80">
+            Checks are shared across everyone using the app, so a long list takes
+            longer to get through. Track fewer companies, or give them a longer
+            interval, and the schedule will hold.
+            {health.failing > 0
+              ? ` (${health.failing} more ${health.failing === 1 ? "is" : "are"} failing their checks — that is a broken careers page, not a capacity problem.)`
+              : ""}
+          </p>
+        </div>
+      )}
 
       <form onSubmit={handleTrack} className="mb-6 flex flex-wrap items-center gap-2">
         <input

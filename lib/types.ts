@@ -154,6 +154,8 @@ export interface TrackedCompany {
   last_crawl_status: CrawlStatus | null;
   last_crawl_error: string | null;
   consecutive_failures: number;
+  /** When the current unbroken run of failures began; null when healthy. */
+  failing_since: string | null;
   source: string | null;
 }
 
