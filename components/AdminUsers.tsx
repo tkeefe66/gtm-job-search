@@ -53,17 +53,6 @@ export default function AdminUsers() {
           : "Nobody is waiting for approval"}
       </p>
 
-      {/*
-        Stated on the page itself, not just in a doc. Approving somebody today
-        gives them THIS pipeline — there is no tenant_id on any table yet, so
-        every account reads and writes the same rows.
-      */}
-      <p className="mt-4 rounded-lg border border-[#FCD34D] bg-[#FFFBEB] px-3 py-2 text-sm text-[#92400E]">
-        <strong>Data is not yet separated per account.</strong> Anyone you approve
-        will see and be able to edit this pipeline, watchlist and fit brain. Keep
-        the waitlist closed until tenancy ships.
-      </p>
-
       {error && (
         <p className="mt-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2 text-sm text-[#991B1B]">
           {error}
