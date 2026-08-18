@@ -248,9 +248,10 @@ export default function Discover() {
             <div>
               <h2 className="text-xl font-heading font-semibold">Employer discovery</h2>
               {/* Binding 3: recency is ADVISORY, not enforced — the model has
-                  returned items outside the requested window before. "Found
-                  by searching" is honest; a claim that these are ALL the
-                  matches within N days is not, so this copy never makes one. */}
+                  returned items outside the requested window before. This
+                  copy names the signal ("Notable X.") and never claims the
+                  window is exact — it does not say "all X from the last N
+                  days" or anything else that promises completeness. */}
               <p className="text-sm text-ink/60">
                 {signal ? `Notable ${signal.name}.` : "Notable hiring signals."}
                 {fetchedAt && !busy && (

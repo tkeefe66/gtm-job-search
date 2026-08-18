@@ -52,13 +52,23 @@ describe("hiringSignalSystem", () => {
   test("renders the default (funding) profile deterministically", () => {
     const sources = joinSources(D.hiringSignal.sources);
     const expected =
-      `You are a funding rounds analyst. Your job is to find every significant ` +
+      `You are a funding rounds analyst. Your job is to find all significant ` +
       `funding rounds for the given period — do not curate down to a short ` +
       `list, capture all notable ones. Search multiple sources: ${sources}. ` +
       `Focus exclusively on Series B and above. Prioritize completeness — it ` +
       `is better to return 20 results than to miss a major one. Return ONLY ` +
       `valid JSON, no markdown, no preamble.`;
     expect(hiringSignalSystem(D.hiringSignal)).toBe(expected);
+  });
+
+  // FIX 1 (review round 1): "find every significant funding rounds" put a
+  // singular determiner in front of a plural signal name. "all" reads
+  // correctly for every probed signal — funding rounds, contract awards,
+  // plant openings, a standing designation — where "every" would not.
+  test("says 'find all significant', not 'find every significant'", () => {
+    const rendered = hiringSignalSystem(D.hiringSignal);
+    expect(rendered).toContain("find all significant funding rounds");
+    expect(rendered).not.toContain("find every significant");
   });
 
   test("carries every one of the 10 shipped sources — the Ruling 3 superset", () => {

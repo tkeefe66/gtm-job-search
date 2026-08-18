@@ -23,14 +23,22 @@ export type DateRange = "7d" | "30d" | "3m" | "6m" | "6-18m" | "current";
 export type DiscoveredStartup = Startup & {
   discovered_range: DateRange;
   /**
-   * Every distinct signal this employer triggered, across every cached row —
-   * INCLUDING duplicate returns within one search (Probe A returned RTX
-   * three times under two different name spellings, Lockheed twice) and
-   * legitimate repeats across different windows. `signal` above still holds
-   * just the most recent one; this is the full list a card renders. Never
-   * empty when `signals.length` matters — a row whose signal composed to ""
-   * (no `signal` field and nothing to compose from `legacySignalFrom`)
-   * simply contributes no entry.
+   * Every distinct signal this employer triggered under ONE spelling of its
+   * name, across every cached row — including duplicate returns within one
+   * search (Probe A returned Lockheed Martin twice, under the same spelling
+   * both times, and the old dedupe kept only the first, silently dropping
+   * the second real contract) and legitimate repeats across different
+   * windows. `signal` above still holds just the most recent one; this is
+   * the full list a card renders. Never empty when `signals.length` matters
+   * — a row whose signal composed to "" (no `signal` field and nothing to
+   * compose from `legacySignalFrom`) simply contributes no entry.
+   *
+   * NOT solved by this: name VARIANTS of the same real employer, spelled
+   * differently. Probe A also returned RTX as both "RTX (Raytheon)" and
+   * "Raytheon (RTX)" — two different strings that normalizeCompanyName
+   * (lowercase/trim/whitespace-collapse only, see lib/role-key.ts) does not
+   * resolve to the same key, so those still render as two separate cards.
+   * See the longer note on getAllDiscoveredStartups below.
    */
   signals: string[];
 };
@@ -91,21 +99,34 @@ export async function getHiringSignal(): Promise<{ signal: HiringSignal }> {
   return { signal: profile.hiringSignal };
 }
 
-// Returns all saved startups across every date range, deduped by EMPLOYER —
-// not by row, and not by a raw lowercased company string.
+// Returns all saved startups across every date range, deduped by normalized
+// company string — not by row, and not by the OLD raw `.toLowerCase().trim()`.
 //
 // Binding 1 (probe A): one employer triggers the signal MANY times.
-// Lockheed Martin returned twice, RTX three times — twice as "RTX
-// (Raytheon)" and once as "Raytheon (RTX)", three different headquarters.
-// Funding rounds are roughly one-per-company, which is why the OLD dedupe
-// (lowercase the name, keep the first occurrence) never surfaced this: it is
-// wrong in BOTH directions for a signal that can happen to the same employer
-// repeatedly — name variants would survive as separate cards, and exact
-// duplicates would collapse while silently discarding a second real signal.
+// Lockheed Martin returned twice under the SAME spelling; RTX three times,
+// across TWO different spellings ("RTX (Raytheon)" and "Raytheon (RTX)"),
+// three different headquarters. Funding rounds are roughly one-per-company,
+// which is why the old dedupe (keep the first occurrence, discard the rest)
+// never surfaced this: for repeats under one spelling it silently dropped
+// every signal after the first.
 //
-// The fix: key on normalizeCompanyName (lib/role-key.ts — the SAME
-// normalizer watchlist/ingest-roles use, not a second one) and keep a LIST
-// of every signal an employer triggered rather than overwriting to one.
+// What this fix actually does, precisely: keys on normalizeCompanyName
+// (lib/role-key.ts — the SAME normalizer watchlist/ingest-roles use, not a
+// second one), which is lowercase + trim + whitespace-collapse, nothing
+// more, and keeps a LIST of every signal seen under that key instead of
+// overwriting to one. That closes the Lockheed case completely — two exact
+// (post-normalization) repeats now become one card with two signal lines
+// instead of one card with the second silently discarded.
+//
+// What it does NOT do: merge name VARIANTS of the same real employer.
+// normalizeCompanyName performs no aliasing — "RTX (Raytheon)" and
+// "Raytheon (RTX)" normalize to two different strings and still render as
+// two separate cards, each with its own signal(s), rather than the one card
+// a human reader would recognize them as. The probe's three RTX rows
+// therefore collapse to two cards here, not one. Fuzzy/alias matching to
+// close that gap is a real, separate design problem (what counts as "the
+// same company" — substring match? a canonical-name lookup? something else
+// entirely?) and is deliberately not attempted in this task.
 export async function getAllDiscoveredStartups(): Promise<{
   startups: DiscoveredStartup[];
   fetchedAt: string | null;

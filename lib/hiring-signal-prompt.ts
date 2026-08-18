@@ -6,27 +6,40 @@
 // hardcoded funding-analyst persona.
 //
 // RULING (this task, in the shape of the SDD ledger's Ruling 3): full literal
-// byte-identity to the PRE-TASK-13 hardcoded prompt is not achievable from
-// HiringSignal's five fields alone, and is not attempted. The old SYSTEM
-// prompt's "(Series B, Series C, Series D+, Late Stage, Growth, Pre-IPO).
-// Exclude seed, pre-seed, and Series A rounds." and the old USER prompt's
-// four example search queries ("Series B funding …", "startup raises
-// millions …") are venture-specific detail that DEFAULT_PROFILE.hiringSignal
-// does not carry (its `qualifier` is the five words "Series B and above",
-// nothing more) — and this task exists specifically to stop Discover
-// hardcoding that vocabulary for every tenant. Reproducing it verbatim in a
-// template every profile now shares would put the venture wording back for a
-// defence-contract or hospital-accreditation tenant, which is the exact
-// defect CLAUDE.md names Discover for. So: the two builders below are pinned
-// exactly by lib/hiring-signal-prompt.test.ts (any unintentional drift in
-// their rendering shows up as a test diff, the same guarantee every other
-// prompt builder in this directory gets) but the pinned text is a new,
+// byte-identity to the PRE-TASK-13 hardcoded prompt is not attempted, even
+// though the old SYSTEM prompt's "(Series B, Series C, Series D+, Late
+// Stage, Growth, Pre-IPO). Exclude seed, pre-seed, and Series A rounds." IS
+// mechanically reconstructible — the template below is
+// `Focus exclusively on ${signal.qualifier}.`, so a longer `qualifier` value
+// would render that detail byte-for-byte. Two real reasons rule that out,
+// not "the field can't carry it":
+//   1. `qualifier` is pinned to the five words "Series B and above" by
+//      lib/profile.test.ts, which this task's file list does not touch —
+//      lengthening it here would desync from that pin.
+//   2. `qualifier` is reused verbatim inside the example search queries
+//      below (`exampleQueries`). A qualifier long enough to carry the old
+//      parenthetical/exclusion detail would turn a billed web search into a
+//      garbage query string — the field has to stay short to serve BOTH
+//      call sites, and the prompt call site is the one that wins.
+// So: the two builders below are pinned exactly by
+// lib/hiring-signal-prompt.test.ts (any unintentional drift in their
+// rendering shows up as a test diff, the same guarantee every other prompt
+// builder in this directory gets), but the pinned text is a new,
 // signal-driven rendering, not a reproduction of the old literal string.
 // What IS preserved byte-for-byte for the shipped funding profile: the exact
 // 10-source list and join style (joinSources, below — Ruling 3's superset),
 // the qualifier text, the location-preference sentence (verbatim per Step 3
 // — it comes from `criteria.locationRule`, not from the signal, so it is
 // out of this task's scope), and the closing "Return ONLY…" instructions.
+//
+// BEHAVIOUR CHANGE, not merely lost detail: the old prompt's exclusion
+// clause ("exclude seed, pre-seed, and Series A rounds") is gone, with
+// nothing replacing it — `qualifier` alone ("Series B and above") states the
+// floor but no longer explicitly rules out what's below it. For the shipped
+// funding profile this can widen the existing user's result set to include
+// a round the model judges close enough to "Series B and above" that the
+// old exclusion clause would have blocked. Accepted as part of genericizing
+// this prompt; not silent, recorded here for whoever next changes it.
 
 import { dateContextLine, type Criteria } from "@/lib/search-criteria";
 import type { HiringSignal } from "@/lib/profile";
@@ -47,7 +60,13 @@ export function hiringSignalSystem(signal: HiringSignal): string {
   // holders of a standing property rather than announcements "for the given
   // period" when there is no period at all.
   const periodClause = signal.hasRecency ? " for the given period" : "";
-  return `You are a ${signal.name} analyst. Your job is to find every significant ${signal.name}${periodClause} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}. Focus exclusively on ${signal.qualifier}. Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
+  // "find all significant ${name}", not "find every significant ${name}" —
+  // `signal.name` is a per-tenant plural noun phrase ("funding rounds",
+  // "large defence contract awards"), and "every significant X" put a
+  // singular determiner in front of a plural noun. "all" reads correctly
+  // for a plural name across every probed signal, including the
+  // hasRecency:false case where periodClause is empty.
+  return `You are a ${signal.name} analyst. Your job is to find all significant ${signal.name}${periodClause} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}. Focus exclusively on ${signal.qualifier}. Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
 export function buildHiringSignalPrompt(args: {
