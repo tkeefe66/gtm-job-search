@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
 import { splitUnclear } from "@/lib/link-report";
 import { scoreFit } from "@/app/actions/parse-role";
@@ -215,34 +215,6 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   // Ids, not rows: the rows are replaced wholesale by every load() and by every
   // optimistic edit, so holding objects here would pin stale copies.
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  /**
-   * The bar that becomes the bulk status control once anything is ticked.
-   *
-   * "Select all N" in the link report ticks rows whose control is several
-   * hundred pixels below the fold, so without scrolling to it the click looks
-   * like it did nothing — which is exactly how it read to the first person who
-   * tried it.
-   */
-  const bulkBarRef = useRef<HTMLDivElement>(null);
-
-  /**
-   * Ticks a report group's rows and takes the user to the control that acts on
-   * them.
-   *
-   * The filter reset is not cosmetic: handleBulkStatus writes only to rows in
-   * VIEW (selectionInView), so a selection made while a search or a status chip
-   * is narrowing the table would silently skip the rows it just ticked.
-   */
-  function selectForBulk(rows: { id: string }[]) {
-    setSelected(new Set(rows.map((r) => r.id)));
-    setStatusFilter({ kind: "sentinel", key: "Open" });
-    // After the state above has rendered the bar in its selected form, not
-    // before — scrolling to it in the same tick lands on the pre-selection
-    // layout.
-    requestAnimationFrame(() =>
-      bulkBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-    );
-  }
   const [applying, setApplying] = useState(false);
   const [checkingLinks, setCheckingLinks] = useState(false);
   const [linkReport, setLinkReport] = useState<LinkRepairReport | null>(null);
@@ -603,6 +575,25 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   async function handleBulkStatus(status: string) {
     const targets = selectionInView(filtered, selected);
     if (targets.length === 0) return;
+    // The rows that failed stay ticked so the retry is one click, and the ones
+    // that saved drop out so a retry cannot re-write them. A clean run returns
+    // no ids, which is the same "nothing selected" state as before.
+    setSelected(new Set(await applyStatusTo(targets, status)));
+  }
+
+  /**
+   * Writes one status across a set of rows, optimistically, and owns every part
+   * of reporting a partial failure. Returns the ids that did NOT save — empty
+   * on a clean run.
+   *
+   * Shared by the bulk bar and by the link report's "Move to Out", which differ
+   * only in how they choose their targets: the bar intersects the selection
+   * with what is on screen, the report names its rows outright. Everything
+   * after that choice — the applied_date rule, the per-row writes, the reload
+   * on failure — must not diverge between them, which is why it lives here
+   * rather than in each caller.
+   */
+  async function applyStatusTo(targets: Job[], status: string): Promise<string[]> {
     const ids = new Set(targets.map((j) => j.id));
 
     setApplying(true);
@@ -636,14 +627,8 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
     }
 
     const failure = summarizeBulkStatus(results, labelFor(statuses, status));
-    if (failure === null) {
-      setSelected(new Set());
-      return;
-    }
+    if (failure === null) return [];
     console.error(`RolesTable: ${failure.message}`);
-    // The rows that failed stay ticked so the retry is one click, and the ones
-    // that saved drop out so a retry cannot re-write them.
-    setSelected(new Set(failure.failedIds));
 
     const reloadFailure = await load();
     setError(
@@ -652,6 +637,39 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         : `${failure.message}. Reloading the table failed too (${reloadFailure}), so the rows below ` +
           `are NOT reliable — they may be neither what you just changed nor what is stored. ` +
           `Reload the page once the database is reachable.`
+    );
+    return failure.failedIds;
+  }
+
+  /**
+   * The link report's own action: close the roles it could not decide about.
+   *
+   * Writes directly rather than ticking rows for the bulk bar below. That bar
+   * is several hundred pixels down the page, and handing a decision to a
+   * control the user has to go and find reads as a button that did nothing —
+   * which is how the first version of this was received.
+   *
+   * `Posting Closed` is a system status: it cannot be deleted or hidden on
+   * /settings, so this button can never point at a status that is not there.
+   * Its LABEL is renameable, which is why the line beside the button reads it
+   * out of the resolved config instead of hardcoding the word.
+   */
+  async function moveUnclearOut(rows: { id: string }[]) {
+    const ids = new Set(rows.map((r) => r.id));
+    // From `jobs`, not `filtered`: these rows were named by the report, not
+    // picked off the screen, so a search box or a status chip must not narrow
+    // what the button acts on.
+    const targets = jobs.filter((j) => ids.has(j.id));
+    if (targets.length === 0) return;
+
+    const failedIds = new Set(await applyStatusTo(targets, "Posting Closed"));
+    // Only the rows that failed stay in the report. The ones that saved are
+    // decided, and leaving them listed would invite a second click that
+    // re-writes a row already closed.
+    setLinkReport((prev) =>
+      prev === null
+        ? prev
+        : { ...prev, unclear: prev.unclear.filter((r) => failedIds.has(r.id)) }
     );
   }
 
@@ -757,17 +775,23 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
               {unclearGroups.ambiguous.length > 0 && (
                 <UnclearGroup
                   rows={unclearGroups.ambiguous}
-                  sentence="could be more than one posting on the employer's board — check before closing."
+                  clause="could be one of several postings on their board"
                   linkLabel="their board"
-                  onSelectAll={selectForBulk}
+                  caveat="Titles that look alike are not the same posting — open the board before you close these."
+                  outLabel={labelFor(statuses, "Posting Closed")}
+                  onMoveOut={moveUnclearOut}
+                  busy={applying}
                 />
               )}
               {unclearGroups.empty.length > 0 && (
                 <UnclearGroup
                   rows={unclearGroups.empty}
-                  sentence="point at an employer board that lists no jobs at all. The company may hire somewhere this pass did not look, or the guessed board may not be theirs — check their own careers page before closing."
-                  linkLabel="the empty board"
-                  onSelectAll={selectForBulk}
+                  clause="seems to no longer be listed"
+                  linkLabel="their board is empty"
+                  caveat="The board was found by guessing the company's name, so it may not be theirs — their own careers page is the check."
+                  outLabel={labelFor(statuses, "Posting Closed")}
+                  onMoveOut={moveUnclearOut}
+                  busy={applying}
                 />
               )}
             </div>
@@ -929,10 +953,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         <div className="rounded-lg border border-slate bg-white">
           {/* Sort bar — becomes the bulk bar as soon as anything is ticked, so
               the two never compete for the same strip of screen. */}
-          <div
-            ref={bulkBarRef}
-            className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50"
-          >
+          <div className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50">
             <input
               type="checkbox"
               checked={selectedCount > 0 && selectedCount === filtered.length}
@@ -1184,48 +1205,57 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
 // module out of a client component's import graph for a type it can infer.
 function UnclearGroup({
   rows,
-  sentence,
+  clause,
   linkLabel,
-  onSelectAll,
+  caveat,
+  outLabel,
+  onMoveOut,
+  busy,
 }: {
   rows: { id: string; company: string; role_title: string; boardUrl: string }[];
-  sentence: string;
+  clause: string;
   linkLabel: string;
-  onSelectAll: (rows: { id: string }[]) => void;
+  caveat: string;
+  outLabel: string;
+  onMoveOut: (rows: { id: string }[]) => void;
+  busy: boolean;
 }) {
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-ink">
-          {rows.length} {sentence}
-        </span>
-        {/* Deliberately not auto-closed — see the report's own comment. The
-            button ticks the rows and scrolls to the control that acts on them;
-            without the scroll it changes state below the fold and reads as a
-            dead button. */}
-        <button
-          onClick={() => onSelectAll(rows)}
-          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
-        >
-          Select all {rows.length}
-        </button>
-        <span className="text-xs text-ink/40">then pick from &ldquo;Set status&rdquo; above the table</span>
-      </div>
-      <ul className="space-y-0.5 text-xs text-ink/60">
+      {/* The rows lead, and each says what is wrong with ITSELF. The count-led
+          sentence this replaced ("1 point at an employer board that lists no
+          jobs at all…") made the reader work out which row it meant and what to
+          do about it, for a list that is usually one line long. */}
+      <ul className="space-y-0.5 text-sm text-ink">
         {rows.map((r) => (
           <li key={r.id}>
-            {r.company} &middot; {r.role_title} &mdash;{" "}
+            <span className="font-medium">{r.company}</span> {r.role_title} {clause} &mdash;{" "}
             <a
               href={r.boardUrl}
               target="_blank"
               rel="noreferrer"
-              className="underline underline-offset-2 hover:text-ink"
+              className="text-ink/60 underline underline-offset-2 hover:text-ink"
             >
               {linkLabel}
             </a>
           </li>
         ))}
       </ul>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {/* Acts here, on these rows. Never automatic: the board behind both of
+            these outcomes was found by GUESSING a slug from the company name,
+            so closing without a human looking would eventually kill a live role
+            against a stranger's board. */}
+        <button
+          onClick={() => onMoveOut(rows)}
+          disabled={busy}
+          title={`Sets ${rows.length === 1 ? "this role" : `these ${rows.length} roles`} to ${outLabel}`}
+          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white disabled:opacity-50"
+        >
+          {rows.length === 1 ? "Move to Out" : `Move all ${rows.length} to Out`}
+        </button>
+        <span className="text-xs text-ink/40">{caveat}</span>
+      </div>
     </div>
   );
 }
