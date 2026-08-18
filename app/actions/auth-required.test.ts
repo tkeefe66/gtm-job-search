@@ -37,9 +37,16 @@ vi.mock("@/auth", () => ({ auth: async () => null }));
 const CRON_CALLED = new Set([
   "getDueCompanies",
   "repairJobLinks",
-  // Enumerates tenants for the nightly crawl; the cron route has no session.
-  "listCrawlableTenants",
 ]);
+
+/**
+ * listCrawlableTenants USED to sit in that set. It is cron-called like the two
+ * above, but unlike them it reads `users` directly instead of going through
+ * resolveTenantId(), so nothing made it refuse a session-less caller — it was an
+ * exported action that handed every active tenant's uuid and admin flag to
+ * anyone who POSTed its id. It now checks isPlatform() itself, which is why it
+ * belongs on the enforced side of this test rather than the exempt side.
+ */
 
 /** Not actions — re-exported types and constants carry no session requirement. */
 function isAction(v: unknown): v is (...args: unknown[]) => Promise<unknown> {

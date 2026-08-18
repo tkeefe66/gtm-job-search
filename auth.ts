@@ -215,11 +215,33 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async createUser({ user }) {
       const admin = process.env.ADMIN_EMAIL;
       if (!admin || !user.email || user.email.toLowerCase() !== admin.toLowerCase()) return;
-      await authPool().query(
-        `update users set status = 'active', role = 'admin', approved_at = now() where id = $1`,
-        [user.id]
-      );
-      console.log("auth: promoted the configured admin on first sign-in");
+      try {
+        await authPool().query(
+          `update users set status = 'active', role = 'admin', approved_at = now() where id = $1`,
+          [user.id]
+        );
+        console.log("auth: promoted the configured admin on first sign-in");
+      } catch (err) {
+        // EXPECTED on any database carrying db/migrations/009: `role` is no
+        // longer writable by app_rw, because a table-level UPDATE grant on this
+        // column is a privilege-escalation path for any future mass-assigning
+        // write. The statement sets status, role and approved_at together, so it
+        // fails as a whole and promotes nothing — there is no half-promoted row.
+        //
+        // Swallowed rather than rethrown because this runs inside an Auth.js
+        // EVENT: throwing here fails the sign-in that just succeeded, turning a
+        // missing promotion into a locked door. The account is created and
+        // 'pending'; the owner approves it with the statement below, run as the
+        // database owner rather than as the app.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `auth: could not self-promote the configured admin (${message}). ` +
+            `This is expected once db/migrations/009_users_column_grants.sql is applied. ` +
+            `Promote manually, as the database owner:\n` +
+            `  update users set status = 'active', role = 'admin', approved_at = now() ` +
+            `where email = '${admin}';`
+        );
+      }
     },
 
     /**

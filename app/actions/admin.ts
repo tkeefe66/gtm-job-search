@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireActor } from "@/lib/require-actor";
+import { isPlatform } from "@/lib/platform-context";
 import { rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
 
@@ -106,11 +107,27 @@ export async function suspendUser(id: string): Promise<{ error?: string }> {
  *
  * Only 'active'. A pending, denied or suspended account must not have its
  * companies crawled — that would spend money on somebody who cannot sign in.
+ *
+ * PLATFORM ONLY, and the check is explicit rather than inherited. Its two
+ * sibling cron actions get this protection for free — getDueCompanies and
+ * repairJobLinks both call resolveTenantId(), which falls through to
+ * requireActor() and throws for a caller with no session. This one reads
+ * `users` directly, so it never touched that path: it was an exported server
+ * action, addressable by an id lifted from the client bundle, that returned
+ * every active tenant's uuid and admin flag to anyone who asked. Nothing else
+ * accepts a tenant id from the client, so the ids were not directly spendable —
+ * it was an enumeration leak, not an isolation break, and it is closed here
+ * rather than left as a documented exemption.
+ *
+ * "Not authenticated" deliberately, matching requireActor's own wording: it is
+ * what app/actions/auth-required.test.ts asserts, and this function's removal
+ * from that test's exemption list is what now pins the check.
  */
 export async function listCrawlableTenants(): Promise<{
   tenants: { id: string; isAdmin: boolean }[];
   error?: string;
 }> {
+  if (!isPlatform()) throw new Error("Not authenticated");
   // The role comes back too: the crawl is metered per tenant, and the tier
   // decides which ceilings apply. Without it every scheduled crawl would be
   // billed against the free defaults, including the owner's.
