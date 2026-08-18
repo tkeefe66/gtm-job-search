@@ -8,7 +8,7 @@ Multi-tenant, career-agnostic, AI-powered job search tool. Next.js 14 (App Route
 
 **The shared-password gate is GONE, and there is no middleware.** `middleware.ts`, `app/gate/` and `app/api/gate/` were deleted on 2026-08-17, along with the `GATE_TOKEN` variable on `web`. That gate was always labelled throwaway (`docs/superpowers/specs/2026-08-16-multi-tenant-auth-design.md` — revision 2; the 08-15 file is the superseded revision 1, kept only as a record) and it was removed once Google sign-in plus the pending-approval waitlist covered everything it did, because past that point it was pure redundancy that forced a shared secret on every invitee.
 
-**What replaced it is per-surface, not global, so the coverage argument has to be re-made whenever a surface is added.** Middleware was attractive precisely because it covered Server Actions for free — those are RPC endpoints addressed by an ID that ships in the client bundle, so gating pages does nothing for them. Nothing covers them for free any more. The three standing invariants are: every `page.tsx` calls `requireActorPage()` (or `requireAdminPage()` for `/admin`); every exported server action refuses a session-less call, which `app/actions/auth-required.test.ts` asserts by importing each file in `app/actions/` and calling every exported function; and the only deliberately public surfaces are `/signin`, `app/api/auth/[...nextauth]` (the OAuth handshake) and `app/api/cron/crawl` (its own `CRON_SECRET` bearer check, failing closed). `app/page.tsx` holds no data and only redirects to `/discover`. The two actions on that test's `CRON_CALLED` exemption list were probed directly at removal time and refuse a session-less call anyway — they reach `resolveTenantId()`, which falls through to `requireActor()` outside a platform context. Adding a page without `requireActorPage()` is now an unguarded surface with no framework backstop, and only review catches it. (The Edge-runtime constraint that made middleware unable to do real auth still stands: it cannot reach Postgres, and Node-runtime middleware does not exist until Next 15.2.)
+**What replaced it is per-surface, not global, so the coverage argument has to be re-made whenever a surface is added.** Middleware was attractive precisely because it covered Server Actions for free — those are RPC endpoints addressed by an ID that ships in the client bundle, so gating pages does nothing for them. Nothing covers them for free any more. The three standing invariants are: every `page.tsx` calls `requireActorPage()` (or `requireAdminPage()` for `/admin`); every exported server action refuses a session-less call, which `app/actions/auth-required.test.ts` asserts by importing each file in `app/actions/` and calling every exported function; and the only deliberately public surfaces are `/signin`, `app/api/auth/[...nextauth]` (the OAuth handshake) and the two cron routes `app/api/cron/crawl-next` and `app/api/cron/crawl` (a shared `CRON_SECRET` bearer check in `lib/cron-auth.ts`, failing closed). `app/page.tsx` holds no data and only redirects to `/discover`. The two actions on that test's `CRON_CALLED` exemption list were probed directly at removal time and refuse a session-less call anyway — they reach `resolveTenantId()`, which falls through to `requireActor()` outside a platform context. Adding a page without `requireActorPage()` is now an unguarded surface with no framework backstop, and only review catches it. (The Edge-runtime constraint that made middleware unable to do real auth still stands: it cannot reach Postgres, and Node-runtime middleware does not exist until Next 15.2.)
 
 ## Commands
 
@@ -37,7 +37,7 @@ railway up --service web --detach
 
 **A Railway variable change rebuilds from the connected GitHub repo, discarding whatever `railway up` uploaded.** This silently held production 108 commits behind for days: the service was wired to `tkeefe66/chad-job-search` (the previous owner's repo, frozen at an Aug 11 commit), so every `railway up` was reverted by the next variable edit. The symptoms were a `/settings` page that did not exist in production and a cron route returning 404 to the crawler every night. Fixed by pointing the service at `gtm-job-search`, whose `main` is current — so the rebuild-on-variable-change now produces the right code. **Keep `origin/main` current, or that trap comes straight back.**
 
-Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`), `ANTHROPIC_API_KEY`, and `CRON_SECRET` (the bearer token `app/api/cron/crawl` requires — auth fails closed, so a deploy missing this value makes every cron run 401 silently, with no log line to point at why). The `crawler` cron service needs the same `CRON_SECRET` value plus `WEB_URL` (the `web` service's public domain).
+Env vars on the `web` service: `DATABASE_URL` (reference var `${{Postgres.DATABASE_URL}}`), `ANTHROPIC_API_KEY`, and `CRON_SECRET` (the bearer token both `app/api/cron/crawl-next` and the legacy `app/api/cron/crawl` require, via `lib/cron-auth.ts` — auth fails closed, so a deploy missing this value makes every cron run 401 silently, with no log line to point at why). The `crawler` cron service needs the same `CRON_SECRET` value plus `WEB_URL` (the `web` service's public domain).
 
 **Verify against the deployed commit, not the local one.** `railway deployment list --service web --limit 1 --json` carries `meta.commitHash`; compare it to `git rev-parse main` AND `origin/main` before believing any check you run against the live site. A rotation of `CRON_SECRET` was once reported as verified when the route it guarded did not exist in the running build.
 
@@ -63,7 +63,7 @@ git show bac5fb1:lib/fit-prompt.ts | grep -n "DEFAULT_TITLE_SCOPE\|DEFAULT_DOMAI
 
 Do not skip this and do not fake the result — a dropped bullet or a trailing newline is exactly the silent divergence this codebase is built to catch.
 
-**Redirects built from `req.url` in a route handler point at `localhost:8080`.** Railway terminates TLS and forwards to the container on `PORT`, so a route handler's `req.url` is the bound address, not the public host. Use a relative `Location` rather than rebuilding an absolute URL from `x-forwarded-host`, which is client-controlled and would make the redirect target attacker-influenced. The worked example used to be `app/api/gate/route.ts`; that file is deleted, so the rule now has no demonstration in the tree and applies to the next route handler that redirects. `app/api/cron/crawl` is the only route handler left besides Auth.js's own, and it returns JSON rather than redirecting.
+**Redirects built from `req.url` in a route handler point at `localhost:8080`.** Railway terminates TLS and forwards to the container on `PORT`, so a route handler's `req.url` is the bound address, not the public host. Use a relative `Location` rather than rebuilding an absolute URL from `x-forwarded-host`, which is client-controlled and would make the redirect target attacker-influenced. The worked example used to be `app/api/gate/route.ts`; that file is deleted, so the rule now has no demonstration in the tree and applies to the next route handler that redirects. The two cron routes are the only route handlers left besides Auth.js's own, and both return JSON rather than redirecting.
 
 **`.railwayignore` is load-bearing.** `railway up` uploads the working DIRECTORY, not what git tracks, so without it the gitignored `.env.production` and any `.env.local` are shipped into build images.
 
@@ -156,15 +156,50 @@ crawled on a recurring schedule (`crawl_interval_days`, default 7).
 `lib/crawler.ts` tries a plain HTTP fetch of `careers_url` and extracts roles
 from the stripped text with a non-search Claude call; if `lib/page-extract.ts`
 detects a JS-rendered ATS shell it falls back to the `web_search` path. The tier
-that worked is remembered in `crawl_method`. `app/api/cron/crawl/route.ts` —
-guarded by `CRON_SECRET` — crawls up to **`DEFAULT_BATCH_LIMIT` (3)** due
-companies per call and is invoked daily by the Railway `crawler` cron service.
-Read the number from `lib/crawl-schedule.ts`, never from memory: this file said
-10 for weeks while the code said 3, and a plan was written on top of the wrong
-figure. Three per day is ~21 company-crawls a week, which is the real ceiling on
-how many companies can be tracked at a 7-day interval — the loop is sequential
-and a search-tier crawl takes 60–120s, so raising it needs a queue, not a bigger
-constant. **Roles are
+that worked is remembered in `crawl_method`.
+
+**ONE COMPANY PER REQUEST since 2026-08-18.** The `crawler` cron service calls
+`app/api/cron/crawl-next/route.ts` — guarded by `CRON_SECRET` — in a bounded
+shell loop (30 iterations), and each call crawls exactly ONE due company and
+reports whether more remain. `app/api/cron/crawl/route.ts` (the old batch route,
+`DEFAULT_BATCH_LIMIT` = 3) still exists and still works, but NOTHING CALLS IT: it
+is kept as a one-setting rollback and should be deleted once the loop has proven
+itself. `DEFAULT_BATCH_LIMIT` therefore governs nothing in production — do not
+reason about throughput from it.
+
+**The real ceiling was never that constant.** Railway's edge closes a request
+that transfers no data after 300 seconds (15 minutes only while data keeps
+flowing). The batch route works silently and answers at the end, so it got 300s —
+which at a MEASURED worst-case crawl of 91.2s is 3.29 companies. That, not the
+120s guess in the old comment, is where the 3 came from. Shrinking the request to
+one company makes the unit of work and the unit of failure the same, so capacity
+is now bounded by how many times the loop runs, not by a timeout.
+
+Durations are measured, not assumed: query `crawl_runs` (`started_at`,
+`finished_at`) rather than repeating a figure from prose — fetch tier p50 2.8s,
+search tier p50 ~65s, max 91.2s over n=12 as of 2026-08-17. The file you are
+reading said `DEFAULT_BATCH_LIMIT` was 10 for weeks while the code said 3, and a
+plan was written on top of the wrong figure; the same file then carried a
+60–120s crawl estimate nobody had ever measured. Full design, measurements and
+caveats: `docs/superpowers/specs/2026-08-17-crawl-throughput-design.md`.
+
+**A careers page dead for a week stops being tracked.** `lib/dead-tracking.ts`
+plus `watchlist.failing_since` (migration 010): the clock starts on the first
+failure of a run and is cleared by any success, and after
+`DEAD_PAGE_GRACE_DAYS` (7) with at least `DEAD_PAGE_MIN_FAILURES` (2) the row is
+set `tracking_enabled = false`. Two failures minimum because at a 14-day interval
+a single failure is the only evidence available at day 7, and it is as likely a
+timeout as a dead page. `"empty"` is NOT a failure — a page that loads and lists
+nothing is working. This REPLACED a proposed exponential backoff, deliberately:
+backing off delays the very evidence that proves a page is dead. A manual
+tracking toggle clears `failing_since` in both directions, which is the only
+thing distinguishing "the crawler gave up" from "the user switched it off" —
+`components/Watchlist.tsx` renders different copy for each, and
+`lib/crawl-health.ts` announces the dropped count above the fold because the
+`Not tracked` section is COLLAPSED by default and the notice was otherwise
+invisible.
+
+**Roles are
 never DISCOVERED through ATS vendor or job-aggregator APIs** — the HTML path
 works on any careers page, including custom ones and vendors nobody integrated,
 and that generality is the point. Link REPAIR is the one narrow exception; see
