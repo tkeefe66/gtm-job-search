@@ -11,6 +11,35 @@
 // against a live database; raise it once that's known.
 export const DEFAULT_BATCH_LIMIT = 3;
 
+/**
+ * How many times the wait doubles before it stops growing.
+ *
+ * A company that fails forever must still be retried EVENTUALLY — a careers
+ * page comes back, a rename is undone, a 503 ends. A permanent skip would make
+ * `consecutive_failures` a death sentence, so the doubling caps here: at a
+ * 7-day interval and this many failures the company is retried every 112 days
+ * rather than never.
+ */
+export const MAX_BACKOFF_DOUBLINGS = 4;
+
+/** How many times its own interval a company must wait, given its failure run. */
+export function backoffMultiplier(consecutiveFailures: number): number {
+  const n = Math.max(0, Math.min(Math.floor(consecutiveFailures), MAX_BACKOFF_DOUBLINGS));
+  return 2 ** n;
+}
+
+/**
+ * `consecutive_failures` was written by the crawler from the beginning and read
+ * by nothing, so a careers page that has been dead for a month consumed a slot
+ * every interval exactly like a healthy one. At 3 crawls a night that was
+ * invisible; it stops being invisible the moment throughput goes up, which is
+ * the whole point of the work this ships with.
+ *
+ * MAX_BACKOFF_DOUBLINGS is interpolated rather than typed in, because a cap
+ * hardcoded in this string while the helpers below use the constant is exactly
+ * the drift the header comment warns about. A test asserts the interpolation
+ * landed.
+ */
 export const DUE_COMPANIES_SQL = `
   select company,
          careers_url,
@@ -22,7 +51,9 @@ export const DUE_COMPANIES_SQL = `
    where tenant_id = $2
      and tracking_enabled = true
      and (last_checked_at is null
-          or last_checked_at <= now() - (crawl_interval_days || ' days')::interval)
+          or last_checked_at <= now() - (
+               (crawl_interval_days * power(2, least(consecutive_failures, ${MAX_BACKOFF_DOUBLINGS}))::int)
+               || ' days')::interval)
    order by last_checked_at asc nulls first
    limit $1
 `;
@@ -31,18 +62,21 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function nextCheckDue(
   lastCheckedAt: string | null,
-  intervalDays: number
+  intervalDays: number,
+  consecutiveFailures = 0
 ): Date | null {
   if (!lastCheckedAt) return null;
-  return new Date(new Date(lastCheckedAt).getTime() + intervalDays * MS_PER_DAY);
+  const wait = intervalDays * backoffMultiplier(consecutiveFailures) * MS_PER_DAY;
+  return new Date(new Date(lastCheckedAt).getTime() + wait);
 }
 
 export function isDue(
   lastCheckedAt: string | null,
   intervalDays: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  consecutiveFailures = 0
 ): boolean {
-  const due = nextCheckDue(lastCheckedAt, intervalDays);
+  const due = nextCheckDue(lastCheckedAt, intervalDays, consecutiveFailures);
   if (!due) return true;
   return due.getTime() <= now.getTime();
 }

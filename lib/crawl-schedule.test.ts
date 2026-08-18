@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { DUE_COMPANIES_SQL, isDue, nextCheckDue, crawlIntervalError, MIN_CRAWL_INTERVAL_DAYS, MAX_CRAWL_INTERVAL_DAYS } from "./crawl-schedule";
+import { DUE_COMPANIES_SQL, isDue, nextCheckDue, crawlIntervalError, MIN_CRAWL_INTERVAL_DAYS, MAX_CRAWL_INTERVAL_DAYS, backoffMultiplier, MAX_BACKOFF_DOUBLINGS } from "./crawl-schedule";
 
 const NOW = new Date("2026-08-12T12:00:00.000Z");
 
@@ -68,5 +68,44 @@ describe("crawlIntervalError", () => {
   test("the boundaries themselves are allowed", () => {
     expect(crawlIntervalError(MIN_CRAWL_INTERVAL_DAYS)).toBe("");
     expect(crawlIntervalError(MAX_CRAWL_INTERVAL_DAYS)).toBe("");
+  });
+});
+
+describe("backoffMultiplier", () => {
+  test("a company that has never failed is on its plain interval", () => {
+    expect(backoffMultiplier(0)).toBe(1);
+  });
+
+  test("each consecutive failure doubles the wait", () => {
+    expect(backoffMultiplier(1)).toBe(2);
+    expect(backoffMultiplier(2)).toBe(4);
+    expect(backoffMultiplier(3)).toBe(8);
+  });
+
+  test("the doubling stops, so a dead page is retried eventually rather than never", () => {
+    expect(backoffMultiplier(MAX_BACKOFF_DOUBLINGS)).toBe(2 ** MAX_BACKOFF_DOUBLINGS);
+    expect(backoffMultiplier(99)).toBe(2 ** MAX_BACKOFF_DOUBLINGS);
+  });
+});
+
+describe("the backoff in the SQL and the backoff in the helpers agree", () => {
+  // CLAUDE.md: "The SQL and the pure helpers must agree: the SQL drives the
+  // cron batch, the helpers drive the 'next check' display on the Watchlist
+  // page." A cap hardcoded in the SQL string is exactly how they drift.
+  test("DUE_COMPANIES_SQL caps the doubling at MAX_BACKOFF_DOUBLINGS", () => {
+    expect(DUE_COMPANIES_SQL).toContain(`least(consecutive_failures, ${MAX_BACKOFF_DOUBLINGS})`);
+  });
+
+  test("a company failing repeatedly is not due at its plain interval", () => {
+    // 7-day interval, checked 8 days ago, 2 consecutive failures -> 28-day
+    // effective interval, so it is NOT due.
+    expect(isDue("2026-08-04T12:00:00.000Z", 7, NOW, 2)).toBe(false);
+    // The same company with no failures IS due.
+    expect(isDue("2026-08-04T12:00:00.000Z", 7, NOW, 0)).toBe(true);
+  });
+
+  test("nextCheckDue pushes the displayed date out by the same multiplier", () => {
+    const due = nextCheckDue("2026-08-01T12:00:00.000Z", 7, 1);
+    expect(due?.toISOString()).toBe("2026-08-15T12:00:00.000Z");
   });
 });

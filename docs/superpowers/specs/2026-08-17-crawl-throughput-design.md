@@ -198,6 +198,24 @@ the edge limit rather than a preference.
 becomes a per-company anomaly detector against a 91.2s tail instead of dead
 configuration.
 
+**The `crawler` service's start command becomes the loop.** Not applied yet — the
+route has to be deployed first, or every iteration 404s:
+
+```sh
+sh -c 'for i in $(seq 1 30); do
+  r=$(curl -sS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" "$WEB_URL/api/cron/crawl-next");
+  echo "$r";
+  echo "$r" | grep -q "\"crawled\":true" || break;
+done'
+```
+
+The bound of 30 is the iteration cap §2 asks for. It is not the capacity limit —
+the loop normally ends on `crawled:false` — it is the backstop for the one path
+that could spin: a post-crawl `watchlist` update that fails leaves
+`last_checked_at` un-advanced, so the same company stays due and would be picked
+again. Thirty iterations at the 91.2s tail is ~45 minutes, and a curl that errors
+produces empty output, fails the grep, and breaks the loop rather than hammering.
+
 **Read `consecutive_failures` in `DUE_COMPANIES_SQL`.** Independent of everything
 else and worth doing on its own: it stops a dead careers page from consuming a
 slot every cycle. This gets *more* valuable as capacity rises, not less.

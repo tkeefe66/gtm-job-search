@@ -584,6 +584,54 @@ export async function getDueCompanies(
 }
 
 /**
+ * This tenant's single next crawl, and how much they have already had.
+ *
+ * The one-company-per-request loop (app/api/cron/crawl-next) asks every tenant
+ * this and then chooses between the answers in application code — see
+ * lib/crawl-next.ts for why the obvious cross-tenant query cannot be written
+ * against RLS.
+ *
+ * `crawlsToday` counts from a FIXED UTC midnight rather than a rolling 24 hours.
+ * Rolling is smoother and buys nothing at these volumes, while fixed is what a
+ * user can be told ("three checks a day") and what a test can pin without
+ * freezing a clock.
+ */
+export async function getCrawlCandidate(): Promise<{
+  company: string | null;
+  lastCheckedAt: string | null;
+  crawlsToday: number;
+  error?: string;
+}> {
+  const tenantId = await resolveTenantId();
+
+  const { data: due, error: dueError } = await rawQuery<{
+    company: string;
+    last_checked_at: string | null;
+  }>(DUE_COMPANIES_SQL, [1, tenantId], tenantId);
+  if (dueError) {
+    return { company: null, lastCheckedAt: null, crawlsToday: 0, error: dueError.message };
+  }
+
+  const { data: counted, error: countError } = await rawQuery<{ n: string }>(
+    `select count(*) n from watchlist
+      where tenant_id = $1
+        and last_checked_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'`,
+    [tenantId],
+    tenantId
+  );
+  if (countError) {
+    return { company: null, lastCheckedAt: null, crawlsToday: 0, error: countError.message };
+  }
+
+  const row = due[0];
+  return {
+    company: row?.company ?? null,
+    lastCheckedAt: row?.last_checked_at ?? null,
+    crawlsToday: Number(counted[0]?.n ?? 0),
+  };
+}
+
+/**
  * How often this company is crawled, in days.
  *
  * The scheduler already honours a per-company interval — DUE_COMPANIES_SQL

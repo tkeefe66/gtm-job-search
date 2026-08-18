@@ -10,6 +10,7 @@ import {
   trackCompanyByName,
 } from "@/app/actions/watchlist";
 import { isDue, nextCheckDue } from "@/lib/crawl-schedule";
+import { summarizeCrawlHealth } from "@/lib/crawl-health";
 import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
 import { Spinner, Tag } from "./ui";
@@ -154,7 +155,7 @@ export default function Watchlist() {
   }
 
   function renderRow(c: TrackedCompany, i: number) {
-    const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
+    const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days, c.consecutive_failures);
     const failing = c.consecutive_failures >= 3;
 
     return (
@@ -201,7 +202,7 @@ export default function Watchlist() {
               ? ` · Last checked ${formatDate(c.last_checked_at)}`
               : " · Never checked"}
             {c.tracking_enabled &&
-              (isDue(c.last_checked_at, c.crawl_interval_days)
+              (isDue(c.last_checked_at, c.crawl_interval_days, undefined, c.consecutive_failures)
                 ? " · Due now"
                 : due
                   ? ` · Next check ${formatDate(due.toISOString())}`
@@ -296,6 +297,18 @@ export default function Watchlist() {
     );
   }
 
+  // Measures the SYMPTOM (companies actually past their schedule) rather than
+  // modelling capacity, which would need to know how many other tenants exist —
+  // a cross-tenant fact this page must not read. lib/crawl-health.ts explains.
+  const health = summarizeCrawlHealth(
+    companies.map((c) => ({
+      trackingEnabled: c.tracking_enabled,
+      crawlIntervalDays: c.crawl_interval_days,
+      consecutiveFailures: c.consecutive_failures,
+      lastCheckedAt: c.last_checked_at,
+    }))
+  );
+
   return (
     <div>
       <div className="mb-6">
@@ -305,6 +318,27 @@ export default function Watchlist() {
           land in Roles, already scored.
         </p>
       </div>
+
+      {health.behind && (
+        <div className="mb-6 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4">
+          <p className="text-sm font-medium text-[#92400E]">
+            {health.slipping} of your {health.tracked} tracked{" "}
+            {health.tracked === 1 ? "company is" : "companies are"} behind schedule
+            {health.worstDaysLate > 0
+              ? `, the worst by ${health.worstDaysLate} day${health.worstDaysLate === 1 ? "" : "s"}`
+              : ""}
+            .
+          </p>
+          <p className="mt-1 text-xs text-[#92400E]/80">
+            Checks are shared across everyone using the app, so a long list takes
+            longer to get through. Track fewer companies, or give them a longer
+            interval, and the schedule will hold.
+            {health.failing > 0
+              ? ` (${health.failing} more ${health.failing === 1 ? "is" : "are"} being retried less often after repeated failures — that is separate, and not a capacity problem.)`
+              : ""}
+          </p>
+        </div>
+      )}
 
       <form onSubmit={handleTrack} className="mb-6 flex flex-wrap items-center gap-2">
         <input
