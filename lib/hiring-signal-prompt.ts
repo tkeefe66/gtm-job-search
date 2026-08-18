@@ -54,6 +54,30 @@ export function joinSources(sources: string[]): string {
   return `${sources.slice(0, -1).join(", ")}, and ${sources[sources.length - 1]}`;
 }
 
+/**
+ * A sentence naming the signal's qualifying threshold, or "" when the tenant
+ * left it blank — lib/onboarding-prompt.ts explicitly allows that ("An empty
+ * string is a valid answer when every instance counts and nothing should be
+ * filtered out"). Owns its own leading space, matching the guard pattern in
+ * lib/fit-prompt.ts (compScoringClause / titleScopeBlock / domainBonusBlock):
+ * the caller splices this directly with no punctuation of its own around it,
+ * so an empty qualifier must vanish cleanly rather than rendering "Focus
+ * exclusively on ." or "Only include .".
+ */
+function qualifierSentence(lead: string, qualifier: string): string {
+  return qualifier ? ` ${lead} ${qualifier}.` : "";
+}
+
+/**
+ * A query-example fragment that leads with the qualifier when there is one,
+ * or just `rest` when there isn't — guards the third splice site, inside
+ * `exampleQueries` below, where an empty qualifier would otherwise leave a
+ * leading space inside a quoted, billed search-query string.
+ */
+function qualifierPrefixed(qualifier: string, rest: string): string {
+  return qualifier ? `${qualifier} ${rest}` : rest;
+}
+
 export function hiringSignalSystem(signal: HiringSignal): string {
   // hasRecency decides the framing, not a separate parameter — HiringSignal
   // already carries it, and Binding 4 requires the prompt to ask for CURRENT
@@ -70,7 +94,7 @@ export function hiringSignalSystem(signal: HiringSignal): string {
   // name sits in an appositive slot after the colon, where singular or
   // plural both read correctly. This avoids the whole class of agreement
   // bug rather than picking a determiner and hoping.
-  return `You are a ${signal.name} analyst. Your job is to find every employer showing this signal${periodClause}: ${signal.name} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}. Focus exclusively on ${signal.qualifier}. Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
+  return `You are a ${signal.name} analyst. Your job is to find every employer showing this signal${periodClause}: ${signal.name} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}.${qualifierSentence("Focus exclusively on", signal.qualifier)} Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
 export function buildHiringSignalPrompt(args: {
@@ -97,12 +121,12 @@ export function buildHiringSignalPrompt(args: {
   // this task's review, not asked for directly, but the exact defect the
   // review just flagged next door.
   const searchClause = period
-    ? `Search ${sources} for every employer showing this signal: ${signal.name}, announced ${period}. Only include ${signal.qualifier}.`
-    : `Search ${sources} for current holders of this property: ${signal.name}. Only include ${signal.qualifier}.`;
+    ? `Search ${sources} for every employer showing this signal: ${signal.name}, announced ${period}.${qualifierSentence("Only include", signal.qualifier)}`
+    : `Search ${sources} for current holders of this property: ${signal.name}.${qualifierSentence("Only include", signal.qualifier)}`;
 
   const exampleQueries = period
-    ? `Do multiple searches to ensure completeness — vary the query wording, e.g. "${signal.qualifier} ${signal.name} ${period}" and "${signal.name} ${period}".`
-    : `Do multiple searches to ensure completeness — vary the query wording, e.g. "${signal.qualifier} ${signal.name}" and "current ${signal.name}".`;
+    ? `Do multiple searches to ensure completeness — vary the query wording, e.g. "${qualifierPrefixed(signal.qualifier, `${signal.name} ${period}`)}" and "${signal.name} ${period}".`
+    : `Do multiple searches to ensure completeness — vary the query wording, e.g. "${qualifierPrefixed(signal.qualifier, signal.name)}" and "current ${signal.name}".`;
 
   // Only injected when there is a period to reason about — dateContextLine's
   // whole job is to stop the model biasing a WINDOWED search toward a stale

@@ -13,9 +13,16 @@ import { DEFAULT_PROFILE } from "./profile";
  * nurse."
  *
  * Two halves, and both are needed. The per-builder tests assert a CHANGED value
- * reaches the rendered prompt; this one asserts no production module can reach
- * a career-specific string at all. A builder test cannot see a call site, and a
- * call site inside a "use server" module cannot be called from a test.
+ * reaches the rendered prompt; this one asserts no production module OUTSIDE
+ * ITS TWO HOME FILES holds one of the ELEVEN phrases below — not "no
+ * production module can reach a career-specific string at all", which
+ * overclaims: `DEFAULT_TARGET_TITLES` and `DEFAULT_LOCATION_RULE` in
+ * lib/search-criteria.ts are career- and city-specific strings this guard
+ * never scans, because they were never extracted into the profile in the
+ * first place. See CLAUDE.md's "The guard, and its limit" paragraph, which
+ * states the actual scope; this docblock is written to match it rather than
+ * the reverse. A builder test cannot see a call site, and a call site inside a
+ * "use server" module cannot be called from a test.
  *
  * Precedent for reading source in a test: lib/job-statuses.test.ts, which walks
  * the tree asserting no Tailwind arbitrary-value class escapes app/ or
@@ -56,6 +63,14 @@ describe("no production module holds a career-specific string", () => {
     ["weakFitTail", DEFAULT_PROFILE.weakFitTail],
     ["moderateTail", DEFAULT_PROFILE.moderateTail],
     ["strongTail", DEFAULT_PROFILE.strongTail],
+    // Added in the branch's final-fixes pass: Profile has ELEVEN career-text
+    // fields (fitBrain excluded — its shipped default is "", nothing to
+    // scan for) and only nine were listed here. titleScope and domainBonus
+    // were the two missing. Both default into lib/fit-prompt.ts
+    // (DEFAULT_TITLE_SCOPE / DEFAULT_DOMAIN_BONUS), already inside HOMES, so
+    // no HOMES change is needed — only these two entries were missing.
+    ["titleScope", DEFAULT_PROFILE.titleScope],
+    ["domainBonus", DEFAULT_PROFILE.domainBonus],
   ];
 
   for (const [field, phrase] of PHRASES) {

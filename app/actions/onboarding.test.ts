@@ -219,17 +219,44 @@ describe("saveProfile — validation, before the transaction ever runs", () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
-  test("an empty stack-terms list is refused before the transaction runs", async () => {
-    // stackTerms is a ListSettingKey on /settings too (saveCriteriaList),
-    // which rejects an empty list the same way — onboarding must match, or it
-    // can write a value /settings itself can never re-save.
+  test("a whitespace-only location rule is refused before the transaction runs", async () => {
+    const res = await saveProfile({ ...VALID_PROFILE, locationRule: "   " });
+    expect(res.error).toBeDefined();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveProfile — stackTerms may be empty, unlike every other list", () => {
+  // BLOCKER 1 of the final-fixes pass. lib/onboarding-prompt.ts tells the
+  // model to return an empty stackTerms array when toolsAreWeak is true (a
+  // nurse, a paralegal — any field where a tool-name search returns mostly
+  // noise). This used to be refused by the same validateList call that
+  // refuses empty titles/locations, which failed Finish for exactly that
+  // toolsAreWeak case with an error naming a "Reset to defaults" control that
+  // does not exist on /welcome. /settings' own save (saveCriteriaList) is a
+  // SEPARATE call to validateList with no allowEmpty, and still refuses an
+  // empty stackTerms list — this test only covers the onboarding path.
+  test("an empty stack-terms list is accepted and written as []", async () => {
     const res = await saveProfile({ ...VALID_PROFILE, stackTerms: [] });
+    expect(res).toEqual({});
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const valueFor = (key: string) => transactionCalls.find((c) => c.key === key)?.value;
+    expect(valueFor("stackTerms")).toEqual([]);
+  });
+
+  test("titles and locations still refuse empty even when stackTerms is empty too", async () => {
+    // Guards against a fix that accidentally widened allowEmpty to every list
+    // rather than just stackTerms — a profile with no titles genuinely cannot
+    // search, and must still be refused.
+    const res = await saveProfile({ ...VALID_PROFILE, titles: [], stackTerms: [] });
     expect(res.error).toBeDefined();
     expect(transaction).not.toHaveBeenCalled();
   });
 
-  test("a whitespace-only location rule is refused before the transaction runs", async () => {
-    const res = await saveProfile({ ...VALID_PROFILE, locationRule: "   " });
+  test("an embedded quote in stackTerms is still refused, even though empty is allowed", async () => {
+    // allowEmpty must not become "skip validation entirely" — the
+    // malformed-query check inside validateList still has to run.
+    const res = await saveProfile({ ...VALID_PROFILE, stackTerms: ['Head of "Ops" Tools'] });
     expect(res.error).toBeDefined();
     expect(transaction).not.toHaveBeenCalled();
   });

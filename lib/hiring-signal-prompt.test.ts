@@ -121,6 +121,32 @@ describe("hiringSignalSystem", () => {
     expect(rendered).toContain("You are a funding rounds analyst.");
   });
 
+  // BLOCKER 5. lib/onboarding-prompt.ts explicitly allows an empty
+  // `qualifier` ("when every instance counts"), and this splice site used to
+  // render "Focus exclusively on ." — dangling punctuation with no clause
+  // before it. qualifierSentence must omit the whole clause instead.
+  test("an empty qualifier omits the clause cleanly, with no dangling '.'", () => {
+    const signal = {
+      name: "large defence contract awards",
+      sources: ["Source A"],
+      qualifier: "",
+      hasRecency: true,
+      extraFields: [],
+    };
+    const rendered = hiringSignalSystem(signal);
+    expect(rendered).not.toContain("Focus exclusively on");
+    expect(rendered).not.toContain(" .");
+    expect(rendered).not.toContain("  ");
+    expect(rendered).toBe(
+      "You are a large defence contract awards analyst. Your job is to find " +
+        "every employer showing this signal for the given period: large " +
+        "defence contract awards — do not curate down to a short list, " +
+        "capture all notable ones. Search multiple sources: Source A. " +
+        "Prioritize completeness — it is better to return 20 results than " +
+        "to miss a major one. Return ONLY valid JSON, no markdown, no preamble."
+    );
+  });
+
   test("renders a synthetic signal's own name/qualifier/sources, never the shipped defaults", () => {
     const synthetic = {
       name: "SYNTHETIC CONTRACT AWARDS",
@@ -241,6 +267,40 @@ describe("buildHiringSignalPrompt", () => {
     expect(rendered).not.toContain("extras (a JSON object");
     // ...but the fixed core survives.
     expect(rendered).toContain('signal (string, one legible sentence');
+  });
+
+  // BLOCKER 5. Both the "Only include ." dangling-period splice site and the
+  // exampleQueries leading-space splice site (a billed search-query string
+  // like `" large defence contract awards in the past 7 days"`) must render
+  // cleanly when qualifier is "".
+  test("an empty qualifier omits 'Only include' and leaves no leading space in the example query", () => {
+    const signal = {
+      name: "large defence contract awards",
+      sources: ["Source A"],
+      qualifier: "",
+      hasRecency: true,
+      extraFields: [],
+    };
+    const period = "in the past 7 days";
+    const rendered = buildHiringSignalPrompt({
+      signal,
+      criteria: DEFAULT_CRITERIA,
+      period,
+      focus: "",
+      now: NOW,
+    });
+    // Scoped to the searchClause substring, not the whole prompt — the
+    // location-preference sentence legitimately starts with "Only include"
+    // (it comes from criteria.locationRule, unrelated to signal.qualifier),
+    // so a whole-prompt "not.toContain('Only include')" would false-positive
+    // on that unrelated text.
+    expect(rendered).toContain(
+      `Search Source A for every employer showing this signal: ${signal.name}, announced ${period}. Do multiple searches`
+    );
+    // A leading space inside the quoted example would render as `e.g. " ...`
+    // (quote immediately followed by a space) — the exact bug this guards.
+    expect(rendered).not.toContain('e.g. " ');
+    expect(rendered).toContain(`e.g. "${signal.name} ${period}" and "${signal.name} ${period}".`);
   });
 
   test("renders a synthetic signal's own values, never the shipped defaults", () => {

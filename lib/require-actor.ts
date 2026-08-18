@@ -57,9 +57,12 @@ async function readActor(): Promise<Actor | null> {
  * function does not know which route called it, and revision 2 of the design
  * assumed a mechanism that does not exist. /admin is the only caller that
  * passes true.
+ *
+ * Takes no `actor` — an earlier revision did, but nothing in this function
+ * ever read it; the decision is made from `onboardedAt` and `allowUnonboarded`
+ * alone. Removed rather than left as an unused parameter.
  */
 export function onboardingRedirect(input: {
-  actor: Actor;
   onboardedAt: string | null;
   allowUnonboarded: boolean;
 }): string | null {
@@ -80,10 +83,19 @@ export function onboardingRedirect(input: {
  * whoever asks.
  *
  * The stamp is read through readOnboardedAtFor, which takes actor.tenantId
- * EXPLICITLY and never calls resolveTenantId. That is not a style choice:
- * resolveTenantId is `(await requireActor()).tenantId`, so a reader that
- * resolved its own tenant would call requireActor() from inside this flow,
- * unbounded. See the note on readOnboardedAtFor.
+ * EXPLICITLY rather than calling resolveTenantId() itself. Not because that
+ * would recurse — it would not: resolveTenantId() calls requireActor(), whose
+ * body is readActor() (this function's own next line) plus a null check, and
+ * neither of those calls back into requireActorPage() or readOnboardedAtFor.
+ * (The unbounded case belonged to a REJECTED design — Task 9's plan — that put
+ * the onboarding check inside requireActor() itself, where readAllSettingsResult's
+ * own resolveTenantId() call re-entered it; that design was never shipped, and
+ * this parameter is not what prevents it.) The real reasons to keep it
+ * explicit: it names which tenant the read is for, and it avoids a second,
+ * redundant session read — this function already has actor.tenantId from
+ * readActor() above, so resolving it again inside readOnboardedAtFor would
+ * repeat that lookup on every force-dynamic page render. See the fuller note
+ * on readOnboardedAtFor in lib/settings-store.ts.
  *
  * Costs one extra query per page render on five force-dynamic pages. The cron
  * crawler is unaffected — it has no session and never reaches a page (see
@@ -92,11 +104,15 @@ export function onboardingRedirect(input: {
 export async function requireActorPage(opts?: { allowUnonboarded?: boolean }): Promise<Actor> {
   const actor = await readActor();
   if (!actor) redirect("/signin");
-  const target = onboardingRedirect({
-    actor,
-    onboardedAt: await readOnboardedAtFor(actor.tenantId),
-    allowUnonboarded: opts?.allowUnonboarded === true,
-  });
+  const allowUnonboarded = opts?.allowUnonboarded === true;
+  // LAZY on purpose: onboardingRedirect's first line is `if (allowUnonboarded)
+  // return null`, so requireAdminPage (which always passes true) never reads
+  // this value. An eager `await readOnboardedAtFor(...)` inside the object
+  // literal below still ran the query every time regardless — object
+  // properties are evaluated before the function they're passed to is called
+  // — spending a read whose answer requireAdminPage was about to discard.
+  const onboardedAt = allowUnonboarded ? null : await readOnboardedAtFor(actor.tenantId);
+  const target = onboardingRedirect({ onboardedAt, allowUnonboarded });
   if (target) redirect(target);
   return actor;
 }

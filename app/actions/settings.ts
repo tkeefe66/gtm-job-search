@@ -405,6 +405,22 @@ export async function saveProfileFields(
         console.error(`settings: could not clear ${table} — ${clearError.message}`);
       }
     }
+    // The same stamp applySideEffects writes for an AFFECTS_CRAWL key
+    // (lib/settings-effects.ts), for the same reason: searchSubject,
+    // candidatePersona, buildingConcept, and buildingUpside all reach BOTH
+    // crawler tiers (lib/crawler.ts's buildExtractionPrompt/roleSearchSystem
+    // call and its extractViaSearch/buildCompanyRolePrompt call), so a patch
+    // that touches any of them changes what the crawler looks for exactly as
+    // much as a titles/locationRule save does. Without this, the crawler's
+    // stale-posting closure debounce would not reset, and a role could be
+    // closed on evidence gathered under the OLD prompt. `saveProfile` (the
+    // onboarding path, app/actions/onboarding.ts) already stamps this on
+    // every finish/re-run; this was the one write path that missed it.
+    // writeCriteriaChangedAt, never a hand-rolled write — see the constant's
+    // own doc in lib/settings-store.ts for why.
+    const { error: stampError } = await writeCriteriaChangedAt();
+    const describedStamp = describeWriteFailure(stampError, "stamp the criteria change");
+    if (describedStamp !== undefined) console.error(`settings: ${describedStamp}`);
   }
 
   return {};

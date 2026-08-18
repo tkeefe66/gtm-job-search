@@ -186,9 +186,15 @@ async function generateProfileInner(
       },
     };
   } catch (err) {
-    // The real error is logged, and logged is the only place it goes — never
-    // the prompt or the answers that produced it.
-    console.error("onboarding: generation failed:", err);
+    // Only the error's NAME is logged, never the error itself. `err` can be a
+    // SyntaxError from parseJson(raw) above, and JSON.parse's own error
+    // message can embed surrounding characters of the text it failed to
+    // parse — which here is the model's response to a prompt built from this
+    // tenant's résumé. This file's header forbids logging the résumé; logging
+    // `err` verbatim would violate that through exactly this path.
+    console.error(
+      `onboarding: generation failed — ${err instanceof Error ? err.name : "unknown"}`
+    );
     return { error: generationFailure() };
   }
 }
@@ -242,10 +248,17 @@ export async function saveProfile(
   if (!titlesCheck.ok) return { error: titlesCheck.error };
   const locationsCheck = validateList(profile.locations, "Location terms");
   if (!locationsCheck.ok) return { error: locationsCheck.error };
-  // stackTerms is a ListSettingKey on /settings too (saveCriteriaList), which
-  // rejects an empty list the same way. Onboarding storing one anyway would
-  // strand the user unable to re-save that field from /settings later.
-  const stackTermsCheck = validateList(profile.stackTerms, "Stack terms");
+  // stackTerms is allowed to be EMPTY on this path only. lib/onboarding-prompt.ts
+  // tells the model to return an empty array when toolsAreWeak is true — a
+  // nurse, a paralegal, any field where a tool-name search would return mostly
+  // noise — and emptySearchReason (lib/search-criteria.ts) already degrades
+  // that correctly: it refuses only the "stack" search family, the "title"
+  // family still runs. Without allowEmpty, that exact toolsAreWeak case failed
+  // Finish with "Stack terms cannot be empty … or use Reset to defaults" — a
+  // control that does not exist on /welcome. /settings' own save
+  // (saveCriteriaList -> validateList with no allowEmpty) is untouched and
+  // still refuses an empty list there.
+  const stackTermsCheck = validateList(profile.stackTerms, "Stack terms", { allowEmpty: true });
   if (!stackTermsCheck.ok) return { error: stackTermsCheck.error };
   // locationRule is a TextSettingKey on /settings (saveCriteriaText), whose
   // own check is exactly this: trim, and refuse empty.
@@ -271,9 +284,15 @@ export async function saveProfile(
       await put(SETTING_KEYS.stackTerms, stackTermsCheck.value);
       await put(SETTING_KEYS.locationRule, locationRule);
       // The fit brain is written to BOTH the profile and its own setting row:
-      // /settings edits the row, and scoringInputsFrom reads the profile first
-      // and falls back to the row. Writing only one would make the settings
-      // page show a brain the scorer does not use, or the reverse.
+      // /settings edits the row, and scoringInputsFrom (lib/search-criteria.ts)
+      // resolves `criteria.fitBrain || profile.fitBrain` — the ROW wins, the
+      // profile is only the fallback. Writing only the profile here would leave
+      // the row empty, and every scoreFit call would fall through to whatever
+      // the row degrades to instead of this tenant's brain. Writing only the
+      // row would leave /settings displaying a brain the profile never agreed
+      // with. Both must be written for the same reason app/actions/settings.ts
+      // documents on saveProfileFields: the row already wins every read, so
+      // this is the one write that keeps it non-empty from the start.
       await put(SETTING_KEYS.fitBrain, clean.fitBrain);
       // CRITERIA_CHANGED_AT_KEY, never the literal "criteria_changed_at". The
       // constant exists precisely so a writer and its reader cannot drift on

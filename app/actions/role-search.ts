@@ -13,6 +13,7 @@ import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import type { Profile } from "@/lib/profile";
 import {
   emptySearchReason,
+  loadCriteriaAndScoringInputs,
   loadSearchInputs,
   planQueries,
   roleSearchSystem,
@@ -78,6 +79,22 @@ async function untrackedFrom(matches: RoleMatch[]): Promise<string[]> {
     keys: Array.from(watched.keys),
     error: watched.error,
   });
+}
+
+/**
+ * The tenant's `toolsAreWeak` flag, for RoleSearchPanel to hide the "Tools of
+ * the trade" family when a tool-name search would return mostly noise for
+ * this field — see the doc on `Profile.toolsAreWeak` in lib/profile.ts.
+ *
+ * Same shape as `getHiringSignal` in app/actions/discover.ts: no explicit
+ * requireActor() call needed here because loadCriteriaAndScoringInputs ->
+ * readAllSettings -> resolveTenantId() -> requireActor() already refuses an
+ * unauthenticated caller, which is what app/actions/auth-required.test.ts
+ * verifies for every export in this directory.
+ */
+export async function getToolsAreWeak(): Promise<{ toolsAreWeak: boolean }> {
+  const { profile } = await loadCriteriaAndScoringInputs();
+  return { toolsAreWeak: profile.toolsAreWeak };
 }
 
 export async function getCachedRoleSearch(

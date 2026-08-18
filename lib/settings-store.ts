@@ -505,14 +505,31 @@ export function onboardedAtFrom(rows: SettingRow[]): string | null {
 /**
  * The onboarding stamp for ONE named tenant, taking its own query.
  *
- * TAKES A tenantId AND MUST KEEP TAKING ONE. Every other reader in this file
- * calls resolveTenantId(), which is `(await requireActor()).tenantId`
- * (lib/tenant.ts) — and this reader's only caller is requireActorPage() in
- * lib/require-actor.ts. Resolving the tenant here would therefore call
- * requireActor() from inside requireActor()'s own module-level flow, unbounded.
- * The parameter is what makes the onboarding gate possible at all; a later
- * "tidy-up" that removes it reintroduces an infinite recursion that no type
- * checks.
+ * TAKES A tenantId, and should keep taking one — but NOT because resolving it
+ * internally would recurse. Verified by reading the actual call chain: this
+ * function's only caller is requireActorPage() (lib/require-actor.ts), which
+ * gets its Actor from readActor(), not from requireActor(). If this function
+ * called resolveTenantId() itself, that would call requireActor() (lib/tenant.ts),
+ * whose body is isPlatform() ? … : readActor() plus a null check — a call to
+ * requireActor() that terminates, with nothing looping back into
+ * requireActorPage() or into this function. There is no cycle.
+ *
+ * The unbounded-recursion hazard this comment used to warn about belonged to a
+ * DIFFERENT, REJECTED design: an earlier revision put the onboarding check
+ * INSIDE requireActor() itself, so that requireActor()'s own call to
+ * readAllSettingsResult (which calls resolveTenantId(), which calls
+ * requireActor() again) would re-enter the very check that was running —
+ * unbounded (see Task 9's plan, docs/superpowers/plans/2026-08-17-career-agnostic-onboarding.md).
+ * That design was never shipped. Do not reintroduce it on the theory that this
+ * parameter is what was preventing it — it wasn't; the shipped shape (the
+ * check living in requireActorPage(), which calls readActor() rather than
+ * requireActor()) is what avoids it.
+ *
+ * The parameter stays for two real reasons instead: it is explicit about which
+ * tenant this read is for, and it avoids a second, redundant session read —
+ * requireActorPage() already resolved actor.tenantId via its own readActor()
+ * call above, so resolving the tenant again here would repeat that lookup on
+ * every force-dynamic page render for no new information.
  *
  * Fails soft to null, like readCriteriaChangedAt: a database blip must not
  * lock a user out of the app, and the cost of the safe direction here is one

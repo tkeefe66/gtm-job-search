@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   findRolesByCriteria,
   getCachedRoleSearch,
+  getToolsAreWeak,
 } from "@/app/actions/role-search";
 import { trackCompanyByName } from "@/app/actions/watchlist";
 import type { CrawlOutcome } from "@/lib/crawler";
@@ -41,6 +42,22 @@ export default function RoleSearchPanel() {
   const [trackError, setTrackError] = useState<{ company: string; message: string } | null>(
     null
   );
+  // True when the tenant's profile says a tool-name search would return
+  // mostly noise for their field (lib/profile.ts). Hides the "Tools of the
+  // trade" family entirely rather than sending queries that match nothing —
+  // the same intent stated on Profile.toolsAreWeak's own doc. Defaults false
+  // so the family is not hidden for the one render before this resolves.
+  const [toolsAreWeak, setToolsAreWeak] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getToolsAreWeak().then((res) => {
+      if (!cancelled) setToolsAreWeak(res.toolsAreWeak);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Applies a result to the view only when it actually carries one. A failed
   // read or a failed search comes back as matches: [] / fetchedAt: null, and
@@ -153,7 +170,7 @@ export default function RoleSearchPanel() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex overflow-hidden rounded-md border border-slate">
-            {FAMILIES.map((f) => (
+            {FAMILIES.filter((f) => f.value !== "stack" || !toolsAreWeak).map((f) => (
               <button
                 key={f.value}
                 onClick={() => setFamily(f.value)}
