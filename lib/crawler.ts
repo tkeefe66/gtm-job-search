@@ -372,7 +372,7 @@ async function extractViaSearch(
   careersUrl: string | null,
   criteria: Criteria,
   profile: Profile
-): Promise<Role[]> {
+): Promise<{ roles: Role[]; salvaged: boolean }> {
   const prompt = buildCompanyRolePrompt({
     company,
     careersUrl,
@@ -394,7 +394,7 @@ async function extractViaSearch(
   // is where that distinction lives for all four search surfaces. Rethrowing on
   // truncation preserves the old behaviour exactly — the run scores "error" and
   // stamps failing_since, which is correct when the model genuinely got cut off.
-  const { items } = await parseOrSalvage<Role>({
+  const { items, salvaged } = await parseOrSalvage<Role>({
     raw,
     stopReason,
     key: "roles",
@@ -402,7 +402,7 @@ async function extractViaSearch(
     label: `crawler: ${company} search tier`,
     extract: rolesFrom,
   });
-  return items;
+  return { roles: items, salvaged };
 }
 
 // Exported (rather than inlined) so the 'ok'/'empty' scoping — the whole
@@ -414,8 +414,38 @@ async function extractViaSearch(
 // dates each run against the criteria-change stamp. rawQuery's row type is an
 // assertion rather than something inferred from this string, so dropping the
 // column compiles clean and silently disables closure — hence the string test.
+/**
+ * Whether a finished run may be used to CLOSE postings.
+ *
+ * Two independent conditions, and the second is newer than the first.
+ *
+ * Status: only 'ok' and 'empty' ever carried listing evidence. 'error' and
+ * 'needs_url' never do — a fetch failure is not evidence a role is gone.
+ *
+ * Provenance: a SALVAGED run is excluded regardless of status. Its roles came
+ * from re-reading a prose answer, and prose meaning "I could not reach the
+ * page" salvages to an empty array that is indistinguishable from "this company
+ * lists nothing". Excluded even when it DID find roles: a transcription of
+ * whatever the prose happened to mention is not a complete listing, so closing
+ * every title absent from it would close roles the prose merely omitted.
+ *
+ * The cost, accepted: after a salvaged run, closure waits for the next normal
+ * one. Closure is already a two-run rule, so it was never same-day.
+ *
+ * This must agree with LAST_TRUSTWORTHY_RUN_SQL below — this gates the CURRENT
+ * run, that one picks the PREVIOUS run. Both are pinned by tests.
+ */
+export function runProvidesClosureEvidence(
+  status: CrawlStatus,
+  salvaged: boolean
+): boolean {
+  if (salvaged) return false;
+  return status === "ok" || status === "empty";
+}
+
 export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles, finished_at from crawl_runs
       where tenant_id = $2 and company = $1 and status in ('ok', 'empty')
+        and not salvaged
       order by started_at desc
       limit 1`;
 
@@ -638,6 +668,9 @@ export async function crawlCompany(
   let roles: Role[] = [];
   let newRoles = 0;
   let seenTitles: string[] = [];
+  // Provenance, not a workflow state: were these roles parsed, or recovered
+  // from a prose response? Only the search tier can salvage today.
+  let salvaged = false;
 
   try {
     let careersUrl = tracked.careers_url;
@@ -684,7 +717,14 @@ export async function crawlCompany(
         // what actually ran, whether or not this run taught us anything new.
         learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
         runMethod = "search";
-        roles = await extractViaSearch(company, careersUrl, ctx.criteria, ctx.profile);
+        const searchResult = await extractViaSearch(
+          company,
+          careersUrl,
+          ctx.criteria,
+          ctx.profile
+        );
+        roles = searchResult.roles;
+        salvaged = searchResult.salvaged;
       }
 
       // Read the previous trustworthy run BEFORE this run's row is finalized.
@@ -717,7 +757,7 @@ export async function crawlCompany(
       // ever "ok" or "empty" here, set two lines above from roles.length) —
       // that's the safety property, and it holds structurally, not just by
       // this check: a fetch failure must never close a live job.
-      if (!dryRun) {
+      if (!dryRun && runProvidesClosureEvidence(status, salvaged)) {
         // [current run, previous trustworthy run] — a role closes only when
         // absent from both, so nothing found today is ever closed today.
         //
@@ -751,6 +791,7 @@ export async function crawlCompany(
           new_roles: newRoles,
           role_titles: seenTitles,
           status,
+          salvaged,
           error: errorMessage ?? null,
         })
         .eq("id", runId);

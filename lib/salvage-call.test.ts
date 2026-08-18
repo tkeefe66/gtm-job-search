@@ -67,7 +67,7 @@ describe("parseOrSalvage on prose", () => {
 
     await parseOrSalvage({
       raw: PROSE,
-      stopReason: null,
+      stopReason: "end_turn",
       key: "startups",
       itemNoun: "company",
       label: "test",
@@ -81,14 +81,11 @@ describe("parseOrSalvage on prose", () => {
     expect(arg).not.toHaveProperty("maxSearches");
   });
 
-  test("a null stop reason still salvages", async () => {
-    // Mutation this catches: treating an unknown/absent stop_reason as
-    // truncation. Every prose response from a provider that does not report
-    // one would become a hard failure — and in the crawler, a dead-page signal.
+  test("a stop_sequence response salvages", async () => {
     complete.mockResolvedValue(JSON.stringify({ roles: [] }));
 
     const out = await parseOrSalvage({
-      raw: PROSE, stopReason: null, key: "roles", itemNoun: "role",
+      raw: PROSE, stopReason: "stop_sequence", key: "roles", itemNoun: "role",
       label: "test", extract: arrayUnder("roles"),
     });
 
@@ -96,7 +93,33 @@ describe("parseOrSalvage on prose", () => {
   });
 });
 
-describe("parseOrSalvage on a truncated response", () => {
+describe("parseOrSalvage on an incomplete response", () => {
+  test("a PAUSED turn rethrows without calling the model", async () => {
+    // Mutation this catches: the denylist gate that only failed on max_tokens.
+    // pause_turn is what a long web_search turn returns, which is exactly the
+    // call this wraps — the likeliest incomplete case on this path.
+    await expect(
+      parseOrSalvage({
+        raw: PROSE, stopReason: "pause_turn", key: "roles", itemNoun: "role",
+        label: "test", extract: arrayUnder("roles"),
+      })
+    ).rejects.toThrow();
+
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  test("a null stop reason rethrows without calling the model", async () => {
+    // Fails closed: an unreported stop reason is not evidence of completeness.
+    await expect(
+      parseOrSalvage({
+        raw: PROSE, stopReason: null, key: "roles", itemNoun: "role",
+        label: "test", extract: arrayUnder("roles"),
+      })
+    ).rejects.toThrow();
+
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   test("rethrows without calling the model", async () => {
     // Mutation this catches: dropping the stop_reason gate so truncation
     // salvages too. Re-reading incomplete narration manufactures a confident

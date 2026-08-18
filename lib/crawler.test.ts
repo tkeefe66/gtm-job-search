@@ -21,6 +21,7 @@ import {
   closureRunsFromRows,
   LAST_TRUSTWORTHY_RUN_SQL,
   rolesFromRaw,
+  runProvidesClosureEvidence,
   runsEligibleForClosure,
   STALE_POSTING_CANDIDATES_SQL,
   titlesToClose,
@@ -415,6 +416,50 @@ describe("STALE_POSTING_CANDIDATES_SQL", () => {
 
   test("scopes candidates to untouched jobs only (status = 'New')", () => {
     expect(STALE_POSTING_CANDIDATES_SQL).toContain("status = 'New'");
+  });
+});
+
+describe("runProvidesClosureEvidence", () => {
+  test("a normal run that found roles is evidence", () => {
+    expect(runProvidesClosureEvidence("ok", false)).toBe(true);
+  });
+
+  test("a normal run that found nothing is evidence", () => {
+    // Mutation this catches: excluding 'empty' to be safe. That was tried and
+    // reverted (ruling 2026-08-12) — a company taking down its last posting is
+    // the commonest real closure, and excluding empty meant it never closed.
+    expect(runProvidesClosureEvidence("empty", false)).toBe(true);
+  });
+
+  test("a SALVAGED run is NOT evidence, even when it found roles", () => {
+    // Mutation this catches: gating on `salvaged && rolesFound === 0` instead
+    // of on `salvaged` alone. A salvaged non-empty run transcribes whatever the
+    // prose happened to mention, which is not a complete listing — closing
+    // every title absent from it would close roles the prose merely omitted.
+    expect(runProvidesClosureEvidence("ok", true)).toBe(false);
+  });
+
+  test("a salvaged run that found nothing is NOT evidence", () => {
+    // The case this whole column exists for: prose meaning "I could not reach
+    // the page" salvages to an empty array, which is indistinguishable from
+    // "this company lists nothing" unless provenance is recorded.
+    expect(runProvidesClosureEvidence("empty", true)).toBe(false);
+  });
+
+  test("a failed run is never evidence", () => {
+    expect(runProvidesClosureEvidence("error", false)).toBe(false);
+    expect(runProvidesClosureEvidence("needs_url", false)).toBe(false);
+  });
+});
+
+describe("LAST_TRUSTWORTHY_RUN_SQL", () => {
+  test("excludes salvaged runs", () => {
+    // The SQL and runProvidesClosureEvidence must agree: the SQL picks the
+    // PREVIOUS run used as evidence, the function gates the CURRENT one.
+    // rawQuery's row type is an assertion, not inferred from this string, so a
+    // dropped clause compiles clean and silently re-opens the hazard.
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("salvaged");
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toMatch(/not\s+salvaged|salvaged\s*=\s*false/);
   });
 });
 

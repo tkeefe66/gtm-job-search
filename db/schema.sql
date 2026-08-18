@@ -134,6 +134,11 @@ create table if not exists crawl_runs (
   new_roles    integer not null default 0,
   role_titles  jsonb not null default '[]',
   status       text not null,
+  -- True when this run's roles were RECOVERED from a prose response rather than
+  -- parsed directly (lib/salvage-call.ts). A salvaged run carries no listing
+  -- evidence and is excluded from LAST_TRUSTWORTHY_RUN_SQL — see
+  -- db/migrations/011_crawl_runs_salvaged.sql for why.
+  salvaged     boolean not null default false,
   error        text
 );
 create index if not exists crawl_runs_company_idx on crawl_runs (company, started_at desc);

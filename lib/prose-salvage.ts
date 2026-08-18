@@ -27,11 +27,21 @@
 // and flows through the normal path. No new CrawlStatus, no new trust rule.
 
 /**
- * Anthropic's stop_reason for "I hit max_tokens mid-sentence". Named rather
- * than inlined because the whole safety property below turns on this one
- * comparison.
+ * The stop reasons that mean the model FINISHED SAYING WHAT IT HAD TO SAY.
+ *
+ * An ALLOWLIST, not a denylist, and that inversion is the whole safety
+ * property. The first version of this gate failed only on "max_tokens" and
+ * salvaged everything else — which silently included `pause_turn`, the stop
+ * reason a long web_search turn returns when the model pauses mid-flight. The
+ * crawler's search tier IS that kind of turn, so the one incomplete case most
+ * likely to occur on this code path was the one being treated as complete.
+ * `refusal` (a non-answer) and `tool_use` (waiting on a tool) were wrong for
+ * the same reason.
+ *
+ * Full stop_reason vocabulary: end_turn, stop_sequence, max_tokens, tool_use,
+ * pause_turn, refusal. Only the first two mean "complete".
  */
-export const TRUNCATION_STOP_REASON = "max_tokens";
+const COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence"]);
 
 export type SalvageDecision = "salvage" | "fail";
 
@@ -39,21 +49,24 @@ export type SalvageDecision = "salvage" | "fail";
  * Whether an unparseable response is worth re-reading, given how the model
  * stopped.
  *
- * TRUNCATION IS THE CASE THAT MUST FAIL. A response cut off at max_tokens is
- * incomplete narration: the roles it was about to list may never have been
- * emitted. Re-reading it under constrained decoding would produce a confident
- * `{"roles": []}` from a sentence that was still mid-thought, and that empty
- * answer is trusted as closure evidence downstream. So truncation keeps the
- * old behaviour — throw, score the run "error" — which is correct for it: a
- * truncated run genuinely did fail, and a raised maxTokens is the real fix.
+ * ONLY A CONFIRMED-COMPLETE ANSWER IS SALVAGED. Re-reading an incomplete one
+ * under constrained decoding manufactures a confident `{"roles": []}` out of a
+ * sentence that was still mid-thought — and an empty result is trusted as
+ * evidence that a company lists nothing, which closes live postings. So
+ * anything not positively known to be complete rethrows and the run fails, the
+ * behaviour that existed before salvage was added.
  *
- * Everything else salvages, INCLUDING an absent stop_reason. A provider that
- * does not report one must not have every prose response scored as a dead
- * page; the salvage call is cheap and its worst case is an empty result from
- * an honest re-read.
+ * A null stop reason therefore FAILS. That is a deliberate reversal: an earlier
+ * version salvaged on null so a provider that does not report stop reasons
+ * would not have every prose response scored as a dead page. The closure hazard
+ * outranks it — assuming completeness is exactly what lets a truncated answer
+ * close a job. A provider that cannot report stop reasons needs its adapter to
+ * map its own vocabulary onto these values, not a permissive default here.
  */
 export function salvageDecisionFor(stopReason: string | null): SalvageDecision {
-  return stopReason === TRUNCATION_STOP_REASON ? "fail" : "salvage";
+  return stopReason !== null && COMPLETE_STOP_REASONS.has(stopReason)
+    ? "salvage"
+    : "fail";
 }
 
 export const SALVAGE_SYSTEM =

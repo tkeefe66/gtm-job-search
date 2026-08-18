@@ -11,27 +11,58 @@ import {
 // and crawlCompany's catch scored it status "error" — which stamps
 // failing_since and starts the dead-page clock on a careers page that was fine.
 describe("salvageDecisionFor", () => {
-  test("a truncated response is NOT salvageable", () => {
-    // The text is incomplete narration. Reformatting it would turn "the model
-    // got cut off" into a confident empty answer, and "empty" is trusted as
-    // closure evidence (LAST_TRUSTWORTHY_RUN_SQL) — it would close live roles.
-    expect(salvageDecisionFor("max_tokens")).toBe("fail");
-  });
-
-  test("a completed response that simply ignored the JSON instruction is salvageable", () => {
+  test("a completed response that ignored the JSON instruction is salvageable", () => {
+    // Mutation this catches: an allowlist that forgot end_turn — nothing would
+    // ever salvage and the whole feature would be dead code that still passes
+    // every failure-path test.
     expect(salvageDecisionFor("end_turn")).toBe("salvage");
   });
 
-  test("an unknown stop reason is salvageable", () => {
-    // Salvage is the safe direction for anything unrecognised: it re-reads the
-    // model's own words under constrained decoding rather than guessing.
+  test("a response ended by a stop sequence is salvageable", () => {
     expect(salvageDecisionFor("stop_sequence")).toBe("salvage");
   });
 
-  test("a missing stop reason does not crash and is treated as salvageable", () => {
-    // A provider that does not report stop_reason must not be pinned to the
-    // failure path — that would make every prose response a dead-page signal.
-    expect(salvageDecisionFor(null)).toBe("salvage");
+  test("a truncated response is NOT salvageable", () => {
+    // Mutation this catches: treating max_tokens as complete. The text is
+    // incomplete narration; re-reading it manufactures a confident empty
+    // answer, and an empty answer is trusted as closure evidence.
+    expect(salvageDecisionFor("max_tokens")).toBe("fail");
+  });
+
+  test("a PAUSED turn is NOT salvageable", () => {
+    // Mutation this catches: the original denylist gate (`=== "max_tokens"`),
+    // under which pause_turn salvaged. This is the case that matters most on
+    // this code path: pause_turn is what a long web_search turn returns when
+    // the model pauses mid-flight, and the search tier is exactly that kind of
+    // turn. A paused turn is INCOMPLETE — same category as max_tokens.
+    expect(salvageDecisionFor("pause_turn")).toBe("fail");
+  });
+
+  test("a refusal is NOT salvageable", () => {
+    // Mutation this catches: the same denylist. A refusal is a non-answer;
+    // salvaging it yields an empty array that reads as "this company lists
+    // nothing", which can close live roles.
+    expect(salvageDecisionFor("refusal")).toBe("fail");
+  });
+
+  test("an incomplete tool_use turn is NOT salvageable", () => {
+    expect(salvageDecisionFor("tool_use")).toBe("fail");
+  });
+
+  test("an UNRECOGNISED stop reason is NOT salvageable", () => {
+    // Mutation this catches: a denylist default. Allowlist means a stop reason
+    // this code has never heard of — a new API value, or another provider's
+    // vocabulary such as OpenAI's "length" for truncation — fails closed
+    // instead of being assumed complete.
+    expect(salvageDecisionFor("some_future_reason")).toBe("fail");
+  });
+
+  test("a missing stop reason is NOT salvageable", () => {
+    // Deliberate reversal of the original behaviour, and the cost is real: a
+    // provider that does not report stop_reason never salvages, so its prose
+    // responses stay hard failures. Accepted because the alternative — assuming
+    // completeness — is what lets a truncated answer close live jobs.
+    expect(salvageDecisionFor(null)).toBe("fail");
   });
 });
 
