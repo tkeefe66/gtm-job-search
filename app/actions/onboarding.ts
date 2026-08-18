@@ -287,8 +287,11 @@ export async function saveProfile(
       // /settings edits the row, and scoringInputsFrom (lib/search-criteria.ts)
       // resolves `criteria.fitBrain || profile.fitBrain` — the ROW wins, the
       // profile is only the fallback. Writing only the profile here would leave
-      // the row empty, and every scoreFit call would fall through to whatever
-      // the row degrades to instead of this tenant's brain. Writing only the
+      // the row empty: emptySearchReason (lib/search-criteria.ts) tests
+      // `criteria.fitBrain.trim()`, so role search would refuse with "your fit
+      // brain is empty" even though the profile has one, and /settings reads
+      // the row for its fit-brain editor, so the user would see an empty box
+      // and could overwrite their own brain by saving it. Writing only the
       // row would leave /settings displaying a brain the profile never agreed
       // with. Both must be written for the same reason app/actions/settings.ts
       // documents on saveProfileFields: the row already wins every read, so
