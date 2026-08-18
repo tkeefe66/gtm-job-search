@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
     url: string;
     vendor: string;
     slug: string;
-    precision: "posting" | "absent" | "ambiguous";
+    precision: "posting" | "absent" | "ambiguous" | "empty";
   } | null,
 }));
 
@@ -152,6 +152,31 @@ describe("never_live records only the definitive death signal", () => {
     });
 
     expect(insertedRow().status).toBe("Posting Closed");
+    expect(insertedRow().never_live).toBe(false);
+  });
+
+  // `empty` is a NEW precision value, added so the link-health report can tell
+  // "this board lists nothing" apart from "several postings could be this
+  // role". Only `absent` may close a role, and this pins that the new value did
+  // not quietly join it — a fourth branch that closed here would mark a role
+  // Posting Closed because a GUESSED slug found an empty board, and hide it if
+  // it also 404'd.
+  test("a role whose employer board is empty is untouched — New, not flagged", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "live";
+    h.resolved = {
+      url: "https://job-boards.greenhouse.io/clay",
+      vendor: "greenhouse",
+      slug: "clay",
+      precision: "empty",
+    };
+
+    await ingestRoles({
+      ...OPTS,
+      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+    });
+
+    expect(insertedRow().status).toBe("New");
     expect(insertedRow().never_live).toBe(false);
   });
 

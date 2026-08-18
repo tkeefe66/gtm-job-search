@@ -8,6 +8,7 @@ import { classifyJobLink } from "@/lib/job-link";
 import { resolveEmployerLink } from "@/lib/resolve-job-link";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { bucketFor } from "@/lib/job-statuses";
+import type { UnclearReason } from "@/lib/link-report";
 import type { Job } from "@/lib/types";
 
 /**
@@ -29,7 +30,10 @@ import type { Job } from "@/lib/types";
  * An AMBIGUOUS board match — several postings could be this role — is reported
  * and never acted on. Closing a live role over a wording difference is a worse
  * failure than leaving a dead one open, so the ambiguous case keeps a human in
- * the loop and the report hands the selection to the bulk status control.
+ * the loop and the report hands the selection to the bulk status control. An
+ * EMPTY board is reported the same way and under the same rule, but as its own
+ * reason: it means the company hires somewhere this pass did not look, or the
+ * guessed slug found a stranger's board.
  */
 
 const BATCH = 5;
@@ -39,6 +43,12 @@ export interface LinkRepairRow {
   company: string;
   role_title: string;
   boardUrl: string;
+  /**
+   * Which undecidable case this is. Carried per row rather than split into two
+   * report fields so the banner can group them itself (`splitUnclear`) without
+   * this action deciding how they are presented.
+   */
+  reason: UnclearReason;
 }
 
 export interface LinkRepairReport {
@@ -49,7 +59,11 @@ export interface LinkRepairReport {
   closed: number;
   /** Rows the employer's own board no longer lists, and are now closed. */
   closedUnlisted: number;
-  /** Board found but the match was ambiguous — reported, never auto-closed. */
+  /**
+   * Board found but the outcome was undecidable — reported, never auto-closed.
+   * Two reasons live here (see UnclearReason): several postings could be this
+   * role, or the board lists nothing at all.
+   */
   unclear: LinkRepairRow[];
   /** Aggregator links we could not improve at all. */
   unresolved: number;
@@ -155,13 +169,18 @@ async function repairOne(job: Job): Promise<RepairOutcome> {
       if (failure === undefined) out.closedUnlisted = true;
       else console.error(`repairJobLinks: ${failure}`);
     } else if (resolved) {
-      // `ambiguous`: the board has near-matches and we cannot tell which is
-      // this role. Reported for the user, never closed automatically.
+      // `ambiguous` (near-matches we cannot tell apart) or `empty` (a board
+      // under this company's slug that lists nothing at all). Neither closes a
+      // role; both are reported for the user. The reason travels with the row
+      // because the two need different sentences — an empty board is checked
+      // against the company's real careers page, since the slug was a GUESS and
+      // the board may not be theirs.
       out.unclear = {
         id: job.id,
         company: job.company,
         role_title: job.role_title,
         boardUrl: resolved.url,
+        reason: resolved.precision === "empty" ? "empty" : "ambiguous",
       };
     } else {
       out.unresolved = true;

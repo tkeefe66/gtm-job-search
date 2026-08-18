@@ -29,11 +29,21 @@ export interface ResolvedLink {
    * `ambiguous` — the board exists and more than one posting could be this
    *   role. Reported, never acted on: closing here would kill a live role over
    *   a wording difference.
+   * `empty` — a board exists under this company's slug but lists NOTHING, on
+   *   any vendor. Kept separate from `ambiguous` because the two mean different
+   *   things to a human: "several postings look like this" is a disambiguation
+   *   task, while "this board is empty" usually means the company hires
+   *   somewhere else — or that the slug guess landed on a stranger's board.
+   *   Reported under its own sentence, and acted on by no caller.
    *
-   * For both non-posting outcomes `url` is the company's board page, which is
+   * For every non-posting outcome `url` is the company's board page, which is
    * still a better destination than a reseller's expired copy.
+   *
+   * ONLY `absent` may close a role. Any caller adding a branch here must leave
+   * the other three alone — a test in lib/ingest-roles.test.ts pins that
+   * `empty` does not close anything.
    */
-  precision: "posting" | "absent" | "ambiguous";
+  precision: "posting" | "absent" | "ambiguous" | "empty";
 }
 
 export async function resolveEmployerLink(
@@ -43,8 +53,8 @@ export async function resolveEmployerLink(
   // An empty board found early must not end the search: a company can leave a
   // stale, empty board on one vendor while hiring through another (Asseti has
   // an empty Breezy board and eight open roles on Workable). Held aside, used
-  // only if nothing better turns up, and downgraded to `ambiguous` so it can
-  // never close a role on its own.
+  // only if nothing better turns up, and reported as `empty` so it can never
+  // close a role on its own.
   let emptyBoard: ResolvedLink | null = null;
 
   for (const slug of companySlugs(company)) {
@@ -55,7 +65,7 @@ export async function resolveEmployerLink(
 
       const match = findPosting(postings, roleTitle);
       if (match.kind === "empty") {
-        emptyBoard ??= { url: boardPageUrl(vendor, slug), vendor, slug, precision: "ambiguous" };
+        emptyBoard ??= { url: boardPageUrl(vendor, slug), vendor, slug, precision: "empty" };
         continue;
       }
       return match.kind === "posting"

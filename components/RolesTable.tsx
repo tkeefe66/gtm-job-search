@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
+import { splitUnclear } from "@/lib/link-report";
 import { scoreFit } from "@/app/actions/parse-role";
 import { type Job } from "@/lib/types";
 import {
@@ -214,9 +215,47 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
   // Ids, not rows: the rows are replaced wholesale by every load() and by every
   // optimistic edit, so holding objects here would pin stale copies.
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /**
+   * The bar that becomes the bulk status control once anything is ticked.
+   *
+   * "Select all N" in the link report ticks rows whose control is several
+   * hundred pixels below the fold, so without scrolling to it the click looks
+   * like it did nothing — which is exactly how it read to the first person who
+   * tried it.
+   */
+  const bulkBarRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Ticks a report group's rows and takes the user to the control that acts on
+   * them.
+   *
+   * The filter reset is not cosmetic: handleBulkStatus writes only to rows in
+   * VIEW (selectionInView), so a selection made while a search or a status chip
+   * is narrowing the table would silently skip the rows it just ticked.
+   */
+  function selectForBulk(rows: { id: string }[]) {
+    setSelected(new Set(rows.map((r) => r.id)));
+    setStatusFilter({ kind: "sentinel", key: "Open" });
+    // After the state above has rendered the bar in its selected form, not
+    // before — scrolling to it in the same tick lands on the pre-selection
+    // layout.
+    requestAnimationFrame(() =>
+      bulkBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+    );
+  }
   const [applying, setApplying] = useState(false);
   const [checkingLinks, setCheckingLinks] = useState(false);
   const [linkReport, setLinkReport] = useState<LinkRepairReport | null>(null);
+
+  /**
+   * The report's undecidable rows, split by reason. Computed once per report
+   * rather than per group: the banner asks for it twice, and splitUnclear walks
+   * the list once for each group it returns.
+   */
+  const unclearGroups = useMemo(
+    () => splitUnclear(linkReport?.unclear ?? []),
+    [linkReport]
+  );
 
   /**
    * Refetches the table and reports its own failure. Never throws — a load
@@ -708,41 +747,29 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           </div>
 
           {linkReport.unclear.length > 0 && (
-            <div className="mt-3 border-t border-slate pt-3">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="text-ink">
-                  {linkReport.unclear.length} could be more than one posting on the employer&apos;s
-                  board — check before closing.
-                </span>
-                {/* Deliberately not auto-closed: several postings matched the
-                    title, so closing would be a guess at a live role. Handing
-                    the selection to the bulk control keeps the decision with
-                    the user and still makes acting on it one click. */}
-                <button
-                  onClick={() => {
-                    setSelected(new Set(linkReport.unclear.map((r) => r.id)));
-                    setStatusFilter({ kind: "sentinel", key: "Open" });
-                  }}
-                  className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
-                >
-                  Select all {linkReport.unclear.length}
-                </button>
-              </div>
-              <ul className="space-y-0.5 text-xs text-ink/60">
-                {linkReport.unclear.map((r) => (
-                  <li key={r.id}>
-                    {r.company} · {r.role_title} —{" "}
-                    <a
-                      href={r.boardUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline underline-offset-2 hover:text-ink"
-                    >
-                      their board
-                    </a>
-                  </li>
-                ))}
-              </ul>
+            <div className="mt-3 space-y-3 border-t border-slate pt-3">
+              {/* Two reasons, two sentences. They were one bucket reading "could
+                  be more than one posting on the employer's board" until
+                  someone clicked through to a board with no jobs on it at all —
+                  a false sentence, and the wrong check to go and make. Neither
+                  is auto-closed: closing on either would be a guess at a live
+                  role, and the board itself was found by guessing a slug. */}
+              {unclearGroups.ambiguous.length > 0 && (
+                <UnclearGroup
+                  rows={unclearGroups.ambiguous}
+                  sentence="could be more than one posting on the employer's board — check before closing."
+                  linkLabel="their board"
+                  onSelectAll={selectForBulk}
+                />
+              )}
+              {unclearGroups.empty.length > 0 && (
+                <UnclearGroup
+                  rows={unclearGroups.empty}
+                  sentence="point at an employer board that lists no jobs at all. The company may hire somewhere this pass did not look, or the guessed board may not be theirs — check their own careers page before closing."
+                  linkLabel="the empty board"
+                  onSelectAll={selectForBulk}
+                />
+              )}
             </div>
           )}
         </div>
@@ -902,7 +929,10 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         <div className="rounded-lg border border-slate bg-white">
           {/* Sort bar — becomes the bulk bar as soon as anything is ticked, so
               the two never compete for the same strip of screen. */}
-          <div className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50">
+          <div
+            ref={bulkBarRef}
+            className="flex items-center gap-1 border-b border-slate bg-canvas px-4 py-2 text-xs text-ink/50"
+          >
             <input
               type="checkbox"
               checked={selectedCount > 0 && selectedCount === filtered.length}
@@ -1140,6 +1170,66 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
  * Takes the bucket rather than the job, so it reuses the one `bucketOf`
  * already computed instead of re-parsing (and re-logging) the salary string.
  */
+// One reason's worth of the "Check links" report: the sentence, the rows, and
+// the button that hands them to the bulk status control.
+//
+// Rendered once per UnclearReason rather than once for the whole report,
+// because the two reasons are different questions for the reader — "which of
+// these postings is mine?" against "why does this board have nothing on it?" —
+// and the link at the end of each row goes to the same board page under two
+// different meanings.
+//
+// `rows` is structural, not LinkRepairRow: this component needs an id, a
+// company, a title and a URL, and typing it that way keeps the "use server"
+// module out of a client component's import graph for a type it can infer.
+function UnclearGroup({
+  rows,
+  sentence,
+  linkLabel,
+  onSelectAll,
+}: {
+  rows: { id: string; company: string; role_title: string; boardUrl: string }[];
+  sentence: string;
+  linkLabel: string;
+  onSelectAll: (rows: { id: string }[]) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-ink">
+          {rows.length} {sentence}
+        </span>
+        {/* Deliberately not auto-closed — see the report's own comment. The
+            button ticks the rows and scrolls to the control that acts on them;
+            without the scroll it changes state below the fold and reads as a
+            dead button. */}
+        <button
+          onClick={() => onSelectAll(rows)}
+          className="rounded border border-ink px-2 py-0.5 text-xs font-medium text-ink transition hover:bg-ink hover:text-white"
+        >
+          Select all {rows.length}
+        </button>
+        <span className="text-xs text-ink/40">then pick from &ldquo;Set status&rdquo; above the table</span>
+      </div>
+      <ul className="space-y-0.5 text-xs text-ink/60">
+        {rows.map((r) => (
+          <li key={r.id}>
+            {r.company} &middot; {r.role_title} &mdash;{" "}
+            <a
+              href={r.boardUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              {linkLabel}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // When this role was found. Carries BOTH the calendar date and the age: the
 // date is the fact ("was this before or after I talked to them?"), the age is
 // the judgement ("is this stale?"), and neither substitutes for the other at a
