@@ -56,7 +56,8 @@ describe("hiringSignalSystem", () => {
       `showing this signal for the given period: funding rounds — do not ` +
       `curate down to a short list, capture all notable ones. Search ` +
       `multiple sources: ${sources}. Focus exclusively on Series B and ` +
-      `above. Prioritize completeness — it is better to return 20 results ` +
+      `above. Exclude seed, pre-seed, and Series A rounds. ` +
+      `Prioritize completeness — it is better to return 20 results ` +
       `than to miss a major one. Return ONLY valid JSON, no markdown, no ` +
       `preamble.`;
     expect(hiringSignalSystem(D.hiringSignal)).toBe(expected);
@@ -90,6 +91,10 @@ describe("hiringSignalSystem", () => {
           name,
           sources: ["Source A"],
           qualifier: "the qualifying tier",
+          // "" so these cases keep pinning ONLY the grammatical-number
+          // construction they exist for — an exclusion clause here would
+          // change three expected strings for an unrelated reason.
+          exclusions: "",
           hasRecency,
           extraFields: [],
         };
@@ -130,6 +135,7 @@ describe("hiringSignalSystem", () => {
       name: "large defence contract awards",
       sources: ["Source A"],
       qualifier: "",
+      exclusions: "",
       hasRecency: true,
       extraFields: [],
     };
@@ -152,6 +158,7 @@ describe("hiringSignalSystem", () => {
       name: "SYNTHETIC CONTRACT AWARDS",
       sources: ["Synthetic Trade Press", "Synthetic Registry"],
       qualifier: "SYNTHETIC QUALIFIER TIER",
+      exclusions: "",
       hasRecency: true,
       extraFields: ["synthetic_value"],
     };
@@ -179,7 +186,8 @@ describe("buildHiringSignalPrompt", () => {
     const sources = joinSources(D.hiringSignal.sources);
     const expected =
       `Search ${sources} for every employer showing this signal: funding ` +
-      `rounds, announced ${period}. Only include Series B and above. Do ` +
+      `rounds, announced ${period}. Only include Series B and above. ` +
+      `Exclude seed, pre-seed, and Series A rounds. Do ` +
       `multiple searches to ensure ` +
       `completeness — vary the query wording, e.g. "Series B and above ` +
       `funding rounds ${period}" and "funding rounds ${period}". Return up ` +
@@ -223,6 +231,7 @@ describe("buildHiringSignalPrompt", () => {
         name: "Magnet Recognition Program designation",
         sources: ["Source A"],
         qualifier: "the qualifying tier",
+        exclusions: "",
         hasRecency: true,
         extraFields: [],
       },
@@ -278,6 +287,7 @@ describe("buildHiringSignalPrompt", () => {
       name: "large defence contract awards",
       sources: ["Source A"],
       qualifier: "",
+      exclusions: "",
       hasRecency: true,
       extraFields: [],
     };
@@ -308,6 +318,7 @@ describe("buildHiringSignalPrompt", () => {
       name: "SYNTHETIC CONTRACT AWARDS",
       sources: ["Synthetic Trade Press"],
       qualifier: "SYNTHETIC QUALIFIER TIER",
+      exclusions: "",
       hasRecency: true,
       extraFields: ["synthetic_value_field"],
     };
@@ -325,5 +336,70 @@ describe("buildHiringSignalPrompt", () => {
     expect(rendered).not.toContain("Series B");
     expect(rendered).not.toContain("TechCrunch");
     expect(rendered).not.toContain("funding rounds");
+  });
+});
+
+// The exclusion clause restores what the genericisation pass dropped: the old
+// hardcoded prompt told the model both where to aim ("Series B and above") and
+// what to throw away ("exclude seed, pre-seed, and Series A rounds"), and only
+// the first survived. These pin the seam, which is where the guarded-splice
+// pattern in this file fails — a dangling " ." or a doubled space.
+describe("exclusions", () => {
+  const base = {
+    name: "contract awards",
+    sources: ["Source A"],
+    qualifier: "over $50M",
+    exclusions: "task orders and re-competes",
+    hasRecency: true,
+    extraFields: [],
+  };
+
+  test("renders after the qualifier in the system prompt", () => {
+    expect(hiringSignalSystem(base)).toContain(
+      "Focus exclusively on over $50M. Exclude task orders and re-competes. Prioritize"
+    );
+  });
+
+  test("renders after the qualifier in the windowed user prompt", () => {
+    const out = buildHiringSignalPrompt({
+      signal: base,
+      criteria: DEFAULT_CRITERIA,
+      period: "in the past 7 days",
+      focus: "",
+      now: NOW,
+    });
+    expect(out).toContain(
+      "Only include over $50M. Exclude task orders and re-competes. Do multiple"
+    );
+  });
+
+  test("renders in the standing-property user prompt too", () => {
+    const out = buildHiringSignalPrompt({
+      signal: { ...base, hasRecency: false },
+      criteria: DEFAULT_CRITERIA,
+      period: null,
+      focus: "",
+      now: NOW,
+    });
+    expect(out).toContain(
+      "current holders of this property: contract awards. Only include over " +
+        "$50M. Exclude task orders and re-competes. Do multiple"
+    );
+  });
+
+  // The seam. Both optional clauses empty must leave ONE space between the
+  // sentences either side — not two, and no orphaned "Exclude .".
+  test("vanishes cleanly when empty, alongside an empty qualifier", () => {
+    const bare = { ...base, qualifier: "", exclusions: "" };
+    const out = hiringSignalSystem(bare);
+    expect(out).toContain("Source A. Prioritize completeness");
+    expect(out).not.toContain("Exclude");
+    expect(out).not.toContain("  ");
+  });
+
+  test("an empty exclusion does not disturb a present qualifier", () => {
+    const out = hiringSignalSystem({ ...base, exclusions: "" });
+    expect(out).toContain("Focus exclusively on over $50M. Prioritize");
+    expect(out).not.toContain("  ");
   });
 });

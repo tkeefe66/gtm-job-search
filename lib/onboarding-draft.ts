@@ -41,6 +41,7 @@ export interface ProfileDraft {
   hiringSignalName: string;
   hiringSignalSources: string;
   hiringSignalQualifier: string;
+  hiringSignalExclusions: string;
   hiringSignalHasRecency: boolean;
   hiringSignalExtraFields: string;
   toolsAreWeak: boolean;
@@ -76,6 +77,7 @@ export function draftFromGenerated(g: GeneratedProfile): ProfileDraft {
     hiringSignalName: g.hiringSignal.name,
     hiringSignalSources: g.hiringSignal.sources.join("\n"),
     hiringSignalQualifier: g.hiringSignal.qualifier,
+    hiringSignalExclusions: g.hiringSignal.exclusions,
     hiringSignalHasRecency: g.hiringSignal.hasRecency,
     hiringSignalExtraFields: g.hiringSignal.extraFields.join("\n"),
     toolsAreWeak: g.toolsAreWeak,
@@ -101,6 +103,7 @@ export function payloadFrom(
     name: draft.hiringSignalName,
     sources: toList(draft.hiringSignalSources),
     qualifier: draft.hiringSignalQualifier,
+    exclusions: draft.hiringSignalExclusions,
     hasRecency: draft.hiringSignalHasRecency,
     extraFields: toList(draft.hiringSignalExtraFields),
   };

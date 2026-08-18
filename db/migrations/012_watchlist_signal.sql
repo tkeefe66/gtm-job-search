@@ -1,0 +1,29 @@
+-- The hiring signal that put a company on the watchlist, carried through to the
+-- Watchlist page.
+--
+-- WHY THIS WAS MISSING. Discover was rebuilt to search the tenant's own
+-- `HiringSignal` instead of funding rounds, so a Startup now carries a generic
+-- `signal` sentence plus an `extras` object keyed by that tenant's own
+-- `extraFields`. `watchlist`, however, still had only the venture-shaped
+-- columns the old funding-analyst prompt produced — raised, stage,
+-- lead_investor, founded, traction, category — and `withLegacyExtraFields`
+-- (app/actions/discover.ts) copies `extras` UP into those six names purely so
+-- this table keeps working. For the shipped funding profile those keys happen
+-- to coincide. For a defence contractor or a hospital they do not: their
+-- extras are contract_value / awarding_agency / bed_count / magnet_status, the
+-- copy finds nothing, and the company's actual hiring signal reached this page
+-- in no form at all.
+--
+-- `extras` is jsonb rather than more columns for the reason app_settings is:
+-- the keys are per-tenant free text generated at onboarding, so a column per
+-- key is not expressible. The six legacy columns stay — existing rows hold
+-- real values in them, and Watchlist still renders them as the fallback for a
+-- row predating this migration.
+--
+-- NO GRANT NEEDED. Migration 009's column-list revoke is scoped to `users`;
+-- `watchlist` still holds migration 003's table-level grant to app_rw, and a
+-- table-level grant covers columns added later. RLS is likewise unaffected —
+-- 003's tenant_isolation policy is a row predicate on tenant_id and says
+-- nothing about the column list.
+alter table watchlist add column if not exists signal text;
+alter table watchlist add column if not exists extras jsonb not null default '{}'::jsonb;

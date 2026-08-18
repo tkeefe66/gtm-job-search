@@ -194,6 +194,21 @@ export interface TrackedCompany {
   /** When the current unbroken run of failures began; null when healthy. */
   failing_since: string | null;
   source: string | null;
+  /**
+   * The one-sentence hiring signal that put this company on the watchlist —
+   * "Won $2.1B USAF sustainment contract", "Raised $400M Series D led by
+   * a16z". Null for rows added before db/migrations/012, which fall back to
+   * the legacy stage/raised/category tags on the Watchlist page.
+   */
+  signal: string | null;
+  /**
+   * Per-signal detail keyed by the tenant's own `hiringSignal.extraFields`.
+   * `{}` where the tenant's profile named no extra fields, or for rows
+   * predating 012. NOT the six legacy columns above — those are what the
+   * shipped funding profile's extras happen to be called, and a tenant whose
+   * signal is contract awards or facility licences fills this instead.
+   */
+  extras: Record<string, string>;
 }
 
 export interface CrawlRun {

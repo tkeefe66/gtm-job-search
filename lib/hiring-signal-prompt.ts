@@ -32,14 +32,19 @@
 // — it comes from `criteria.locationRule`, not from the signal, so it is
 // out of this task's scope), and the closing "Return ONLY…" instructions.
 //
-// BEHAVIOUR CHANGE, not merely lost detail: the old prompt's exclusion
-// clause ("exclude seed, pre-seed, and Series A rounds") is gone, with
-// nothing replacing it — `qualifier` alone ("Series B and above") states the
-// floor but no longer explicitly rules out what's below it. For the shipped
-// funding profile this can widen the existing user's result set to include
-// a round the model judges close enough to "Series B and above" that the
-// old exclusion clause would have blocked. Accepted as part of genericizing
-// this prompt; not silent, recorded here for whoever next changes it.
+// RESOLVED, and left here because the reasoning still governs the shape.
+// This file previously recorded a behaviour change: the old prompt's
+// exclusion clause ("exclude seed, pre-seed, and Series A rounds") was gone
+// with nothing replacing it, so `qualifier` alone ("Series B and above")
+// stated the floor but no longer ruled out what sat below it, and the
+// shipped funding profile's result set could widen to include a round the
+// model judged close enough. `HiringSignal.exclusions` (lib/profile.ts) now
+// carries it, rendered by exclusionSentence() below.
+//
+// It is a SECOND field rather than a longer `qualifier`, for reason 2 above
+// and only reason 2: `qualifier` is spliced into the example search queries,
+// where exclusion prose would turn a billed web search into a garbage query
+// string. `exclusions` is prompt-only and never reaches a query.
 
 import { dateContextLine, type Criteria } from "@/lib/search-criteria";
 import type { HiringSignal } from "@/lib/profile";
@@ -69,6 +74,15 @@ function qualifierSentence(lead: string, qualifier: string): string {
 }
 
 /**
+ * The exclusion sentence, or "" when the tenant's signal rules nothing out.
+ * Owns its own leading space for the same reason qualifierSentence does — the
+ * caller splices it directly with no punctuation around it.
+ */
+function exclusionSentence(exclusions: string): string {
+  return exclusions ? ` Exclude ${exclusions}.` : "";
+}
+
+/**
  * A query-example fragment that leads with the qualifier when there is one,
  * or just `rest` when there isn't — guards the third splice site, inside
  * `exampleQueries` below, where an empty qualifier would otherwise leave a
@@ -94,7 +108,7 @@ export function hiringSignalSystem(signal: HiringSignal): string {
   // name sits in an appositive slot after the colon, where singular or
   // plural both read correctly. This avoids the whole class of agreement
   // bug rather than picking a determiner and hoping.
-  return `You are a ${signal.name} analyst. Your job is to find every employer showing this signal${periodClause}: ${signal.name} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}.${qualifierSentence("Focus exclusively on", signal.qualifier)} Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
+  return `You are a ${signal.name} analyst. Your job is to find every employer showing this signal${periodClause}: ${signal.name} — do not curate down to a short list, capture all notable ones. Search multiple sources: ${joinSources(signal.sources)}.${qualifierSentence("Focus exclusively on", signal.qualifier)}${exclusionSentence(signal.exclusions)} Prioritize completeness — it is better to return 20 results than to miss a major one. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
 export function buildHiringSignalPrompt(args: {
@@ -121,8 +135,8 @@ export function buildHiringSignalPrompt(args: {
   // this task's review, not asked for directly, but the exact defect the
   // review just flagged next door.
   const searchClause = period
-    ? `Search ${sources} for every employer showing this signal: ${signal.name}, announced ${period}.${qualifierSentence("Only include", signal.qualifier)}`
-    : `Search ${sources} for current holders of this property: ${signal.name}.${qualifierSentence("Only include", signal.qualifier)}`;
+    ? `Search ${sources} for every employer showing this signal: ${signal.name}, announced ${period}.${qualifierSentence("Only include", signal.qualifier)}${exclusionSentence(signal.exclusions)}`
+    : `Search ${sources} for current holders of this property: ${signal.name}.${qualifierSentence("Only include", signal.qualifier)}${exclusionSentence(signal.exclusions)}`;
 
   const exampleQueries = period
     ? `Do multiple searches to ensure completeness — vary the query wording, e.g. "${qualifierPrefixed(signal.qualifier, `${signal.name} ${period}`)}" and "${signal.name} ${period}".`

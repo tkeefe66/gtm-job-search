@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   NORMALIZED_COMPANY_SQL,
+  companyIdentityKey,
   normalizeCompanyName,
   normalizeRoleKey,
   normalizeTitle,
@@ -75,5 +76,67 @@ describe("NORMALIZED_COMPANY_SQL", () => {
     // transforms the SQL performs must already have been applied to it, or
     // the two sides cannot meet. Built with an explicit \xa0 escape.
     expect(normalizeCompanyName("  Big" + "\xa0" + " CO  ")).toBe("big co");
+  });
+});
+
+describe("companyIdentityKey", () => {
+  // The case this function exists for. Probe A returned RTX under both
+  // spellings; normalizeCompanyName reports them as two keys, so Discover
+  // rendered two cards for one employer.
+  test("merges a parenthetical alias written in either order", () => {
+    expect(companyIdentityKey("RTX (Raytheon)")).toBe(
+      companyIdentityKey("Raytheon (RTX)")
+    );
+  });
+
+  // Pins that this is NOT normalizeCompanyName wearing a different name: an
+  // implementation that delegated straight to it would fail this and the
+  // test above, which is the whole point of having both.
+  test("is not merely the normalizer under another name", () => {
+    expect(companyIdentityKey("RTX (Raytheon)")).not.toBe(
+      normalizeCompanyName("RTX (Raytheon)")
+    );
+  });
+
+  test("ignores legal-form suffixes and their punctuation", () => {
+    expect(companyIdentityKey("Acme Inc.")).toBe(companyIdentityKey("Acme"));
+    expect(companyIdentityKey("Acme, LLC")).toBe(companyIdentityKey("Acme"));
+  });
+
+  // Without the `meaningful.length > 0` fallback this returns "" and every
+  // all-suffix name collapses onto one card.
+  test("keeps the tokens of a name made only of legal-form words", () => {
+    expect(companyIdentityKey("Ltd")).toBe("ltd");
+    expect(companyIdentityKey("Ltd")).not.toBe(companyIdentityKey("Inc"));
+  });
+
+  // Without the punctuation-only fallback this also returns "", merging every
+  // junk-named row into a single card.
+  test("falls back to the normalized name when there are no word tokens", () => {
+    expect(companyIdentityKey("—")).toBe("—");
+    expect(companyIdentityKey("—")).not.toBe(companyIdentityKey("+++"));
+  });
+
+  test("collapses a token repeated in the name", () => {
+    expect(companyIdentityKey("RTX (RTX)")).toBe(companyIdentityKey("RTX"));
+  });
+
+  test("does not merge employers that merely share a word", () => {
+    expect(companyIdentityKey("Acme Health")).not.toBe(
+      companyIdentityKey("Acme Wealth")
+    );
+  });
+
+  // Pins the \p{L} class. An ASCII-only [a-z0-9] split truncates "Nestlé" to
+  // "nestl", which would make this pass by accident in the wrong direction.
+  test("keeps non-ASCII letters rather than truncating at them", () => {
+    expect(companyIdentityKey("Nestlé")).toBe("nestlé");
+    expect(companyIdentityKey("Nestlé")).not.toBe(companyIdentityKey("Nestl"));
+  });
+
+  test("is order-independent and whitespace-insensitive", () => {
+    expect(companyIdentityKey("  Alpha  Beta ")).toBe(
+      companyIdentityKey("Beta Alpha")
+    );
   });
 });

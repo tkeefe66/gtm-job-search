@@ -36,6 +36,12 @@ describe("DEFAULT_PROFILE", () => {
   test("its hiring signal reproduces today's funding search", () => {
     expect(DEFAULT_PROFILE.hiringSignal.name).toBe("funding rounds");
     expect(DEFAULT_PROFILE.hiringSignal.qualifier).toBe("Series B and above");
+    // Verbatim from the pre-genericisation hardcoded Discover system prompt.
+    // Restoring this closed a documented behaviour change: the qualifier
+    // alone stated the floor without ruling out what sat below it.
+    expect(DEFAULT_PROFILE.hiringSignal.exclusions).toBe(
+      "seed, pre-seed, and Series A rounds"
+    );
     expect(DEFAULT_PROFILE.hiringSignal.hasRecency).toBe(true);
     expect(DEFAULT_PROFILE.hiringSignal.sources).toContain("TechCrunch");
   });
@@ -143,5 +149,34 @@ describe("profileToFitInputs", () => {
 
   test("a null floor stays null", () => {
     expect(profileToFitInputs(DEFAULT_PROFILE, null).compFloor).toBeNull();
+  });
+});
+
+describe("hiringSignal.exclusions", () => {
+  // optionalText, not text: a signal that rules nothing out is a real answer,
+  // and a `text`-style resolver would quietly restore the funding default for
+  // a nurse whose profile deliberately left this blank.
+  test('an explicit "" is kept, not replaced by the default', () => {
+    const p = resolveProfile({ hiringSignal: { exclusions: "" } });
+    expect(p.hiringSignal.exclusions).toBe("");
+  });
+
+  test("a stored value wins", () => {
+    const p = resolveProfile({ hiringSignal: { exclusions: "re-competes" } });
+    expect(p.hiringSignal.exclusions).toBe("re-competes");
+  });
+
+  test("a missing field falls back to the shipped default", () => {
+    const p = resolveProfile({ hiringSignal: { name: "contract awards" } });
+    expect(p.hiringSignal.exclusions).toBe(
+      DEFAULT_PROFILE.hiringSignal.exclusions
+    );
+  });
+
+  test("a wrong-typed value falls back rather than coercing", () => {
+    const p = resolveProfile({ hiringSignal: { exclusions: ["a", "b"] } });
+    expect(p.hiringSignal.exclusions).toBe(
+      DEFAULT_PROFILE.hiringSignal.exclusions
+    );
   });
 });

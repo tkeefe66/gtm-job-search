@@ -15,35 +15,16 @@ import { loadCriteriaAndScoringInputs } from "@/lib/search-criteria";
 import { hiringSignalSystem, buildHiringSignalPrompt } from "@/lib/hiring-signal-prompt";
 import { legacySignalFrom } from "@/lib/legacy-signal";
 import { normalizeCompanyName } from "@/lib/role-key";
+import { mergeDiscoveredStartups } from "@/lib/discovered-merge";
+import type { DateRange, DiscoveredStartup } from "@/lib/discovered-merge";
 
-export type DateRange = "7d" | "30d" | "3m" | "6m" | "6-18m" | "current";
+export type { DateRange } from "@/lib/discovered-merge";
 
-// A startup annotated with the date-range window of the discovered_startups
-// row it was read from. getAllDiscoveredStartups() dedupes by company across
-// every cached window, so this is how a caller (Discover.tsx) tells a company
-// found last week apart from one found 6-18 months ago.
-export type DiscoveredStartup = Startup & {
-  discovered_range: DateRange;
-  /**
-   * Every distinct signal this employer triggered under ONE spelling of its
-   * name, across every cached row — including duplicate returns within one
-   * search (Probe A returned Lockheed Martin twice, under the same spelling
-   * both times, and the old dedupe kept only the first, silently dropping
-   * the second real contract) and legitimate repeats across different
-   * windows. `signal` above still holds just the most recent one; this is
-   * the full list a card renders. Never empty when `signals.length` matters
-   * — a row whose signal composed to "" (no `signal` field and nothing to
-   * compose from `legacySignalFrom`) simply contributes no entry.
-   *
-   * NOT solved by this: name VARIANTS of the same real employer, spelled
-   * differently. Probe A also returned RTX as both "RTX (Raytheon)" and
-   * "Raytheon (RTX)" — two different strings that normalizeCompanyName
-   * (lowercase/trim/whitespace-collapse only, see lib/role-key.ts) does not
-   * resolve to the same key, so those still render as two separate cards.
-   * See the longer note on getAllDiscoveredStartups below.
-   */
-  signals: string[];
-};
+// DiscoveredStartup and the read-time merge that produces it now live in
+// lib/discovered-merge.ts, so the keying/first-wins/append rules are reachable
+// from a test. Re-exported here because components/Discover.tsx imports the
+// type from this module.
+export type { DiscoveredStartup } from "@/lib/discovered-merge";
 
 // A company that just triggered the hiring signal has no req posted yet —
 // this app's job is to find the employer BEFORE the posting exists, and a
@@ -101,34 +82,29 @@ export async function getHiringSignal(): Promise<{ signal: HiringSignal }> {
   return { signal: profile.hiringSignal };
 }
 
-// Returns all saved startups across every date range, deduped by normalized
-// company string — not by row, and not by the OLD raw `.toLowerCase().trim()`.
+// Returns all saved startups across every cached window, one card per
+// EMPLOYER rather than one per row.
 //
-// Binding 1 (probe A): one employer triggers the signal MANY times.
-// Lockheed Martin returned twice under the SAME spelling; RTX three times,
-// across TWO different spellings ("RTX (Raytheon)" and "Raytheon (RTX)"),
-// three different headquarters. Funding rounds are roughly one-per-company,
-// which is why the old dedupe (keep the first occurrence, discard the rest)
-// never surfaced this: for repeats under one spelling it silently dropped
-// every signal after the first.
+// Binding 1 (probe A): one employer triggers the signal MANY times. Lockheed
+// Martin returned twice under the SAME spelling; RTX three times, across TWO
+// different spellings ("RTX (Raytheon)" and "Raytheon (RTX)"), three
+// different headquarters. Funding rounds are roughly one-per-company, which
+// is why the ORIGINAL dedupe (keep the first occurrence, discard the rest)
+// never surfaced this.
 //
-// What this fix actually does, precisely: keys on normalizeCompanyName
-// (lib/role-key.ts — the SAME normalizer watchlist/ingest-roles use, not a
-// second one), which is lowercase + trim + whitespace-collapse, nothing
-// more, and keeps a LIST of every signal seen under that key instead of
-// overwriting to one. That closes the Lockheed case completely — two exact
-// (post-normalization) repeats now become one card with two signal lines
-// instead of one card with the second silently discarded.
+// Both halves of that are now closed, in two steps. The first kept a LIST of
+// signals per key instead of overwriting to one, which fixed the Lockheed
+// case. The second — this one — replaced the key itself: it was
+// normalizeCompanyName, whose lowercase/trim/collapse could not see that the
+// two RTX spellings name one company, and it is now companyIdentityKey
+// (lib/role-key.ts), which compares the SET of meaningful words. The probe's
+// three RTX rows finally collapse to one card.
 //
-// What it does NOT do: merge name VARIANTS of the same real employer.
-// normalizeCompanyName performs no aliasing — "RTX (Raytheon)" and
-// "Raytheon (RTX)" normalize to two different strings and still render as
-// two separate cards, each with its own signal(s), rather than the one card
-// a human reader would recognize them as. The probe's three RTX rows
-// therefore collapse to two cards here, not one. Fuzzy/alias matching to
-// close that gap is a real, separate design problem (what counts as "the
-// same company" — substring match? a canonical-name lookup? something else
-// entirely?) and is deliberately not attempted in this task.
+// The merge is not free of judgement, so it is not silent: every spelling
+// that merged away is kept on the card as `alsoKnownAs` for the UI to show.
+// See lib/role-key.ts for what the keying rule accepts, and
+// lib/discovered-merge.ts — which owns the loop, so the rules are testable —
+// for the first-wins and append rules.
 export async function getAllDiscoveredStartups(): Promise<{
   startups: DiscoveredStartup[];
   fetchedAt: string | null;
@@ -142,32 +118,17 @@ export async function getAllDiscoveredStartups(): Promise<{
   if (error) return { startups: [], fetchedAt: null, error: error.message };
   if (!data || data.length === 0) return { startups: [], fetchedAt: null };
 
-  // Rows are ordered fetched_at descending, so the FIRST time a key is seen
-  // sets the card's core fields (company/tagline/careers_url/headquarters/
-  // location) from the most-recently-fetched occurrence. Every later
-  // occurrence of the same key — whether from the same row (a search that
-  // returned one employer more than once) or a different one — never
-  // overwrites the core and never creates a second card; it only appends its
-  // signal line, deduped against exact repeats.
-  const byKey = new Map<string, DiscoveredStartup>();
-  for (const row of data) {
-    for (const s of row.startups as Startup[]) {
-      const key = normalizeCompanyName(s.company);
-      const signalLine = s.signal ?? legacySignalFrom(s);
-      const existing = byKey.get(key);
-      if (!existing) {
-        byKey.set(key, {
-          ...s,
-          discovered_range: row.date_range as DateRange,
-          signals: signalLine ? [signalLine] : [],
-        });
-      } else if (signalLine && !existing.signals.includes(signalLine)) {
-        existing.signals.push(signalLine);
-      }
-    }
-  }
-
-  return { startups: Array.from(byKey.values()), fetchedAt: data[0].fetched_at };
+  // Ordered fetched_at DESC above, which mergeDiscoveredStartups requires:
+  // the first occurrence of a key wins the card's core fields.
+  return {
+    startups: mergeDiscoveredStartups(
+      (data as { startups: unknown; date_range: unknown }[]).map((row) => ({
+        startups: row.startups as Startup[],
+        date_range: row.date_range as string,
+      }))
+    ),
+    fetchedAt: data[0].fetched_at,
+  };
 }
 
 export async function getDiscoveredStartups(

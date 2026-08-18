@@ -857,6 +857,11 @@ export default function Onboarding() {
                   value={draft.hiringSignalQualifier}
                   onChange={(v) => updateDraft("hiringSignalQualifier", v)}
                 />
+                <TextField
+                  label="Exclusions"
+                  value={draft.hiringSignalExclusions}
+                  onChange={(v) => updateDraft("hiringSignalExclusions", v)}
+                />
               </div>
               <Field label="Sources" help="One per line.">
                 <textarea

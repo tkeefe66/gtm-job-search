@@ -14,6 +14,7 @@ import { summarizeCrawlHealth } from "@/lib/crawl-health";
 import { stoppedTrackingReason } from "@/lib/dead-tracking";
 import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
+import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
 
 export default function Watchlist() {
@@ -162,6 +163,18 @@ export default function Watchlist() {
     // toggle clears it — so this distinguishes "we gave up" from "you turned it
     // off", which need different sentences and different remedies.
     const droppedAsDead = !c.tracking_enabled && c.failing_since !== null;
+    // Whatever the tenant's own hiringSignal.extraFields named — contract_value
+    // and awarding_agency for a defence contractor, bed_count for a hospital.
+    const extras = displayableExtras(c.extras);
+    // The venture-shaped columns are the FALLBACK now, not the default: they
+    // are populated only for rows added before db/migrations/012 (and for the
+    // funding profile, whose extras happen to carry the same three names).
+    // Showing both would render a funding row's stage twice.
+    // `!c.signal`, not `=== null`: a row read back before db/migrations/012
+    // is applied has no such KEY at all, so a strict null check reads
+    // undefined as "has a signal" and hides the legacy tags too — a blank row
+    // instead of a degraded one.
+    const showLegacyTags = !c.signal && extras.length === 0;
 
     return (
       <div
@@ -173,15 +186,24 @@ export default function Watchlist() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-heading font-semibold">{c.company}</span>
-            {c.stage && <Tag>{c.stage}</Tag>}
-            {c.raised && <Tag>{c.raised}</Tag>}
-            {c.category && <Tag>{c.category}</Tag>}
+            {showLegacyTags && c.stage && <Tag>{c.stage}</Tag>}
+            {showLegacyTags && c.raised && <Tag>{c.raised}</Tag>}
+            {showLegacyTags && c.category && <Tag>{c.category}</Tag>}
+            {extras.map(([k, v]) => (
+              <Tag key={k}>{v}</Tag>
+            ))}
             {c.source && <Tag>via {c.source}</Tag>}
           </div>
 
           {c.tagline && (
             <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{c.tagline}</p>
           )}
+
+          {/* WHY this company is worth watching, in the tenant's own terms.
+              Before db/migrations/012 this page could only show the venture
+              trio, so a non-funding tenant's actual signal reached it in no
+              form at all. */}
+          {c.signal && <p className="mt-0.5 text-xs text-ink/70">{c.signal}</p>}
 
           {c.tracking_enabled && (
             <label className="mt-1 flex items-center gap-1 text-xs text-ink/50">

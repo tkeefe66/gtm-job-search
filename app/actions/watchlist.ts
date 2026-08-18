@@ -9,6 +9,7 @@ import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL, crawlIntervalError } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
 import { normalizeCompanyName } from "@/lib/role-key";
+import { watchlistSignalFields } from "@/lib/watchlist-signal";
 import { withBudget } from "@/lib/metered";
 import { rawQuery, supabase } from "@/lib/supabase";
 import { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
@@ -259,6 +260,14 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
     startup.careers_url
   );
 
+  // The six venture-shaped columns below are kept for rows and readers that
+  // still use them; `signal`/`extras` are what actually generalise across
+  // careers (db/migrations/012). A defence contractor's contract award reached
+  // this table in NO form before those two columns existed — the legacy copy
+  // in withLegacyExtraFields only finds keys the funding profile happens to
+  // name. Derived by a pure helper so the fallback rule is testable.
+  const { signal, extras } = watchlistSignalFields(startup);
+
   const payload: Record<string, unknown> = {
     company: existing.company,
     tagline: startup.tagline,
@@ -267,6 +276,8 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
     category: startup.category,
     careers_url: careersUrl,
     headquarters: startup.headquarters,
+    signal,
+    extras,
     source: "discover",
     tracking_enabled: true,
     consecutive_failures: 0,

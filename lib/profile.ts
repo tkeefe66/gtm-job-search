@@ -50,6 +50,25 @@ export interface HiringSignal {
   name: string;
   sources: string[];
   qualifier: string;
+  /**
+   * What is BELOW the bar, named outright — the complement of `qualifier`.
+   *
+   * Two fields rather than one because a floor and an exclusion do different
+   * work in the prompt and the old hardcoded funding prompt carried both:
+   * "Focus exclusively on Series B and above" told the model where to aim,
+   * and "Exclude seed, pre-seed, and Series A rounds" told it what to throw
+   * away. The genericising pass kept only the first, and the exclusion was
+   * lost with nothing replacing it — a documented behaviour change that
+   * widened the result set. This is the field that carries it back.
+   *
+   * NOT folded into `qualifier`: that value is also spliced into the example
+   * SEARCH QUERIES, where a long exclusion clause would turn a billed web
+   * search into a garbage query string. `qualifier` has to stay short to
+   * serve both call sites; this one is prompt-only.
+   *
+   * "" is a real value, for a signal where nothing needs ruling out.
+   */
+  exclusions: string;
   /** True when the signal is an EVENT, so time windows mean something. */
   hasRecency: boolean;
   /** Extra per-row fields worth asking the model for, beyond the fixed core. */
@@ -172,6 +191,9 @@ export const DEFAULT_PROFILE: Profile = {
       "X/Twitter",
     ],
     qualifier: "Series B and above",
+    // Verbatim from the pre-genericisation hardcoded Discover system prompt:
+    // "Exclude seed, pre-seed, and Series A rounds."
+    exclusions: "seed, pre-seed, and Series A rounds",
     hasRecency: true,
     extraFields: ["raised", "stage", "lead_investor", "founded", "traction", "category"],
   },
@@ -227,6 +249,9 @@ function resolveHiringSignal(raw: unknown): HiringSignal {
     name: text(h.name, d.name),
     sources: list(h.sources, d.sources),
     qualifier: optionalText(h.qualifier, d.qualifier),
+    // optionalText, not text: "" is a real answer for a signal where nothing
+    // needs ruling out, exactly as it is for qualifier.
+    exclusions: optionalText(h.exclusions, d.exclusions),
     // A non-boolean reads as the default rather than as `true`: windows that
     // mean nothing are a worse default than windows that are missing.
     hasRecency: typeof h.hasRecency === "boolean" ? h.hasRecency : d.hasRecency,

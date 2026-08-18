@@ -368,6 +368,16 @@ export default function Discover() {
                       <Tag>{rangeLabel(s.discovered_range)}</Tag>
                       {place && <span className="text-xs text-ink/40">{place}</span>}
                     </div>
+                    {/* The other spellings this card absorbed. Shown rather
+                        than dropped because companyIdentityKey merges on a
+                        sorted token set (lib/role-key.ts) — a correct merge
+                        and a wrong one are indistinguishable from the data,
+                        so the reader gets to see what was joined. */}
+                    {s.alsoKnownAs.length > 0 && (
+                      <p className="mt-0.5 text-xs text-ink/40">
+                        also listed as {s.alsoKnownAs.join(", ")}
+                      </p>
+                    )}
                     {s.tagline && (
                       <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{s.tagline}</p>
                     )}
