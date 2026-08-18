@@ -229,3 +229,21 @@ export function compareByConfig(defs: JobStatusDef[]): (a: string, b: string) =>
   const rank = (k: string) => index.get(k) ?? Number.MAX_SAFE_INTEGER;
   return (a, b) => rank(a) - rank(b);
 }
+
+/**
+ * Sinks every hidden status to the end of the list, stably.
+ *
+ * The editor's order IS the config order, and the config order is what
+ * `compareByConfig` sorts stored values by — so a hidden status left in the
+ * middle keeps a slot in a list where it no longer appears anywhere else. The
+ * sort is STABLE on both sides: visible statuses keep their relative order and
+ * so do hidden ones, so unhiding a status returns it to the bottom of the
+ * visible list rather than to some position it never had.
+ *
+ * Applied at SAVE time, not on the checkbox: the whole card is a draft until
+ * "Save statuses", and a row jumping away under the cursor mid-edit would be a
+ * different, worse thing.
+ */
+export function sinkHidden(defs: JobStatusDef[]): JobStatusDef[] {
+  return [...defs.filter((d) => !d.hidden), ...defs.filter((d) => d.hidden)];
+}

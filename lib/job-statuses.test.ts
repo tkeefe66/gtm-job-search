@@ -9,6 +9,7 @@ import {
   labelFor,
   optionsFor,
   resolveStatuses,
+  sinkHidden,
   slugify,
   terminalKeys,
   tileCounts,
@@ -211,5 +212,35 @@ describe("Tailwind content globs", () => {
     };
     walk("lib");
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("sinkHidden", () => {
+  const def = (key: string, hidden: boolean): JobStatusDef => ({
+    key,
+    label: key,
+    bucket: "active",
+    hidden,
+  });
+
+  it("moves hidden statuses to the bottom", () => {
+    const defs = [def("a", false), def("b", true), def("c", false)];
+    expect(keys(sinkHidden(defs))).toEqual(["a", "c", "b"]);
+  });
+
+  it("keeps the relative order within each group", () => {
+    const defs = [def("a", true), def("b", false), def("c", true), def("d", false)];
+    expect(keys(sinkHidden(defs))).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("leaves a list with nothing hidden untouched", () => {
+    const defs = [def("a", false), def("b", false)];
+    expect(keys(sinkHidden(defs))).toEqual(["a", "b"]);
+  });
+
+  it("does not mutate its input", () => {
+    const defs = [def("a", false), def("b", true), def("c", false)];
+    sinkHidden(defs);
+    expect(keys(defs)).toEqual(["a", "b", "c"]);
   });
 });

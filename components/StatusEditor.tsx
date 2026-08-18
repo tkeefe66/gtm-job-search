@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { countJobsByStatus, reassignStatus, saveJobStatuses } from "@/app/actions/settings";
-import { slugify, type JobStatusDef } from "@/lib/job-statuses";
+import { sinkHidden, slugify, type JobStatusDef } from "@/lib/job-statuses";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 
@@ -179,17 +179,27 @@ export default function StatusEditor({ initial }: { initial: JobStatusDef[] }) {
     }
   }
 
+  /**
+   * Saves the list with every hidden status sunk to the bottom.
+   *
+   * The reorder is what gets STORED, and `setDefs` puts the same array on
+   * screen — the editor must not keep showing an order the config no longer
+   * has, or the next save would write the stale one back.
+   */
   async function save() {
     setBusy(true);
     setError(null);
     setNote(null);
+    const ordered = sinkHidden(defs);
+    const moved = ordered.some((d, i) => d.key !== defs[i].key);
     try {
-      const { error: saveError } = await saveJobStatuses(defs);
+      const { error: saveError } = await saveJobStatuses(ordered);
       if (saveError !== undefined) {
         setError(describeWriteFailure(saveError, "save your statuses") ?? null);
         return;
       }
-      setNote("Saved.");
+      setDefs(ordered);
+      setNote(moved ? "Saved. Hidden statuses moved to the bottom." : "Saved.");
     } catch (err) {
       // Same reason as beginDelete's catch. This one matters most: without it a
       // rejected save left the spinner up, the banner empty, and the user
@@ -211,7 +221,8 @@ export default function StatusEditor({ initial }: { initial: JobStatusDef[] }) {
       <p className="mb-2 text-xs text-ink/60">
         Rename, reorder, hide, add or remove the statuses on your roles table.
         “Out” statuses are hidden by the table’s default filter and are skipped
-        when you check links. New, Applied and Posting Closed are written by the
+        when you check links. Hidden statuses drop to the bottom of this list
+        when you save. New, Applied and Posting Closed are written by the
         app itself — you can rename them, but not hide or remove them.
       </p>
       {/*
