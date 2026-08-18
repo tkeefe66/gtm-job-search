@@ -21,15 +21,29 @@ export function normalizeList(items: string[]): string[] {
   return out;
 }
 
-export function validateList(items: string[], label: string): ValidationResult {
+export function validateList(
+  items: string[],
+  label: string,
+  opts?: { allowEmpty?: boolean }
+): ValidationResult {
   const value = normalizeList(items);
 
-  if (value.length === 0) {
+  if (value.length === 0 && !opts?.allowEmpty) {
     return {
       ok: false,
       // An empty list is the worst possible save: the crawler would extract
       // nothing from every tracked company and report "no roles" forever, with
       // no error anywhere. Blocked rather than warned.
+      //
+      // `allowEmpty` is the one deliberate exception, for the onboarding write
+      // path only (app/actions/onboarding.ts) — a `toolsAreWeak` profile
+      // (lib/onboarding-prompt.ts) generates an empty stackTerms on purpose,
+      // and emptySearchReason (lib/search-criteria.ts) already degrades that
+      // correctly: it refuses only the "stack" search family, not "title". The
+      // "Reset to defaults" control this message points to does not exist on
+      // /welcome, so a blanket refusal here would strand exactly the
+      // non-GTM user this branch exists to unblock. /settings' own save path
+      // never passes allowEmpty and keeps refusing every empty list.
       error: `${label} cannot be empty — an empty list makes every search and every crawl return nothing. Add at least one entry, or use Reset to defaults.`,
     };
   }

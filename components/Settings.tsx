@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   countCrawlJobsMatchingTitles,
   getSettings,
@@ -11,10 +12,15 @@ import {
   saveCompFloor,
   saveCriteriaList,
   saveCriteriaText,
+  saveProfileFields,
 } from "@/app/actions/settings";
 // Type-only, so nothing from lib/settings-store (and therefore nothing from
 // `pg`) is pulled into the client bundle — the import is erased at compile.
 import type { SettingsView } from "@/lib/settings-view";
+// Type-only too, but lib/profile.ts is safe to import at RUNTIME as well —
+// its own header comment says it reaches nothing that imports `pg`. Kept
+// type-only here anyway since nothing below needs a runtime value from it.
+import type { Profile } from "@/lib/profile";
 import { estimateRunCost, formatEstimate, type EstimateInput } from "@/lib/cost-estimate";
 import {
   FIT_BRAIN_MAX_CHARS,
@@ -42,17 +48,35 @@ import StatusEditor from "./StatusEditor";
 
 type ListSection = "titles" | "locations" | "stackTerms";
 type TextSection = "locationRule" | "fitBrain";
-type Section = ListSection | TextSection | "ceiling" | "compFloor";
+/**
+ * The profile's two editable sections (Task 11). Each saves as ONE unit
+ * through `saveProfileFields`, matching every other section's one-card-one-save
+ * shape — there is no per-field save button.
+ */
+type ProfileSection = "profileScoring" | "profileDescription";
+type Section = ListSection | TextSection | ProfileSection | "ceiling" | "compFloor";
 
-/** The two cards that can offer a rescore, and therefore own its progress. */
-type RescoreOwner = Extract<Section, "fitBrain" | "compFloor">;
+/**
+ * The cards that can offer a rescore, and therefore own its progress.
+ * `profileScoring` joins `fitBrain` here because both edit `scoreFit`'s
+ * inputs (fitBrain itself vs. titleScope/domainBonus/the clause tails) and
+ * share the exact same offer — see `scoringOfferOwner` below for which card
+ * renders it.
+ */
+type RescoreOwner = Extract<Section, "fitBrain" | "compFloor" | "profileScoring">;
 
 const LABELS: Record<Section, string> = {
   titles: "Target titles",
   locations: "Location terms",
-  stackTerms: "GTM stack terms",
+  // Label only — the KEY stays "stackTerms". SETTING_KEYS values must equal
+  // Criteria field names (lib/settings-store.ts) or every save of this
+  // section becomes a silent no-op; renaming the key buys nothing a label
+  // change doesn't already buy.
+  stackTerms: "Tools of the trade",
   locationRule: "Location rule",
   fitBrain: "Fit brain",
+  profileScoring: "How your roles are scored",
+  profileDescription: "How your field is described",
   ceiling: "Search ceiling",
   compFloor: "Minimum base compensation",
 };
@@ -71,6 +95,19 @@ interface Draft {
   stackTerms: string;
   locationRule: string;
   fitBrain: string;
+  // profileScoring section — see ProfileSection above.
+  titleScope: string;
+  domainBonus: string;
+  weakFitTail: string;
+  moderateTail: string;
+  strongTail: string;
+  // profileDescription section.
+  searchSubject: string;
+  querySubject: string;
+  stackFamilyIntro: string;
+  candidatePersona: string;
+  buildingConcept: string;
+  buildingUpside: string;
   ceilingEnabled: boolean;
   ceiling: string;
   compFloorEnabled: boolean;
@@ -83,6 +120,17 @@ const EMPTY_DRAFT: Draft = {
   stackTerms: "",
   locationRule: "",
   fitBrain: "",
+  titleScope: "",
+  domainBonus: "",
+  weakFitTail: "",
+  moderateTail: "",
+  strongTail: "",
+  searchSubject: "",
+  querySubject: "",
+  stackFamilyIntro: "",
+  candidatePersona: "",
+  buildingConcept: "",
+  buildingUpside: "",
   ceilingEnabled: false,
   ceiling: "",
   compFloorEnabled: false,
@@ -96,6 +144,17 @@ function draftFrom(view: SettingsView): Draft {
     stackTerms: view.criteria.stackTerms.join("\n"),
     locationRule: view.criteria.locationRule,
     fitBrain: view.criteria.fitBrain,
+    titleScope: view.profile.titleScope,
+    domainBonus: view.profile.domainBonus,
+    weakFitTail: view.profile.weakFitTail,
+    moderateTail: view.profile.moderateTail,
+    strongTail: view.profile.strongTail,
+    searchSubject: view.profile.searchSubject,
+    querySubject: view.profile.querySubject,
+    stackFamilyIntro: view.profile.stackFamilyIntro,
+    candidatePersona: view.profile.candidatePersona,
+    buildingConcept: view.profile.buildingConcept,
+    buildingUpside: view.profile.buildingUpside,
     ceilingEnabled: view.ceiling !== null,
     ceiling: view.ceiling === null ? "" : String(view.ceiling),
     compFloorEnabled: view.compFloor !== null,
@@ -106,9 +165,9 @@ function draftFrom(view: SettingsView): Draft {
 /**
  * Re-syncs ONE section's draft from freshly-read settings.
  *
- * Not the whole draft: the five sections save independently, and rebuilding
- * every field after one save would silently discard edits the user has typed
- * into the other four but not yet saved.
+ * Not the whole draft: sections save independently, and rebuilding every
+ * field after one save would silently discard edits the user has typed into
+ * the others but not yet saved.
  */
 function syncSection(draft: Draft, view: SettingsView, section: Section): Draft {
   const fresh = draftFrom(view);
@@ -123,6 +182,25 @@ function syncSection(draft: Draft, view: SettingsView, section: Section): Draft 
       return { ...draft, locationRule: fresh.locationRule };
     case "fitBrain":
       return { ...draft, fitBrain: fresh.fitBrain };
+    case "profileScoring":
+      return {
+        ...draft,
+        titleScope: fresh.titleScope,
+        domainBonus: fresh.domainBonus,
+        weakFitTail: fresh.weakFitTail,
+        moderateTail: fresh.moderateTail,
+        strongTail: fresh.strongTail,
+      };
+    case "profileDescription":
+      return {
+        ...draft,
+        searchSubject: fresh.searchSubject,
+        querySubject: fresh.querySubject,
+        stackFamilyIntro: fresh.stackFamilyIntro,
+        candidatePersona: fresh.candidatePersona,
+        buildingConcept: fresh.buildingConcept,
+        buildingUpside: fresh.buildingUpside,
+      };
     case "ceiling":
       return { ...draft, ceilingEnabled: fresh.ceilingEnabled, ceiling: fresh.ceiling };
     case "compFloor":
@@ -159,6 +237,7 @@ function parsePositiveInt(text: string): number | null {
 }
 
 export default function Settings() {
+  const router = useRouter();
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [loading, setLoading] = useState(true);
@@ -173,12 +252,23 @@ export default function Settings() {
 
   const [rescoring, setRescoring] = useState(false);
   const [rescoreDismissed, setRescoreDismissed] = useState(false);
-  // Set by a fit-brain SAVE as well as a reset. It widens the gate (see
-  // fitBrainRescoreOffer) — never required for the prompt to appear, so it
-  // cannot bury it on a fresh load — and it is also what entitles the prompt
-  // to open with "Saved.". Before it covered saves, a bare page load with a
-  // stored brain rendered that word with nothing behind it.
+  // Set by a fit-brain SAVE as well as a reset, AND by a "How your roles are
+  // scored" save (titleScope/domainBonus/the clause tails) — both edit
+  // scoreFit's inputs and share one offer (see fitBrainRescoreOffer). It
+  // widens the gate — never required for the prompt to appear, so it cannot
+  // bury it on a fresh load — and it is also what entitles the prompt to open
+  // with "Saved.". Before it covered saves, a bare page load with a stored
+  // brain rendered that word with nothing behind it.
   const [fitBrainTouchedHere, setFitBrainTouchedHere] = useState(false);
+  // WHICH of the two scoring cards shows the shared offer above — the fit
+  // brain and profileScoring cards would otherwise both render it whenever
+  // fitBrainTouchedHere is true, duplicating it exactly the way the comment
+  // on rescoreOwner below already describes for its own two cards. Defaults
+  // to the fit-brain card, since that is where the day-one
+  // fitBrainOverridden case (no save this session at all) has always shown.
+  const [scoringOfferOwner, setScoringOfferOwner] = useState<
+    Extract<RescoreOwner, "fitBrain" | "profileScoring">
+  >("fitBrain");
   // Same idea for the comp floor. The server half of ITS gate is
   // view.compScoringRescoredAt (see compRescoreOffer), so this flag only ever
   // WIDENS that gate — covering a floor edit made after a pass was already
@@ -330,12 +420,15 @@ export default function Settings() {
         ? () => {
             setFitBrainTouchedHere(true);
             setRescoreDismissed(false);
+            // Reclaims the shared offer for the fit-brain card, in case an
+            // earlier profileScoring save had it pointed at that card instead.
+            setScoringOfferOwner("fitBrain");
           }
         : undefined
     );
   }
 
-  function handleReset(section: Exclude<Section, "ceiling">) {
+  function handleReset(section: Exclude<Section, "ceiling" | ProfileSection>) {
     void run(
       section,
       () => resetSetting(section),
@@ -347,9 +440,61 @@ export default function Settings() {
         ? () => {
             setFitBrainTouchedHere(true);
             setRescoreDismissed(false);
+            setScoringOfferOwner("fitBrain");
           }
         : undefined
     );
+  }
+
+  /**
+   * Saves the "How your roles are scored" section — titleScope, domainBonus,
+   * and the three clause tails — as one `saveProfileFields` patch.
+   *
+   * These fields change only what an ALREADY-FOUND role SCORES (they reach
+   * scoreFit through profileToFitInputs), never what a search finds, so
+   * saveProfileFields clears no cache for this patch — see its docblock. The
+   * remedy is the same rescore offer a fit-brain edit gets: this shares
+   * fitBrainTouchedHere with handleSaveText("fitBrain") rather than owning a
+   * separate flag, because both edit the same scoreFit inputs and
+   * fitBrainRescoreOffer already covers "a scoring input changed" as one gate.
+   */
+  function handleSaveProfileScoring() {
+    const patch: Partial<Profile> = {
+      titleScope: draft.titleScope,
+      domainBonus: draft.domainBonus,
+      weakFitTail: draft.weakFitTail,
+      moderateTail: draft.moderateTail,
+      strongTail: draft.strongTail,
+    };
+    void run("profileScoring", () => saveProfileFields(patch), () => {
+      setFitBrainTouchedHere(true);
+      setRescoreDismissed(false);
+      setScoringOfferOwner("profileScoring");
+    });
+  }
+
+  /**
+   * Saves the "How your field is described" section — the six
+   * search/extraction strings — as one `saveProfileFields` patch.
+   *
+   * Every field here changes what a search FINDS (they are spliced into the
+   * role-search prompt, the stack-family intro, and the extraction schema's
+   * fit_signal description), so saveProfileFields clears role_searches and
+   * discovered_roles for this patch — see its docblock. Nothing here touches
+   * scoring, so no rescore offer: the roles a cached search already found
+   * were the right roles under the OLD wording too, and re-scoring them
+   * changes nothing.
+   */
+  function handleSaveProfileDescription() {
+    const patch: Partial<Profile> = {
+      searchSubject: draft.searchSubject,
+      querySubject: draft.querySubject,
+      stackFamilyIntro: draft.stackFamilyIntro,
+      candidatePersona: draft.candidatePersona,
+      buildingConcept: draft.buildingConcept,
+      buildingUpside: draft.buildingUpside,
+    };
+    void run("profileDescription", () => saveProfileFields(patch));
   }
 
   function handleSaveCeiling() {
@@ -455,7 +600,10 @@ export default function Settings() {
         // a future edit that moves this call out of the branch refuses rather
         // than stamping a partial pass.
         const stamp = await markCompScoringRescored(pass);
-        if (stamp.error) {
+        // Presence, not truthiness — this repo's signature defect. markCompScoringRescored
+        // propagates a raw pg message, which is "" when the database is unreachable, and
+        // `if (stamp.error)` would read that as "no problem" and drop this whole banner.
+        if (stamp.error !== undefined) {
           // The rescore itself succeeded and must not be reported as failed;
           // only the record of it is missing, and the visible cost of that is
           // the offer coming back on the next load.
@@ -668,7 +816,13 @@ export default function Settings() {
           onReset={() => handleReset("fitBrain")}
         />
 
-        {view && offers.fitBrain && (
+        {/* scoringOfferOwner gates this, not just offers.fitBrain: a
+            profileScoring save also flips offers.fitBrain true (it shares
+            fitBrainTouchedHere), and rendering the same offer in both this
+            card and the profileScoring card below would duplicate it exactly
+            the way rescoreProgress's own comment describes for its two
+            owners. */}
+        {view && offers.fitBrain && scoringOfferOwner === "fitBrain" && (
           <RescorePrompt
             count={view.scoredJobCount}
             reason={offers.fitBrain}
@@ -678,6 +832,161 @@ export default function Settings() {
           />
         )}
         {rescoreProgress("fitBrain")}
+      </SectionCard>
+
+      <SectionCard
+        label={LABELS.profileScoring}
+        help="Generated during onboarding. Reaches every scoreFit call alongside the fit brain above — edit these if a scoring rule came out wrong without re-running the whole flow."
+        error={errors.profileScoring}
+        notice={notices.profileScoring}
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-ink/50">
+              Title scope — how seniority reads in this field
+            </label>
+            <textarea
+              value={draft.titleScope}
+              onChange={(e) => setDraft((d) => ({ ...d, titleScope: e.target.value }))}
+              rows={4}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-ink/50">
+              Domain bonus — an optional bonus scoring rule, may be blank
+            </label>
+            <textarea
+              value={draft.domainBonus}
+              onChange={(e) => setDraft((d) => ({ ...d, domainBonus: e.target.value }))}
+              rows={3}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label className="text-xs font-medium text-ink/50">
+                Completes &quot;2 = Weak fit — &quot;
+              </label>
+              <textarea
+                value={draft.weakFitTail}
+                onChange={(e) => setDraft((d) => ({ ...d, weakFitTail: e.target.value }))}
+                rows={3}
+                className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-ink/50">
+                Completes &quot;3 = Moderate fit — &quot;
+              </label>
+              <textarea
+                value={draft.moderateTail}
+                onChange={(e) => setDraft((d) => ({ ...d, moderateTail: e.target.value }))}
+                rows={3}
+                className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-ink/50">
+                Completes &quot;4 = Strong fit — &quot;
+              </label>
+              <textarea
+                value={draft.strongTail}
+                onChange={(e) => setDraft((d) => ({ ...d, strongTail: e.target.value }))}
+                rows={3}
+                className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+        </div>
+        <SectionActions
+          busy={!!busy.profileScoring}
+          onSave={handleSaveProfileScoring}
+          onReset={() => router.push("/welcome")}
+          resetLabel="Re-run onboarding"
+        />
+
+        {/* Same gate as the fit-brain card above, pointed the other way. */}
+        {view && offers.fitBrain && scoringOfferOwner === "profileScoring" && (
+          <RescorePrompt
+            count={view.scoredJobCount}
+            reason={offers.fitBrain}
+            busy={rescoring}
+            onRescore={() => void handleRescore("profileScoring")}
+            onDismiss={() => setRescoreDismissed(true)}
+          />
+        )}
+        {rescoreProgress("profileScoring")}
+      </SectionCard>
+
+      <SectionCard
+        label={LABELS.profileDescription}
+        help="Generated during onboarding. Spliced into the role-search prompt, the stack-family search intro, and the extraction schema — saving here re-bills your next search and crawl with the corrected wording."
+        error={errors.profileDescription}
+        notice={notices.profileDescription}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="text-xs font-medium text-ink/50">Search subject</label>
+            <input
+              type="text"
+              value={draft.searchSubject}
+              onChange={(e) => setDraft((d) => ({ ...d, searchSubject: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-ink/50">Query subject</label>
+            <input
+              type="text"
+              value={draft.querySubject}
+              onChange={(e) => setDraft((d) => ({ ...d, querySubject: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-ink/50">Candidate persona</label>
+            <input
+              type="text"
+              value={draft.candidatePersona}
+              onChange={(e) => setDraft((d) => ({ ...d, candidatePersona: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-ink/50">Building concept</label>
+            <input
+              type="text"
+              value={draft.buildingConcept}
+              onChange={(e) => setDraft((d) => ({ ...d, buildingConcept: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-ink/50">Building upside</label>
+            <input
+              type="text"
+              value={draft.buildingUpside}
+              onChange={(e) => setDraft((d) => ({ ...d, buildingUpside: e.target.value }))}
+              className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+        <div className="mt-3">
+          <label className="text-xs font-medium text-ink/50">Stack family intro</label>
+          <textarea
+            value={draft.stackFamilyIntro}
+            onChange={(e) => setDraft((d) => ({ ...d, stackFamilyIntro: e.target.value }))}
+            rows={3}
+            className="mt-1 w-full rounded-md border border-slate px-3 py-2 text-sm"
+          />
+        </div>
+        <SectionActions
+          busy={!!busy.profileDescription}
+          onSave={handleSaveProfileDescription}
+          onReset={() => router.push("/welcome")}
+          resetLabel="Re-run onboarding"
+        />
       </SectionCard>
 
       <SectionCard

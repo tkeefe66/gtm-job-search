@@ -11,17 +11,12 @@
 // database.
 
 import type { FitInputs } from "@/lib/fit-inputs";
-import {
-  DEFAULT_WEAK_FIT_TAIL,
-  DEFAULT_MODERATE_TAIL,
-  DEFAULT_STRONG_TAIL,
-  DEFAULT_TITLE_SCOPE,
-  DEFAULT_DOMAIN_BONUS,
-} from "@/lib/fit-prompt";
+import { profileToFitInputs, type Profile } from "@/lib/profile";
 import {
   ceilingFrom,
   compFloorFrom,
   mergeSettings,
+  profileFrom,
   readAllSettings,
   type SettingRow,
 } from "@/lib/settings-store";
@@ -62,110 +57,45 @@ export const DEFAULT_LOCATION_RULE =
   'roles available only in other cities with no remote option. If a role lists ' +
   '"Denver, CO • New York, NY" or is remote-friendly, include it.';
 
-/** What the search prompts call the field. Verbatim today's text. */
-export const SEARCH_SUBJECT = "go-to-market and revenue operations";
-
 /**
  * Renders the system prompt for every role-search call.
  *
  * Required parameter, not defaulted — but NOT because that stops phase 2
  * shipping GTM text to a nurse. It does not: a required parameter catches
  * OMISSION, and a phase-2 site that forgets to switch its argument keeps
- * passing `SEARCH_SUBJECT`, which compiles and ships. The narrower reason
- * is sufficient: it makes THIS phase's transcription exhaustive by
- * construction, because the build stops at any call site missed. Phase 2's
- * risk is a different one and needs its own guard — which is what the
- * golden tests asserting a CHANGED value reaches the output are for.
+ * passing GTM text, which compiles and ships. The narrower reason is
+ * sufficient: it makes a single call site's transcription exhaustive by
+ * construction, because the build stops if it is missed. The omission risk
+ * for EVERY call site across the codebase is a different, larger risk, and
+ * that is what `lib/career-neutrality.test.ts` now guards — the phrase scan
+ * catches a career-specific string surviving anywhere outside `lib/profile.ts`
+ * (and `lib/fit-prompt.ts`), and the deleted-name scan catches a re-introduced
+ * import of a constant this task removed. The per-builder tests (this file's,
+ * `lib/company-role-prompt.test.ts`, `lib/role-search-prompt.test.ts`) are the
+ * other half: they assert a CHANGED value actually reaches the rendered
+ * prompt, which the guard above cannot see because it only reads source text.
  */
 export function roleSearchSystem(subject: string): string {
   return `You are a recruiting researcher specializing in ${subject} roles. Return ONLY valid JSON, no markdown, no preamble.`;
 }
 
 /**
- * The whole stack-family intro, not just its subject.
+ * EMPTY, deliberately, and this is the whole reason the onboarding flow exists.
  *
- * The sentence names three GTM job titles after the subject — "Business Systems
- * Manager, Growth Systems Lead, Revenue Systems… not just the obvious RevOps
- * titles" — which are exactly as career-specific as the subject in front of
- * them. (That subject is the SLASHED form, "go-to-market / revenue
- * operations", not `SEARCH_SUBJECT`'s "and" form; the slash form is not
- * extracted as its own constant anywhere — it lives here, inside the whole
- * sentence.) Extracting only the subject would keep phase 1 a no-op and then, in
- * phase 2, produce a prompt that reads coherently for half a sentence before
- * naming RevOps roles at a mechanical engineer.
+ * This constant used to be one person's résumé, and `loadCriteria` fell back to
+ * it whenever a tenant had saved nothing — so a second user could sign in, be
+ * approved, and have every role they found scored against a stranger's career,
+ * with nothing on screen to say so. Silent wrongness is the failure this
+ * codebase consistently chooses to fail loudly on instead (see
+ * describeWriteFailure, and the whole .claude/skills/swallowed-string-errors
+ * doctrine).
  *
- * FAMILY_INTRO.title (in role-search.ts) is career-agnostic as written and
- * stays in place.
- *
- * Lives here rather than in role-search.ts because that file is "use server",
- * which forbids non-async exports — the same reason fit-prompt.ts is
- * separate from parse-role.ts.
+ * Consequence, accepted: a tenant who reaches a search un-onboarded gets an
+ * error rather than results. emptySearchReason below is where that error is
+ * worded, and it is the ACTION-LEVEL onboarding gate — a guard can be forgotten
+ * on a new action, whereas empty criteria protect every path not yet written.
  */
-export const STACK_FAMILY_INTRO =
-  "Search job boards and company careers pages for currently-open go-to-market / revenue operations roles that mention these tools. Titles vary — include Business Systems Manager, Growth Systems Lead, Revenue Systems, and similar, not just the obvious RevOps titles. Use these searches";
-
-export const DEFAULT_FIT_BRAIN = `
-Tom Keefe is a GTM Systems / RevOps / Marketing Operations leader and practitioner-builder with this background:
-- 13+ years architecting B2B revenue engines; 6+ years inside the ABM/ABX product category (Demandbase, Engagio)
-- Current: Director of GTM Experts at Demandbase — leads a team that architects GTM systems and AI workflows for enterprise customers (BlackRock, Boeing, Microsoft, SAP Concur, Snowflake); influenced $43M+ in won revenue and $96M+ in pipeline
-- Deep expertise: the quantitative spine of GTM — pipeline waterfall modeling, ICP analysis, capacity planning, attribution, predictive account scoring, forecasting; QBR / board narrative work with CMOs, CROs, and RevOps leaders
-- Tooling: Marketo, Salesforce, Tableau, Bizible, LeanData, Workato, Outreach; led Pardot→Marketo migrations and multiple acquisition data migrations
-- AI builder: ships AI-first products and agentic workflows hands-on ("vibe-codes" working prototypes) — built a live AI product demo for a flagship event, a multi-agent B2B news intelligence agent, and other agentic apps
-- Strong: GTM systems architecture, marketing/revenue operations leadership, AI/agentic GTM workflows, enterprise B2B SaaS, data-driven GTM strategy, executive storytelling, cross-functional leadership (Sales, Marketing, Product, CS, Finance)
-- Weaker fit: pure people-management roles with no systems/building, non-B2B or non-SaaS industries, roles with no AI/automation upside, deeply technical software-engineering roles
-- Looking for: Head / VP / Director of GTM Systems, RevOps, Revenue Operations, Marketing Operations, GTM Strategy, or GTM/AI Operations — plus GTM Engineer and AI-Ops practitioner-builder roles where hands-on systems + agentic AI work is the point
-- Open to high-impact IC / GTM Engineer roles at AI-first or hyper-growth B2B SaaS companies where the building, equity, and learning opportunity outweigh the title
-- Based in Denver, CO; targets fully-remote roles and roles in the Denver / Colorado area
-`.trim();
-
-/**
- * How the extraction prompt describes the candidate to the model, in
- * `fit_signal`'s field description. Verbatim today's text.
- *
- * This is not a label: `fit_signal` becomes `fit_summary`
- * (lib/ingest-roles.ts:156) and reaches the scorer as `Summary:`
- * (lib/fit-prompt.ts:225), so it is an input to the fit score on every row
- * from all three ingest paths. Required rather than defaulted for the reason
- * given on `roleSearchSystem` above — exhaustive transcription now, not
- * protection later.
- */
-export const CANDIDATE_PERSONA =
-  "GTM Systems / RevOps / Marketing Ops leader and AI practitioner-builder";
-
-/**
- * What "the kind of work this person wants to be hands-on building" means,
- * for `ic_flag`'s field description — the positive gerund-phrase form
- * ("centers on building GTM systems and agentic AI workflows"). Verbatim
- * today's text.
- *
- * The source description uses the same underlying idea a second time, in a
- * different grammatical form: the compressed negative compound adjective
- * "no systems/AI-building upside". That second form is NOT reconstructable
- * from this constant by substitution — see `BUILDING_UPSIDE` below, which
- * holds it as its own constant rather than being derived from this one.
- * (An earlier revision of this file drove both fragments off this single
- * constant with reworded connective text around the second occurrence; the
- * rendered sentence was no longer byte-identical to the source, which is
- * exactly the failure this task exists to prevent. Splitting per grammatical
- * form is the same choice `QUERY_SUBJECT` makes against `SEARCH_SUBJECT`, and
- * the same reason `STACK_FAMILY_INTRO` holds a whole sentence rather than a
- * subject: where a form is not reachable by substitution, it gets its own
- * constant.)
- */
-export const BUILDING_CONCEPT = "building GTM systems and agentic AI workflows";
-
-/**
- * The same concept as `BUILDING_CONCEPT`, in the compressed negative
- * compound-adjective form `ic_flag` uses for its false case: "no
- * systems/AI-building upside". Verbatim today's text, including the trailing
- * "upside" — the template below splices this in directly with no connective
- * word of its own, so the constant carries the whole noun phrase rather than
- * the template reconstructing it. Kept as its own constant — not derived
- * from `BUILDING_CONCEPT` — because the two grammatical forms cannot be
- * produced from one string without changing the rendered wording; see the
- * note on `BUILDING_CONCEPT`.
- */
-export const BUILDING_UPSIDE = "systems/AI-building upside";
+export const DEFAULT_FIT_BRAIN = "";
 
 export function roleExtractionSchema(
   persona: string,
@@ -231,19 +161,18 @@ export function titleQueries(criteria: Criteria): string[] {
 }
 
 /**
- * The field term used inside a SEARCH QUERY, which is why it is short.
+ * Queries that catch roles with idiosyncratic titles.
  *
- * Two words where SEARCH_SUBJECT is four. A query is not a sentence: the longer
- * phrase makes the query worse, not more precise. Phase 2 should not assume one
- * generated value serves both this and the prose sites.
+ * `querySubject` is the SHORT form (profile.querySubject) — two words where the
+ * prose subject (profile.searchSubject) is four. A query is not a sentence: the
+ * longer phrase makes the query worse, not more precise, so one generated value
+ * does not serve both.
  */
-export const QUERY_SUBJECT = "revenue operations";
-
-export function stackQueries(criteria: Criteria): string[] {
+export function stackQueries(criteria: Criteria, querySubject: string): string[] {
   const queries: string[] = [];
   for (const tool of criteria.stackTerms) {
     for (const place of criteria.locations) {
-      queries.push(`"${tool}" ${QUERY_SUBJECT} hiring ${place}`);
+      queries.push(`"${tool}" ${querySubject} hiring ${place}`);
     }
   }
   return queries;
@@ -365,13 +294,20 @@ export async function loadSearchInputs(): Promise<{
   criteria: Criteria;
   ceiling: number | null;
   fitInputs: FitInputs;
+  profile: Profile;
 }> {
   const rows = await readAllSettings();
   const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
-  // fitInputs comes off the SAME rows: the search ingests what it finds, and
-  // scoring a role against one snapshot's fit brain and another's floor is the
-  // split this function exists to prevent.
-  return { criteria, ceiling: ceilingFrom(rows), fitInputs: scoringInputsFrom(criteria, rows) };
+  // fitInputs and profile both come off the SAME rows: the search ingests
+  // what it finds, and building a prompt from one snapshot's profile while
+  // scoring against another's fit brain and floor is the split this function
+  // exists to prevent.
+  return {
+    criteria,
+    ceiling: ceilingFrom(rows),
+    fitInputs: scoringInputsFrom(criteria, rows),
+    profile: profileFrom(rows),
+  };
 }
 
 /**
@@ -391,11 +327,29 @@ export function emptySearchReason(
   if (family === "title" && criteria.titles.length === 0) missing.push("target titles");
   if (family === "stack" && criteria.stackTerms.length === 0) missing.push("stack terms");
   if (criteria.locations.length === 0) missing.push("location terms");
+  // The fit brain is not a query input — the search would run without it — but
+  // every role it found would then be scored against nothing, which reads as
+  // "the market has nothing good" rather than as a missing profile. Refusing
+  // before the call is what keeps a billed search from producing meaningless
+  // scores.
+  if (!criteria.fitBrain.trim()) missing.push("fit brain");
   if (missing.length === 0) return null;
   return (
-    `Cannot run the ${family} search: your ${missing.join(" and ")} list is empty, ` +
-    `so there are no queries to send. Add at least one entry on the Settings page, ` +
-    `or reset that list to its default.`
+    `Cannot run the ${family} search: your ${missing.join(" and ")} ` +
+    `${missing.length === 1 ? "is" : "are"} empty. ` +
+    `Finish onboarding, or fill this in on the Settings page.`
+  );
+}
+
+/**
+ * Why a fit score cannot be computed. Non-empty on every path, so a caller's
+ * `error !== undefined` check works without the text having to be truthy.
+ */
+export function emptyBrainRefusal(): string {
+  return (
+    "This role cannot be scored yet: your fit brain is empty, so there is " +
+    "nothing to score it against. Finish onboarding, or write one on the " +
+    "Settings page."
   );
 }
 
@@ -420,23 +374,31 @@ export async function loadScoringInputs(): Promise<FitInputs> {
  * Takes the already-merged criteria plus the rows they were merged from, so a
  * caller that needed the criteria anyway derives the fit inputs from the same
  * read rather than taking a second one. `compFloor` is NOT a `Criteria` field
- * — it is a scalar setting like the search ceiling — which is why the rows
- * have to come along.
+ * and the PROFILE is not one either — both are read straight off the rows,
+ * which is why the rows have to come along.
  *
- * Pure, so the pairing is testable: the whole failure mode here is reading the
- * fit brain from one snapshot and the floor from another, which no integration
- * test would catch and no log line would mention.
+ * Every career-specific field now comes from the tenant's profile
+ * (lib/profile.ts). This function used to hand `buildFitPrompt` five module
+ * constants; it hands it five stored values instead, and lib/profile-scoring.test.ts
+ * pins that a CHANGED value reaches the rendered prompt — the guard that a
+ * required parameter cannot provide.
+ *
+ * The fit brain has TWO sources and the precedence is deliberate: the
+ * `fitBrain` SETTING_KEYS row wins, and the profile's brain is the fallback.
+ * That row is the source of truth because it is what /settings displays and
+ * edits — if the profile won instead, a non-empty profile brain would
+ * permanently shadow every settings edit the user makes, since /settings only
+ * ever writes the row. The profile's brain is the fallback for a tenant whose
+ * profile predates a settings edit, or whose row has been reset. Onboarding
+ * writes both inside one transaction (see saveProfile), so they agree at
+ * birth.
  */
 export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitInputs {
-  return {
-    fitBrain: criteria.fitBrain,
-    compFloor: compFloorFrom(rows),
-    weakFitTail: DEFAULT_WEAK_FIT_TAIL,
-    moderateTail: DEFAULT_MODERATE_TAIL,
-    strongTail: DEFAULT_STRONG_TAIL,
-    titleScope: DEFAULT_TITLE_SCOPE,
-    domainBonus: DEFAULT_DOMAIN_BONUS,
-  };
+  const profile = profileFrom(rows);
+  return profileToFitInputs(
+    { ...profile, fitBrain: criteria.fitBrain || profile.fitBrain },
+    compFloorFrom(rows)
+  );
 }
 
 /**
@@ -454,8 +416,13 @@ export function scoringInputsFrom(criteria: Criteria, rows: SettingRow[]): FitIn
 export async function loadCriteriaAndScoringInputs(): Promise<{
   criteria: Criteria;
   fitInputs: FitInputs;
+  profile: Profile;
 }> {
   const rows = await readAllSettings();
   const criteria = mergeSettings(DEFAULT_CRITERIA, rows);
-  return { criteria, fitInputs: scoringInputsFrom(criteria, rows) };
+  return {
+    criteria,
+    fitInputs: scoringInputsFrom(criteria, rows),
+    profile: profileFrom(rows),
+  };
 }

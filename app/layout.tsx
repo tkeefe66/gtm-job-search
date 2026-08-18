@@ -19,8 +19,8 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "GTM Job Search",
-  description: "AI-powered GTM / RevOps job search tool",
+  title: "Job Search",
+  description: "AI-powered job search tool",
 };
 
 export default async function RootLayout({

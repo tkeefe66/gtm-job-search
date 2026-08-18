@@ -16,9 +16,6 @@ vi.mock("@/lib/tenant", () => ({
 // kind of check.
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn() }));
 import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
   DEFAULT_CRITERIA,
   MAX_QUERY_MULTIPLIER,
   dateContextLine,
@@ -28,7 +25,6 @@ import {
   loadSearchInputs,
   pickQueries,
   planQueries,
-  QUERY_SUBJECT,
   roleExtractionSchema,
   scoringInputsFrom,
   stackQueries,
@@ -37,6 +33,7 @@ import {
   type Criteria,
 } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
+import { DEFAULT_PROFILE } from "@/lib/profile";
 import {
   DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
@@ -81,9 +78,8 @@ describe("DEFAULT_CRITERIA", () => {
     expect(DEFAULT_CRITERIA.stackTerms.length).toBeGreaterThan(0);
   });
 
-  test("fit brain describes the candidate and names a location preference", () => {
-    expect(DEFAULT_CRITERIA.fitBrain.length).toBeGreaterThan(200);
-    expect(DEFAULT_CRITERIA.fitBrain).toContain("Denver");
+  test("fit brain ships empty — a working default would score a stranger's roles", () => {
+    expect(DEFAULT_CRITERIA.fitBrain).toBe("");
   });
 });
 
@@ -126,15 +122,17 @@ describe("titleQueries", () => {
 });
 
 describe("stackQueries", () => {
+  const DEFAULT_QUERY_SUBJECT = DEFAULT_PROFILE.querySubject;
+
   test("pairs tool names with hiring language", () => {
-    const queries = stackQueries(SMALL);
+    const queries = stackQueries(SMALL, DEFAULT_QUERY_SUBJECT);
     expect(queries.length).toBe(4);
     expect(queries.some((q) => q.includes("Clay"))).toBe(true);
     expect(queries.every((q) => q.toLowerCase().includes("hiring"))).toBe(true);
   });
 
   test("every query carries a location term", () => {
-    const queries = stackQueries(SMALL);
+    const queries = stackQueries(SMALL, DEFAULT_QUERY_SUBJECT);
     expect(queries.length).toBeGreaterThan(0);
     for (const q of queries) {
       expect(SMALL.locations.some((t) => q.includes(t))).toBe(true);
@@ -142,17 +140,24 @@ describe("stackQueries", () => {
   });
 
   test("a stack query reproduces today's shape exactly", () => {
-    const q = stackQueries({ ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] });
+    const q = stackQueries(
+      { ...SMALL, stackTerms: ["Salesforce"], locations: ["Denver"] },
+      DEFAULT_QUERY_SUBJECT
+    );
     expect(q).toEqual(['"Salesforce" revenue operations hiring Denver']);
   });
 
-  test("QUERY_SUBJECT is two words, not the four-word prose SEARCH_SUBJECT", () => {
-    expect(QUERY_SUBJECT).toBe("revenue operations");
+  test("a different query subject reaches the query", () => {
+    const q = stackQueries(
+      { ...SMALL, stackTerms: ["CAD"], locations: ["Denver"] },
+      "mechanical engineering"
+    );
+    expect(q).toEqual(['"CAD" mechanical engineering hiring Denver']);
   });
 
   test("returns nothing when either list is empty", () => {
-    expect(stackQueries({ ...SMALL, stackTerms: [] })).toEqual([]);
-    expect(stackQueries({ ...SMALL, locations: [] })).toEqual([]);
+    expect(stackQueries({ ...SMALL, stackTerms: [] }, DEFAULT_QUERY_SUBJECT)).toEqual([]);
+    expect(stackQueries({ ...SMALL, locations: [] }, DEFAULT_QUERY_SUBJECT)).toEqual([]);
   });
 });
 
@@ -211,7 +216,7 @@ describe("pickQueries", () => {
   });
 
   test("stack queries: covers every entry in DEFAULT_CRITERIA.stackTerms at cap 15", () => {
-    const queries = stackQueries(DEFAULT_CRITERIA);
+    const queries = stackQueries(DEFAULT_CRITERIA, DEFAULT_PROFILE.querySubject);
     const picked = pickQueries(queries, 15);
     expect(picked.length).toBe(15);
     for (const tool of DEFAULT_CRITERIA.stackTerms) {
@@ -305,7 +310,15 @@ describe("emptySearchReason", () => {
   test("a fully-populated criteria set can run either family", () => {
     expect(emptySearchReason("title", SMALL)).toBeNull();
     expect(emptySearchReason("stack", SMALL)).toBeNull();
-    expect(emptySearchReason("title", DEFAULT_CRITERIA)).toBeNull();
+  });
+
+  test("the shipped DEFAULT_CRITERIA refuses on its empty fit brain alone", () => {
+    // DEFAULT_CRITERIA's lists are all populated — only fitBrain ships empty
+    // (see the DEFAULT_CRITERIA describe block above) — so this is the guard
+    // that actually protects an un-onboarded tenant hitting the shipped
+    // defaults, not a hand-built fixture.
+    const reason = emptySearchReason("title", DEFAULT_CRITERIA);
+    expect(reason).toContain("fit brain");
   });
 
   test("an empty title list blocks the title search before anything is billed", () => {
@@ -352,8 +365,38 @@ describe("emptySearchReason", () => {
     for (const patch of cases) {
       const c = { ...SMALL, ...patch };
       expect(emptySearchReason("title", c) === null).toBe(titleQueries(c).length > 0);
-      expect(emptySearchReason("stack", c) === null).toBe(stackQueries(c).length > 0);
+      expect(emptySearchReason("stack", c) === null).toBe(
+        stackQueries(c, DEFAULT_PROFILE.querySubject).length > 0
+      );
     }
+  });
+
+  test("an empty fit brain refuses BOTH families, and says what to do", () => {
+    for (const family of ["title", "stack"] as const) {
+      const reason = emptySearchReason(family, { ...DEFAULT_CRITERIA, fitBrain: "" });
+      expect(reason).toBeTruthy();
+      expect(reason).toContain("fit brain");
+    }
+  });
+
+  test("a whitespace-only fit brain is empty too", () => {
+    expect(emptySearchReason("title", { ...DEFAULT_CRITERIA, fitBrain: "   \n " })).toBeTruthy();
+  });
+
+  test("a present fit brain with full lists still refuses nothing", () => {
+    expect(
+      emptySearchReason("title", { ...DEFAULT_CRITERIA, fitBrain: "A candidate." })
+    ).toBeNull();
+  });
+
+  test("the missing-brain reason is listed alongside missing lists, not instead", () => {
+    const reason = emptySearchReason("title", {
+      ...DEFAULT_CRITERIA,
+      titles: [],
+      fitBrain: "",
+    });
+    expect(reason).toContain("target titles");
+    expect(reason).toContain("fit brain");
   });
 });
 
@@ -365,7 +408,11 @@ describe("MAX_QUERY_MULTIPLIER", () => {
 
 describe("roleExtractionSchema", () => {
   test("names every field the Role type requires", () => {
-    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE);
+    const schema = roleExtractionSchema(
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
+    );
     for (const field of [
       "role_title",
       "job_url",
@@ -390,9 +437,14 @@ describe("roleExtractionSchema", () => {
   // verbatim) and comparing it with `.toBe()` against the literal text
   // pinned at 7c7cb6a:lib/search-criteria.ts:129 — byte-identical, not a
   // substring match that could pass on a superset. A one-character edit to
-  // CANDIDATE_PERSONA, BUILDING_CONCEPT, or BUILDING_UPSIDE fails this test.
+  // DEFAULT_PROFILE.candidatePersona, .buildingConcept, or .buildingUpside
+  // fails this test.
   test("the persona and building concept reach the schema verbatim", () => {
-    const schema = roleExtractionSchema(CANDIDATE_PERSONA, BUILDING_CONCEPT, BUILDING_UPSIDE);
+    const schema = roleExtractionSchema(
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
+    );
     const field = (name: string) =>
       schema.split("\n- ").find((line) => line.startsWith(name));
     const ORIGINAL_FIT_SIGNAL_LINE =

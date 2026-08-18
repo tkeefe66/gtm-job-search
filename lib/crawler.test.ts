@@ -27,13 +27,8 @@ import {
   type ClosureRun,
 } from "./crawler";
 import { stripHtml } from "./page-extract";
-import {
-  BUILDING_CONCEPT,
-  BUILDING_UPSIDE,
-  CANDIDATE_PERSONA,
-  DEFAULT_CRITERIA,
-  type Criteria,
-} from "./search-criteria";
+import { DEFAULT_CRITERIA, type Criteria } from "./search-criteria";
+import { DEFAULT_PROFILE } from "./profile";
 
 // Reused from lib/page-extract.test.ts's own fixtures so the shell/content
 // boundary this test relies on stays the one that file already pins.
@@ -67,9 +62,9 @@ describe("buildExtractionPrompt", () => {
         "Clay",
         page,
         DEFAULT_CRITERIA,
-        CANDIDATE_PERSONA,
-        BUILDING_CONCEPT,
-        BUILDING_UPSIDE
+        DEFAULT_PROFILE.candidatePersona,
+        DEFAULT_PROFILE.buildingConcept,
+        DEFAULT_PROFILE.buildingUpside
       )
     ).toContain("Clay");
   });
@@ -82,9 +77,9 @@ describe("buildExtractionPrompt", () => {
         "Clay",
         page,
         DEFAULT_CRITERIA,
-        CANDIDATE_PERSONA,
-        BUILDING_CONCEPT,
-        BUILDING_UPSIDE
+        DEFAULT_PROFILE.candidatePersona,
+        DEFAULT_PROFILE.buildingConcept,
+        DEFAULT_PROFILE.buildingUpside
       )
     ).toContain("Denver");
   });
@@ -94,9 +89,9 @@ describe("buildExtractionPrompt", () => {
       "Clay",
       page,
       DEFAULT_CRITERIA,
-      CANDIDATE_PERSONA,
-      BUILDING_CONCEPT,
-      BUILDING_UPSIDE
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
     );
     expect(prompt).toContain("Open roles");
     expect(prompt).toContain("/careers/revops");
@@ -108,9 +103,9 @@ describe("buildExtractionPrompt", () => {
         "Clay",
         page,
         DEFAULT_CRITERIA,
-        CANDIDATE_PERSONA,
-        BUILDING_CONCEPT,
-        BUILDING_UPSIDE
+        DEFAULT_PROFILE.candidatePersona,
+        DEFAULT_PROFILE.buildingConcept,
+        DEFAULT_PROFILE.buildingUpside
       )
     ).toContain("[]");
   });
@@ -131,9 +126,9 @@ describe("buildExtractionPrompt", () => {
       "Clay",
       page,
       edited,
-      CANDIDATE_PERSONA,
-      BUILDING_CONCEPT,
-      BUILDING_UPSIDE
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
     );
     expect(prompt).toContain("Chief Waffle Officer");
     expect(prompt).toContain("Reykjavik only.");

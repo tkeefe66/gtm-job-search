@@ -6,7 +6,7 @@ import { withBudget } from "@/lib/metered";
 import { complete, parseJson } from "@/lib/model-call";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { buildFitPrompt, type FitPromptRole } from "@/lib/fit-prompt";
-import { loadScoringInputs } from "@/lib/search-criteria";
+import { emptyBrainRefusal, loadScoringInputs } from "@/lib/search-criteria";
 
 /**
  * Scores a role against the candidate's background, 1-5, ruthlessly.
@@ -62,6 +62,14 @@ async function scoreFitInner(
 ): Promise<{ score: number; rationale: string; error?: string }> {
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
+    // Refused BEFORE the model call. With an empty brain buildFitPrompt renders
+    // "CANDIDATE:" over a blank line and the model scores against the role
+    // alone — a plausible-looking number computed from nothing, written to
+    // jobs.fit_score, indistinguishable afterwards from a real score.
+    if (!fitInputs.fitBrain.trim()) {
+      console.error("scoreFit: refusing to score against an empty fit brain");
+      return { score: 0, rationale: "", error: emptyBrainRefusal() };
+    }
     // Through the facade, which resolves the tenant's provider, key and model
     // from the ambient billing scope and records this call's usage into it.
     // This is the app's highest-volume model call — once per role inside

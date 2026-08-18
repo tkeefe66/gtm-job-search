@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { isPlatform } from "@/lib/platform-context";
 import { accessFor } from "@/lib/auth-policy";
+import { readOnboardedAtFor } from "@/lib/settings-store";
 
 /**
  * Who is making this request.
@@ -46,17 +47,91 @@ async function readActor(): Promise<Actor | null> {
 }
 
 /**
+ * Where an active tenant should be sent instead of the page they asked for, or
+ * null to let them through.
+ *
+ * Pure and exported so the rule is testable: requireActorPage itself reads the
+ * session and the database and can be reached from no test in this repo.
+ *
+ * `allowUnonboarded` is a PER-CALL-SITE opt-out, not a route list — this
+ * function does not know which route called it, and revision 2 of the design
+ * assumed a mechanism that does not exist. /admin is the only caller that
+ * passes true.
+ *
+ * Takes no `actor` — an earlier revision did, but nothing in this function
+ * ever read it; the decision is made from `onboardedAt` and `allowUnonboarded`
+ * alone. Removed rather than left as an unused parameter.
+ */
+export function onboardingRedirect(input: {
+  onboardedAt: string | null;
+  allowUnonboarded: boolean;
+}): string | null {
+  if (input.allowUnonboarded) return null;
+  // Empty string is not a stamp: writeOnboardedAt always writes an ISO string,
+  // so an empty one is a hand-edit or a bad write, and letting it through is
+  // how a tenant reaches /discover with no criteria at all.
+  return input.onboardedAt && input.onboardedAt.length > 0 ? null : "/welcome";
+}
+
+/**
  * For PAGES. Sends anyone without an allowed session to /signin, which doubles
- * as the waitlist screen for a pending user.
+ * as the waitlist screen for a pending user — and anyone who has not finished
+ * onboarding to /welcome.
  *
  * Every tenant-scoped page must call this. A page that forgets is not merely
  * unprotected — under `force-dynamic` it would render one person's data to
  * whoever asks.
+ *
+ * The stamp is read through readOnboardedAtFor, which takes actor.tenantId
+ * EXPLICITLY rather than calling resolveTenantId() itself. Not because that
+ * would recurse — it would not: resolveTenantId() calls requireActor(), whose
+ * body is readActor() (this function's own next line) plus a null check, and
+ * neither of those calls back into requireActorPage() or readOnboardedAtFor.
+ * (The unbounded case belonged to a REJECTED design — Task 9's plan — that put
+ * the onboarding check inside requireActor() itself, where readAllSettingsResult's
+ * own resolveTenantId() call re-entered it; that design was never shipped, and
+ * this parameter is not what prevents it.) The real reasons to keep it
+ * explicit: it names which tenant the read is for, and it avoids a second,
+ * redundant session read — this function already has actor.tenantId from
+ * readActor() above, so resolving it again inside readOnboardedAtFor would
+ * repeat that lookup on every force-dynamic page render. See the fuller note
+ * on readOnboardedAtFor in lib/settings-store.ts.
+ *
+ * Costs one extra query per page render on five force-dynamic pages. The cron
+ * crawler is unaffected — it has no session and never reaches a page (see
+ * isPlatform() above and the grep recorded in the task-9 report).
  */
-export async function requireActorPage(): Promise<Actor> {
+export async function requireActorPage(opts?: { allowUnonboarded?: boolean }): Promise<Actor> {
   const actor = await readActor();
   if (!actor) redirect("/signin");
+  const allowUnonboarded = opts?.allowUnonboarded === true;
+  // LAZY on purpose: onboardingRedirect's first line is `if (allowUnonboarded)
+  // return null`, so requireAdminPage (which always passes true) never reads
+  // this value. An eager `await readOnboardedAtFor(...)` inside the object
+  // literal below still ran the query every time regardless — object
+  // properties are evaluated before the function they're passed to is called
+  // — spending a read whose answer requireAdminPage was about to discard.
+  const onboardedAt = allowUnonboarded ? null : await readOnboardedAtFor(actor.tenantId);
+  const target = onboardingRedirect({ onboardedAt, allowUnonboarded });
+  if (target) redirect(target);
   return actor;
+}
+
+/**
+ * For /admin, which opts OUT of the onboarding gate.
+ *
+ * A bug in onboarding must not lock the only admin out of the approval screen.
+ * Admin ACTIONS need nothing equivalent: app/actions/admin.ts reads no criteria
+ * and scores nothing, so the empty-criteria protection is irrelevant to it and
+ * there is no second lockout behind the Approve button.
+ *
+ * Deliberately NOT an isAdmin exemption inside requireActorPage: the admin is
+ * the account that would dogfood this flow, and exempting them by role would
+ * leave it untested by the one person able to judge whether its output is any
+ * good.
+ */
+export async function requireAdminPage(): Promise<Actor> {
+  return requireActorPage({ allowUnonboarded: true });
 }
 
 /**

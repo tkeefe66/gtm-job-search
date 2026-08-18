@@ -1,0 +1,88 @@
+// The prompt that turns a few sentences (or a pasted résumé) into a career
+// profile.
+//
+// PURE, and pinned by rendered fixtures, for the reason lib/fit-prompt.ts is:
+// app/actions/onboarding.ts is "use server", which forbids non-async exports,
+// so nothing in it can be exported pure or reached from a test. The text below
+// decides what every prompt in the app will say for this user, so a reworded
+// instruction has to show up as a diff in a rendered file rather than only
+// inside a builder test.
+//
+// NOTHING HERE MAY BE LOGGED. The answers carry a résumé — the most sensitive
+// thing this app stores. This codebase logs prompts and query lists liberally;
+// the onboarding prompt is the documented exception. See app/actions/onboarding.ts.
+
+import type { OnboardingAnswers, Profile } from "@/lib/profile";
+
+/** Everything generation produces. `answers` is the input, not an output. */
+export type GeneratedProfile = Omit<Profile, "answers"> & {
+  /** Seeds the criteria rows too, so onboarding writes one coherent set. */
+  titles: string[];
+  locations: string[];
+  stackTerms: string[];
+  locationRule: string;
+};
+
+/**
+ * The résumé length cap.
+ *
+ * Roughly five pages of plain text. Anything longer is truncated with the fact
+ * reported to the user rather than silently: the résumé rides into a billed
+ * call, and an unbounded paste is an unbounded bill.
+ */
+export const RESUME_MAX_CHARS = 20000;
+
+export function truncateResume(text: string): { text: string; truncated: boolean } {
+  return text.length > RESUME_MAX_CHARS
+    ? { text: text.slice(0, RESUME_MAX_CHARS), truncated: true }
+    : { text, truncated: false };
+}
+
+export const ONBOARDING_SYSTEM =
+  "You are helping configure a job-search tool for one person, in whatever field they work in. " +
+  "You will be given what they told us about themselves and what they want next. " +
+  "Return ONLY valid JSON, no markdown, no preamble. " +
+  "Never assume a field: a machinist, a nurse, a paralegal and a software engineer must each get " +
+  "vocabulary drawn from their own trade and from nothing else.";
+
+const FIELD_GUIDE = `
+- fitBrain (string): a description of this person, written in the third person, as bullet points beginning with "- ". It is pasted verbatim under the heading CANDIDATE into a prompt that scores every job posting they see from 1 to 5, so it must state background, depth, strengths, weaker fits, what they are looking for, and where they are willing to work. Aim for 1,500-2,500 characters.
+- weakFitTail (string): completes the sentence "2 = Weak fit — ". Describe, in this person's own field, what a posting looks like that is related to their background but a poor match — e.g. the wrong seniority, an adjacent specialty, or missing a stated requirement. Never empty.
+- moderateTail (string): completes the sentence "3 = Moderate fit — ". Describe a posting that is a real, plausible option but not a clear win. Never empty.
+- strongTail (string): completes the sentence "4 = Strong fit — ". Describe a posting that matches well on seniority, subject matter, and what they said they want next, short of the rare ideal role that would score 5. Never empty.
+- titleScope (string): bullet lines beginning with "- " explaining how seniority READS in this field: which titles are leadership, which are senior individual contributor, which title words signal a direct match, and which signal a role too narrow to score well. No heading line — the app adds one. Return "" if this field has no meaningful title ladder.
+- domainBonus (string): an OPTIONAL scoring rule that adds weight for a specific kind of opportunity this person would want disproportionately (for example, a role with unusual autonomy, or one inside a specific sub-specialty they named). Write it as its own heading line followed by its conditions. Return "" when there is no such rule — that is a normal answer, not a failure.
+- searchSubject (string): how to name this person's field in a SENTENCE. It reads inside "Search for open ___ roles at Acme." Write it as a phrase, not a single word — e.g. "mechanical design and manufacturing engineering", not "engineering".
+- querySubject (string): how to name the SAME field, but shaped for a SEARCH ENGINE QUERY box rather than a sentence: two or three words only, e.g. "mechanical engineering". A search query is not a sentence — pasting searchSubject here would make the query worse, so querySubject must be its own, shorter phrase.
+- stackFamilyIntro (string): one sentence introducing a list of tool-name searches, naming two or three job titles in this field that a plain title search would MISS (titles that do this work under a different name). Must end with the exact words "Use these searches".
+- candidatePersona (string): a short noun phrase, 3-6 words, naming what this person is — e.g. "senior mechanical design engineer" or "charge nurse and med-surg RN". It is used inside the sentence "1 sentence on why a ___ might fit".
+- buildingConcept (string): a gerund phrase (a "-ing" phrase) naming the hands-on work this person wants to be doing day to day, e.g. "designing mechanisms and running tolerance analysis" or "running a unit and precepting new nurses".
+- buildingUpside (string): the SAME idea, rewritten as a short compressed noun phrase describing what a narrower role would LACK — e.g. "design ownership" or "unit leadership". It is spliced verbatim after the words "with no ", so it must read correctly there and must NOT itself contain "with no ". It is not a shorter version of buildingConcept's sentence; it is a different grammatical shape for the same idea.
+- hiringSignal (object): { name, sources (array of strings), qualifier, hasRecency (boolean), extraFields (array of strings) } — a PUBLIC EVENT OR PROPERTY that predicts an employer in this field is about to hire, plus the kinds of publications or registries where such news or facts appear. Set hasRecency to true when it is a dated EVENT (a funding round, a contract award, a plant opening, a new facility license) and false when it is a standing PROPERTY of the employer (holding a certain accreditation, operating a certain kind of facility) rather than something that just happened.
+  - qualifier (string): the threshold or filter that decides which instances of the signal are big enough to matter — it narrows the search so it does not return every trivial instance. An empty string is a valid answer when every instance counts and nothing should be filtered out. Engineering example: "over $50M" (for a contract-award signal). Nursing example: "newly licensed or newly accredited facilities" (for an accreditation signal).
+  - extraFields (array of strings): 3-6 short snake_case field names for concrete, per-employer facts worth extracting alongside the signal and showing to this person on a result card — the specific details someone in this field would actually want to see about an employer that just triggered the signal. Engineering example: ["contract_value", "awarding_agency", "program_name"]. Nursing example: ["bed_count", "unit_type", "magnet_status"].
+- toolsAreWeak (boolean): true when searching by the name of a specific tool or piece of equipment would return mostly noise in this field, rather than useful postings.
+- titles (array of strings): 8-15 exact job titles to search for, in this field's own vocabulary, ranging from titles at their current level to titles at the level they said they want next.
+- locations (array of strings): the place terms to search — cities, metro areas, or states they named, plus the literal word "remote" only if they said they want remote work.
+- stackTerms (array of strings): the names of tools, equipment, software, or certifications that commonly appear inside job postings for this work, and that would help narrow a search. Return an empty array if toolsAreWeak is true and no such list would help.
+- locationRule (string): one sentence telling a search which locations to include and which to exclude, based on where they said they are willing to work.`;
+
+export function buildOnboardingPrompt(answers: OnboardingAnswers): string {
+  const about =
+    answers.mode === "resume"
+      ? `Their résumé:\n"""\n${answers.resume}\n"""`
+      : `What they do now: ${answers.current}`;
+
+  return `Configure this job-search tool for one person.
+
+${about}
+
+What they want next: ${answers.wanted}
+Where they will work: ${answers.where}
+What rules a job out for them: ${answers.dealbreakers}
+
+Return a JSON object with these exact keys:
+${FIELD_GUIDE}
+
+Every string must be written in the vocabulary of THIS person's field. Do not import terms, tools, or examples from any other industry. Return ONLY the JSON object.`;
+}

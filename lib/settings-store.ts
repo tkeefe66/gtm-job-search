@@ -2,6 +2,7 @@ import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
+import { resolveProfile, type Profile } from "@/lib/profile";
 
 // The full set of editable settings. Adding one here plus a default in
 // lib/search-criteria.ts is the whole change — app_settings is key/value, so
@@ -114,6 +115,35 @@ export const COMP_SCORING_RESCORED_AT_KEY = "comp_scoring_rescored_at";
  * buy a merge this value never uses.
  */
 export const JOB_STATUSES_KEY = "jobStatuses";
+
+/**
+ * Where the tenant's career profile lives — one jsonb document holding the
+ * onboarding answers and every prompt fragment that used to be hardcoded.
+ *
+ * A standalone key, deliberately NOT a member of SETTING_KEYS, for exactly the
+ * reasons JOB_STATUSES_KEY above is not: its value is an OBJECT, and
+ * mergeSettings is shape-guarded for the list/text/number values that ARE
+ * criteria fields. Membership would force a fourth shape group and edits to
+ * two currently-green tests, to buy a merge this value never uses — the
+ * profile is replaced whole, never merged field-by-field.
+ *
+ * There is a second reason here that the statuses did not have. mergeSettings
+ * copies arrays but NOT objects (see its loop below), so an un-overridden
+ * object-valued criteria field would alias this module's default for the life
+ * of the process — the exact bug that copy loop exists to prevent, reopened
+ * for the one shape it does not handle.
+ */
+export const PROFILE_KEY = "profile";
+
+/**
+ * When this tenant finished onboarding, or absent if they never have.
+ *
+ * A stamp the app writes, not a setting anyone edits — so it follows
+ * CRITERIA_CHANGED_AT_KEY and COMP_SCORING_RESCORED_AT_KEY out of SETTING_KEYS:
+ * it is not a `Criteria` field, mergeSettings must never see it, and no
+ * settings form may offer it.
+ */
+export const ONBOARDED_AT_KEY = "onboarded_at";
 
 export interface SettingRow {
   key: string;
@@ -312,6 +342,9 @@ export async function readAllSettings(): Promise<SettingRow[]> {
  *
  * Fails soft to null for the same reason readAllSettings does — this is
  * decoration on a crawl run, and a failed read must not abort one.
+ *
+ * Also reused by readOnboardedAtFor below: it is key-parameterised, not
+ * criteria-specific, so it now serves two stamps.
  */
 export const CRITERIA_CHANGED_AT_SQL = `select value #>> '{}' as value
      from app_settings
@@ -344,7 +377,9 @@ async function upsertSetting(
     | SettingKey
     | typeof CRITERIA_CHANGED_AT_KEY
     | typeof COMP_SCORING_RESCORED_AT_KEY
-    | typeof JOB_STATUSES_KEY,
+    | typeof JOB_STATUSES_KEY
+    | typeof PROFILE_KEY
+    | typeof ONBOARDED_AT_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   // `on conflict (tenant_id, key)`, matching the composite primary key that
@@ -438,4 +473,102 @@ export async function writeJobStatuses(
   defs: JobStatusDef[]
 ): Promise<{ error?: string }> {
   return upsertSetting(JOB_STATUSES_KEY, defs);
+}
+
+/**
+ * The career profile out of rows ALREADY read — pure, for the reason
+ * jobStatusesFrom and compScoringRescoredFrom are: the settings page and every
+ * search path take ONE snapshot of app_settings, and a second read is a second
+ * snapshot a concurrent save could split them across.
+ */
+export function profileFrom(rows: SettingRow[]): Profile {
+  return resolveProfile(rows.find((r) => r.key === PROFILE_KEY)?.value ?? null);
+}
+
+/**
+ * When onboarding finished, out of rows ALREADY read, or null when it never
+ * has.
+ *
+ * A row holding a non-string reads as "never", not as "onboarded". That
+ * direction is deliberate and is the opposite of the choice
+ * compScoringRescoredFrom makes for its own stamp: there, an uninterpretable
+ * value re-offers a rescore, which one click clears. Here, reading it as
+ * "onboarded" would let a tenant past the gate with no stored criteria at all,
+ * and every search they ran would refuse. Sending them back through onboarding
+ * is the recoverable failure.
+ */
+export function onboardedAtFrom(rows: SettingRow[]): string | null {
+  const row = rows.find((r) => r.key === ONBOARDED_AT_KEY);
+  return typeof row?.value === "string" ? row.value : null;
+}
+
+/**
+ * The onboarding stamp for ONE named tenant, taking its own query.
+ *
+ * TAKES A tenantId, and should keep taking one — but NOT because resolving it
+ * internally would recurse. Verified by reading the actual call chain: this
+ * function's only caller is requireActorPage() (lib/require-actor.ts), which
+ * gets its Actor from readActor(), not from requireActor(). If this function
+ * called resolveTenantId() itself, that would call requireActor() (lib/tenant.ts),
+ * whose body is isPlatform() ? … : readActor() plus a null check — a call to
+ * requireActor() that terminates, with nothing looping back into
+ * requireActorPage() or into this function. There is no cycle.
+ *
+ * The unbounded-recursion hazard this comment used to warn about belonged to a
+ * DIFFERENT, REJECTED design: an earlier revision put the onboarding check
+ * INSIDE requireActor() itself, so that requireActor()'s own call to
+ * readAllSettingsResult (which calls resolveTenantId(), which calls
+ * requireActor() again) would re-enter the very check that was running —
+ * unbounded (see Task 9's plan, docs/superpowers/plans/2026-08-17-career-agnostic-onboarding.md).
+ * That design was never shipped. Do not reintroduce it on the theory that this
+ * parameter is what was preventing it — it wasn't; the shipped shape (the
+ * check living in requireActorPage(), which calls readActor() rather than
+ * requireActor()) is what avoids it.
+ *
+ * The parameter stays for two real reasons instead: it is explicit about which
+ * tenant this read is for, and it avoids a second, redundant session read —
+ * requireActorPage() already resolved actor.tenantId via its own readActor()
+ * call above, so resolving the tenant again here would repeat that lookup on
+ * every force-dynamic page render for no new information.
+ *
+ * Fails soft to null, like readCriteriaChangedAt: a database blip must not
+ * lock a user out of the app, and the cost of the safe direction here is one
+ * unnecessary trip through /welcome.
+ */
+export async function readOnboardedAtFor(tenantId: string): Promise<string | null> {
+  const { data, error } = await rawQuery<{ value: string | null }>(
+    CRITERIA_CHANGED_AT_SQL,
+    [ONBOARDED_AT_KEY, tenantId],
+    tenantId
+  );
+  if (error) {
+    console.error(
+      `settings-store: could not read "${ONBOARDED_AT_KEY}" — ` +
+        `${error.message || UNDESCRIBED_DB_ERROR}.`
+    );
+    return null;
+  }
+  return data?.[0]?.value ?? null;
+}
+
+/**
+ * Stores the whole profile. Lives here, next to the key, for the reason spelled
+ * out on writeCriteriaChangedAt: a writer in another module would have to widen
+ * upsertSetting's key type to reach it, reopening the typo hazard the constant
+ * closes.
+ *
+ * Resolved before storing, never after — repairs belong in the stored value
+ * rather than being re-applied on every read of a profile the user believes
+ * they saved. Same rule saveJobStatuses follows.
+ */
+export async function writeProfile(profile: Profile): Promise<{ error?: string }> {
+  return upsertSetting(PROFILE_KEY, resolveProfile(profile));
+}
+
+/** Stamps onboarding complete. Stored as a JSON string, matching both other
+ *  stamps, so `#>> '{}'` reads it straight back out as text. */
+export async function writeOnboardedAt(
+  when: Date = new Date()
+): Promise<{ error?: string }> {
+  return upsertSetting(ONBOARDED_AT_KEY, when.toISOString());
 }
