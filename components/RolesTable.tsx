@@ -180,6 +180,10 @@ type StatusFilter =
 
 export default function RolesTable({ compFloor }: { compFloor: number | null }) {
   const [jobs, setJobs] = useState<Job[]>([]);
+  // Rows getJobs dropped because they were already dead when found. Set only
+  // from a load — the optimistic edits below cannot change it, since none of
+  // those rows is in `jobs` to edit.
+  const [hiddenCount, setHiddenCount] = useState(0);
   const [statuses, setStatuses] = useState<JobStatusDef[]>(DEFAULT_STATUSES);
   const [statusError, setStatusError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -259,6 +263,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
         // first for the second.
         failure = describeWriteFailure(res.r.error, "load your roles") ?? null;
         setJobs(res.r.jobs);
+        setHiddenCount(res.r.hiddenCount);
       } else {
         failure = describeWriteFailure(
           res.err instanceof Error ? res.err.message : String(res.err),
@@ -766,6 +771,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
           </button>
         ))}
       </div>
+
+      {hiddenCount > 0 && (
+        // Not a tile and not clickable: these rows are not a filter the user
+        // can enter. The number exists so the table's total is explicable.
+        <p className="-mt-4 mb-6 text-xs text-ink/50">
+          {hiddenCount} hidden — found already closed
+        </p>
+      )}
 
       {/* Controls. Search leads (it is the fastest way to a known row), then the
           three pickers that narrow and order the list, grouped tightly together

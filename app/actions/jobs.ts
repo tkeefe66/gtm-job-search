@@ -4,11 +4,16 @@ import { requireActor } from "@/lib/require-actor";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
+import { partitionNeverLive } from "@/lib/never-live";
 import { JOB_STATUSES_KEY } from "@/lib/settings-store";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type { Job, JobInsert } from "@/lib/types";
 
-export async function getJobs(): Promise<{ jobs: Job[]; error?: string }> {
+export async function getJobs(): Promise<{
+  jobs: Job[];
+  hiddenCount: number;
+  error?: string;
+}> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
@@ -19,9 +24,15 @@ export async function getJobs(): Promise<{ jobs: Job[]; error?: string }> {
 
   if (error) {
     console.error("getJobs error:", error);
-    return { jobs: [], error: error.message };
+    return { jobs: [], hiddenCount: 0, error: error.message };
   }
-  return { jobs: (data as Job[]) ?? [] };
+  // Roles that were already dead when ingest first saw them never reach the
+  // table or either tile — RolesTable derives tileCounts from this same array.
+  // The rows still EXIST; ingestRoles' dedupe depends on it. The count is
+  // returned so the page can say how many it dropped rather than leaving
+  // "73 in the database, 58 on screen" as a mystery.
+  const { visible, hiddenCount } = partitionNeverLive((data as Job[]) ?? []);
+  return { jobs: visible, hiddenCount };
 }
 
 export async function addJob(
