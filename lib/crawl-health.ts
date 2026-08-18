@@ -20,6 +20,8 @@ export interface TrackedRow {
   crawlIntervalDays: number;
   consecutiveFailures: number;
   lastCheckedAt: string | null;
+  /** When the current run of failures began; null when healthy or user-disabled. */
+  failingSince: string | null;
 }
 
 export interface CrawlHealth {
@@ -31,6 +33,14 @@ export interface CrawlHealth {
   failing: number;
   /** Days late of the worst slipping company; 0 when none is. */
   worstDaysLate: number;
+  /**
+   * Companies the CRAWLER stopped tracking, having given up on a dead page.
+   *
+   * Distinguished from a company the user switched off by the failure clock:
+   * setTracking clears `failing_since` in both directions, so only the crawler
+   * leaves a switched-off row with one set.
+   */
+  dropped: number;
   /** Whether the banner should say anything at all. */
   behind: boolean;
 }
@@ -50,6 +60,7 @@ export function summarizeCrawlHealth(
   now: Date = new Date()
 ): CrawlHealth {
   const tracked = rows.filter((r) => r.trackingEnabled);
+  const dropped = rows.filter((r) => !r.trackingEnabled && r.failingSince !== null).length;
 
   let slipping = 0;
   let failing = 0;
@@ -83,6 +94,7 @@ export function summarizeCrawlHealth(
     slipping,
     failing,
     worstDaysLate,
+    dropped,
     behind: slipping > 0,
   };
 }

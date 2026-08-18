@@ -54,7 +54,7 @@ export function shouldStopTracking(row: FailingRow, now: Date = new Date()): boo
 /** What the Watchlist tells the user, and what the crawler logs. */
 export function stoppedTrackingReason(consecutiveFailures: number): string {
   return (
-    `Stopped tracking — the careers page has been unreachable for ` +
+    `Stopped tracking — the careers page has been unreachable for more than ` +
     `${DEAD_PAGE_GRACE_DAYS} days (${consecutiveFailures} failed checks). ` +
     `Fix the careers URL or turn tracking back on to resume.`
   );

@@ -8,6 +8,7 @@ const row = (over: Partial<TrackedRow> = {}): TrackedRow => ({
   crawlIntervalDays: 7,
   consecutiveFailures: 0,
   lastCheckedAt: "2026-08-15T12:00:00.000Z",
+  failingSince: null,
   ...over,
 });
 
@@ -88,5 +89,44 @@ describe("summarizeCrawlHealth", () => {
     );
     expect(s.slipping).toBe(2);
     expect(s.worstDaysLate).toBe(21);
+  });
+});
+
+// Found by looking at the rendered page rather than by a test: a company the
+// crawler gives up on lands in the "Not tracked" drawer, which is COLLAPSED by
+// default. Telling the user is the entire point of dropping it, so the count has
+// to surface above the fold.
+describe("companies the crawler gave up on", () => {
+  test("none dropped, nothing to announce", () => {
+    expect(summarizeCrawlHealth([row()], NOW).dropped).toBe(0);
+  });
+
+  test("a row switched off WITH a failure clock was dropped by us", () => {
+    const s = summarizeCrawlHealth(
+      [row({ trackingEnabled: false, consecutiveFailures: 4, failingSince: "2026-08-01T12:00:00.000Z" })],
+      NOW
+    );
+    expect(s.dropped).toBe(1);
+  });
+
+  // setTracking clears failing_since in both directions, so a row the USER
+  // switched off carries no clock. Without this the banner would claim we
+  // dropped a company the user turned off themselves.
+  test("a row the user switched off is not counted", () => {
+    const s = summarizeCrawlHealth(
+      [row({ trackingEnabled: false, consecutiveFailures: 0, failingSince: null })],
+      NOW
+    );
+    expect(s.dropped).toBe(0);
+  });
+
+  test("dropped companies are not also counted as tracked or slipping", () => {
+    const s = summarizeCrawlHealth(
+      [row({ trackingEnabled: false, consecutiveFailures: 4, failingSince: "2026-07-01T12:00:00.000Z",
+             lastCheckedAt: "2026-07-01T12:00:00.000Z" })],
+      NOW
+    );
+    expect(s.tracked).toBe(0);
+    expect(s.slipping).toBe(0);
   });
 });

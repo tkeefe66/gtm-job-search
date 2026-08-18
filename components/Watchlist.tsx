@@ -318,6 +318,7 @@ export default function Watchlist() {
       crawlIntervalDays: c.crawl_interval_days,
       consecutiveFailures: c.consecutive_failures,
       lastCheckedAt: c.last_checked_at,
+      failingSince: c.failing_since,
     }))
   );
 
@@ -330,6 +331,21 @@ export default function Watchlist() {
           land in Roles, already scored.
         </p>
       </div>
+
+      {health.dropped > 0 && (
+        <div className="mb-4 rounded-md border border-slate bg-[#F8FAFC] p-4">
+          <p className="text-sm font-medium">
+            {health.dropped === 1
+              ? "1 company was dropped because its careers page stopped working."
+              : `${health.dropped} companies were dropped because their careers pages stopped working.`}
+          </p>
+          <p className="mt-1 text-xs text-ink/60">
+            {health.dropped === 1 ? "It is" : "They are"} under Not tracked below,
+            with the reason. Fix the careers URL or press Resume to start checking{" "}
+            {health.dropped === 1 ? "it" : "them"} again.
+          </p>
+        </div>
+      )}
 
       {health.behind && (
         <div className="mb-6 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4">
@@ -346,7 +362,7 @@ export default function Watchlist() {
             longer to get through. Track fewer companies, or give them a longer
             interval, and the schedule will hold.
             {health.failing > 0
-              ? ` (${health.failing} more ${health.failing === 1 ? "is" : "are"} being retried less often after repeated failures — that is separate, and not a capacity problem.)`
+              ? ` (${health.failing} more ${health.failing === 1 ? "is" : "are"} failing their checks — that is a broken careers page, not a capacity problem.)`
               : ""}
           </p>
         </div>
