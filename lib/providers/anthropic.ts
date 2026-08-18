@@ -89,6 +89,7 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
       const message = (await createClient(opts.apiKey).messages.create(body)) as {
         content: unknown[];
         usage?: RawUsage;
+        stop_reason?: string | null;
       };
       report("gtm-job-search", opts.model, message.usage);
 
@@ -101,6 +102,7 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
       return {
         text: toolBlock ? JSON.stringify(toolBlock.input) : textOf(message.content),
         usage: normaliseUsage(message.usage, 0),
+        stopReason: message.stop_reason ?? null,
       };
     },
 
@@ -122,7 +124,7 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
         system: opts.system,
         tools: [webSearchTool],
         messages: [{ role: "user", content: opts.prompt }],
-      })) as { content: unknown[]; usage?: RawUsage };
+      })) as { content: unknown[]; usage?: RawUsage; stop_reason?: string | null };
 
       report("gtm-job-search", opts.model, message.usage);
 
@@ -141,7 +143,11 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
         console.error("anthropic.searchAndComplete: failed to log issued searches —", err);
       }
 
-      return { text: textOf(message.content), usage: normaliseUsage(message.usage, issued.length) };
+      return {
+        text: textOf(message.content),
+        usage: normaliseUsage(message.usage, issued.length),
+        stopReason: message.stop_reason ?? null,
+      };
     },
 
     async validateKey(key: string, model: string): Promise<KeyVerdict> {

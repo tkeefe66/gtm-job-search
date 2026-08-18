@@ -143,3 +143,52 @@ describe("the Anthropic adapter", () => {
     expect(JSON.parse(out.text)).toEqual({ score: 4 });
   });
 });
+
+// stop_reason was discarded by both methods until 2026-08-18, which made a
+// truncated response indistinguishable from a model that simply answered in
+// prose. Those need opposite handling (lib/prose-salvage.ts), so the adapter
+// has to carry the field rather than the caller guessing from the text.
+describe("stop_reason", () => {
+  test("searchAndComplete reports the stop reason the API gave", async () => {
+    const { factory } = fakeClient({
+      content: [{ type: "text", text: "I found a careers page." }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+      stop_reason: "max_tokens",
+    });
+    const p = createAnthropicProvider({ createClient: factory });
+
+    const out = await p.searchAndComplete({
+      apiKey: "sk-ant-x", model: "claude-sonnet-4-6",
+      system: "s", prompt: "p", maxTokens: 500,
+    });
+
+    expect(out.stopReason).toBe("max_tokens");
+  });
+
+  test("complete reports the stop reason the API gave", async () => {
+    const { factory } = fakeClient({ ...textOnly, stop_reason: "end_turn" });
+    const p = createAnthropicProvider({ createClient: factory });
+
+    const out = await p.complete({
+      apiKey: "sk-ant-x", model: "claude-sonnet-4-6",
+      system: "s", prompt: "p", maxTokens: 500,
+    });
+
+    expect(out.stopReason).toBe("end_turn");
+  });
+
+  // Absent rather than invented: salvageDecisionFor treats null as salvageable,
+  // so a fabricated "end_turn" here would be indistinguishable from a real one
+  // while a fabricated "max_tokens" would score healthy pages as dead.
+  test("a response with no stop_reason reports null, not a guess", async () => {
+    const { factory } = fakeClient(textOnly);
+    const p = createAnthropicProvider({ createClient: factory });
+
+    const out = await p.complete({
+      apiKey: "sk-ant-x", model: "claude-sonnet-4-6",
+      system: "s", prompt: "p", maxTokens: 500,
+    });
+
+    expect(out.stopReason).toBeNull();
+  });
+});

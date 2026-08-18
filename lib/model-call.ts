@@ -63,6 +63,22 @@ function collect(c: Completion): string {
 }
 
 /**
+ * A response plus WHY THE MODEL STOPPED — the two facts a caller needs to tell
+ * a truncated answer apart from one that ignored its output-format
+ * instruction. See lib/prose-salvage.ts for why those must not be handled the
+ * same way.
+ */
+export interface DetailedResponse {
+  text: string;
+  stopReason: string | null;
+}
+
+function collectDetailed(c: Completion): DetailedResponse {
+  recordUsage(c.usage);
+  return { text: c.text, stopReason: c.stopReason };
+}
+
+/**
  * A call with the provider's native search tool.
  *
  * `maxSearches` sets the per-request ceiling — the only hard limit on how many
@@ -76,12 +92,29 @@ export async function callWithWebSearch(opts: {
   maxTokens?: number;
   maxSearches?: number;
 }): Promise<string> {
+  return (await callWithWebSearchDetailed(opts)).text;
+}
+
+/**
+ * The same call, keeping the stop reason.
+ *
+ * Split rather than widening callWithWebSearch's return type: five call sites
+ * only ever wanted the text, and changing all of them to reach through a
+ * wrapper object would be churn that buys nothing. A caller that needs to
+ * recover from an unparseable response takes this one.
+ */
+export async function callWithWebSearchDetailed(opts: {
+  system: string;
+  prompt: string;
+  maxTokens?: number;
+  maxSearches?: number;
+}): Promise<DetailedResponse> {
   const { provider, apiKey, model, maxSearches } = routing();
   if (mustRefuseSearch(provider.searchCapEnforcement, maxSearches)) {
     throw new SearchUnavailableError(provider.id);
   }
   const cap = opts.maxSearches ?? (maxSearches === null ? undefined : maxSearches);
-  return collect(
+  return collectDetailed(
     await provider.searchAndComplete({
       apiKey,
       model,

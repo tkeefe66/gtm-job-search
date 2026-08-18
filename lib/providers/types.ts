@@ -31,6 +31,16 @@ export interface Usage {
 export interface Completion {
   text: string;
   usage: Usage;
+  /**
+   * Why the model stopped, verbatim from the provider, or null if it did not
+   * say. REQUIRED rather than optional for the same reason as the three fields
+   * above: without it a response truncated at max_tokens is indistinguishable
+   * from one that simply ignored a JSON instruction, and those need opposite
+   * handling (lib/prose-salvage.ts) — one is a real failure, the other is
+   * recoverable. An adapter that cannot report it must pass null explicitly, so
+   * the gap is visible at the seam instead of being silently defaulted.
+   */
+  stopReason: string | null;
 }
 
 export interface CallOpts {

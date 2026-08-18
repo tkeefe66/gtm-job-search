@@ -35,8 +35,8 @@ function scope(over: Partial<Parameters<typeof runWithBilling>[0]> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   enforcement = "in-request";
-  searchAndComplete.mockResolvedValue({ text: "ok", usage });
-  complete.mockResolvedValue({ text: "ok", usage: { ...usage, searches: 0 } });
+  searchAndComplete.mockResolvedValue({ text: "ok", usage, stopReason: "end_turn" });
+  complete.mockResolvedValue({ text: "ok", usage: { ...usage, searches: 0 }, stopReason: "end_turn" });
 });
 
 describe("the facade routes through the scope's provider", () => {
