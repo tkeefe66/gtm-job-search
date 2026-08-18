@@ -203,9 +203,18 @@ the employer's own.
 The pass will NOT close a role merely because the employer's board stopped
 listing it, even though that is how most of these actually die. The board is
 found by GUESSING a slug from the company name, so a collision would close a
-live role against a stranger's board. Those rows are reported and handed to the
-bulk status control for the user to decide. Only a definitive 404/410 closes
-anything, unchanged.
+live role against a stranger's board. Those rows are reported with their own
+`Move to Out` button — per row, plus a select-all once a group has more than one
+— rather than handed to the table's bulk status control, which sat far enough
+down the page that clicking "select" read as a button that did nothing. The
+report distinguishes three reasons (`UnclearReason`, `lib/link-report.ts`),
+because one sentence for all three was false for two of them: `empty` (a board
+matched the company's name but lists nothing), `ambiguous` (several postings
+could be this role), and `unresolved` (no employer board found at all —
+previously a bare COUNT in the summary line, so those rows could be counted but
+never seen or acted on). None is ever auto-closed; every board behind them was
+found by guessing a slug, so the row wording hedges once and the buttons carry
+no second warning. Only a definitive 404/410 closes anything, unchanged.
 
 **A role that was already dead when we found it is hidden, not deleted.**
 `ingestRoles` closes a role on two signals — a definitive 404/410 from
