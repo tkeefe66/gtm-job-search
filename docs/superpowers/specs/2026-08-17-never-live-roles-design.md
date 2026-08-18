@@ -95,6 +95,11 @@ alter table jobs add column if not exists never_live boolean not null default fa
 
 Default `false`, so applying it against the running build is inert.
 
+The alter also lives in `db/migrations/008_never_live.sql`, which is the
+mechanism an EXISTING database is actually migrated through
+(`db/migrate.mjs`) — `db/schema.sql` stays the fresh-install bootstrap only.
+See §8.
+
 ### 2. Write site
 
 `lib/ingest-roles.ts` closes a role on two signals, and they now split:
@@ -195,7 +200,11 @@ repo).
 
 Schema first, always:
 
-1. Apply the schema against production. Adding a column defaulted `false` is
+1. Apply `db/migrations/008_never_live.sql` against production via
+   `db/migrate.mjs`, not `db/apply-schema.mjs` — `schema.sql` still contains
+   `create table if not exists insights_cache`, a table migration 006 has
+   since dropped, and applying it whole would re-create that table with no
+   `tenant_id` column or RLS policy. Adding a column defaulted `false` is
    inert against the running build. Deploying the code first would make every
    `addJob` insert fail against a table with no `never_live` column.
 2. Run the back-fill dry-run, review the 15 rows, then `--apply`.

@@ -100,6 +100,12 @@ alter table jobs add column if not exists source_url text;
 -- Deliberately narrower than the condition that CLOSES a role: `unlisted` (the
 -- employer's guessed board does not list the title) also closes, but does not
 -- hide. See lib/ingest-roles.ts.
+--
+-- This alter must stay here so a fresh install has the column, but it is not
+-- the mechanism for an EXISTING database: that is
+-- db/migrations/008_never_live.sql, run through db/migrate.mjs. See that
+-- file's comment for why apply-schema.mjs is the wrong tool for an existing
+-- database.
 alter table jobs add column if not exists never_live boolean not null default false;
 
 -- Tracking: watchlist rows are crawled on a recurring schedule until the user

@@ -172,4 +172,14 @@ describe("never_live records only the definitive death signal", () => {
 
     expect(vi.mocked(scoreFit)).not.toHaveBeenCalled();
   });
+
+  test("a role whose URL check was inconclusive is New and not flagged", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.urlStatus = "unknown"; // 403 / timeout — the common case
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().status).toBe("New");
+    expect(insertedRow().never_live).toBe(false);
+  });
 });

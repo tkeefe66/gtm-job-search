@@ -76,10 +76,9 @@ describe("getJobs", () => {
     expect(res.error).toBeUndefined();
   });
 
-  // Mutation caught: partitionNeverLive's `!== true` becoming `=== false` (or
-  // a truthiness check) — a row with no never_live key at all would then be
-  // treated the same as an absent key WOULD under truthiness (dropped),
-  // rather than staying visible.
+  // Mutation caught: partitionNeverLive's `!== true` becoming `=== false` — a
+  // row with no never_live key at all would then read as "not false" and be
+  // dropped, rather than staying visible.
   test("a row whose never_live key is absent stays visible", async () => {
     const rowWithNoKey = { id: "a", company: "Clay", role_title: "RevOps Manager" } as Job;
     h.state.readResult = {

@@ -639,17 +639,22 @@ git commit -m "docs: record the never-live hiding rule and why it is not a statu
 
 **Order is load-bearing.** Applying the schema against the running build is inert: the column defaults to `false` and no deployed code reads or writes it. Deploying the CODE first is not — every `addJob` insert would fail against a table with no `never_live` column, breaking all three ingest paths (Find Roles, role search, the crawler).
 
-- [ ] **Step 1: Apply the schema to production**
+- [ ] **Step 1: Apply the migration to production**
 
 ```bash
-railway run --service Postgres node db/apply-schema.mjs
+railway run --service Postgres node db/migrate.mjs
 ```
 
-Expected: `Schema applied. Tables: app_settings, crawl_runs, discovered_roles, ...`.
-If it reports it cannot reach the host, the private IPv6 `DATABASE_URL` won.
-`db/apply-schema.mjs` prefers `DATABASE_URL`; re-run as
-`DATABASE_PUBLIC_URL= DATABASE_URL="$DATABASE_PUBLIC_URL" ...` only if needed —
-do NOT edit the script to change its precedence.
+Run the migration runner, not `db/apply-schema.mjs`. `db/schema.sql:82` still
+contains `create table if not exists insights_cache`, a table
+`db/migrations/006_drop_insights.sql` has since DROPPED — `apply-schema.mjs`
+would re-create it with no `tenant_id` column and no `tenant_isolation`
+policy, since migration 003's policy loop has already run. `db/migrate.mjs`
+applies only the pending, ledgered file (`008_never_live.sql`) and is a no-op
+against everything already applied.
+
+Expected: `migrate: pending -> 008_never_live.sql` followed by
+`migrate: applying 008_never_live.sql ... ok` and `migrate: done`.
 
 - [ ] **Step 2: Back-fill, dry run first**
 

@@ -49,31 +49,83 @@ try {
 }
 
 try {
-  const { rows } = await client.query(
-    `select id, company, role_title, source,
-            to_char(created_at, 'YYYY-MM-DD HH24:MI') as created
-       from jobs where ${PREDICATE} order by created_at`
+  // Presence check, run before the predicate: `jobs` is RLS-enabled AND
+  // FORCED (db/migrations/003_rls.sql, `tenant_isolation`), and this script
+  // never sets app.tenant_id, so a connection without BYPASSRLS sees zero
+  // rows regardless of the predicate below. Without this check, that reads
+  // identically to "0 row(s) match: Nothing to do." — which is exactly what
+  // the wrong database or a typo'd predicate would also print, and this repo
+  // has a documented history of that exact confusion (four failed
+  // connections once read as "empty tables"). db/migrate.mjs and db/backup.mjs
+  // both log current_database() for the same reason; this logs jobs-visible
+  // too, since an RLS-filtered connection has a real database name to show.
+  const {
+    rows: [meta],
+  } = await client.query(
+    "select current_database() as db, (select count(*) from jobs)::int as jobs"
   );
-
-  console.log(`\n${rows.length} row(s) match:`);
-  for (const r of rows) {
-    console.log(`  ${r.created}  ${r.company} — ${r.role_title}  (${r.source})`);
+  console.log(`database = ${meta.db}, jobs visible to this connection = ${meta.jobs}`);
+  if (meta.jobs === 0) {
+    console.error(
+      "Zero jobs visible. Wrong database, or RLS is filtering this connection " +
+        "(db/migrations/003_rls.sql). Refusing to continue."
+    );
+    process.exitCode = 1;
+    process.exit(1);
   }
 
   if (!apply) {
+    // Dry run: a plain read, no transaction needed — nothing is written.
+    const { rows } = await client.query(
+      `select id, tenant_id, company, role_title, source,
+              to_char(created_at, 'YYYY-MM-DD HH24:MI') as created
+         from jobs where ${PREDICATE} order by created_at`
+    );
+
+    console.log(`\n${rows.length} row(s) match:`);
+    for (const r of rows) {
+      console.log(`  ${r.created}  [${r.tenant_id}]  ${r.company} — ${r.role_title}  (${r.source})`);
+    }
     console.log("\nDry run. Nothing written. Re-run with --apply to flag these rows.");
-  } else if (rows.length === 0) {
-    console.log("\nNothing to do.");
   } else {
-    const res = await client.query(`update jobs set never_live = true where ${PREDICATE}`);
-    if (res.rowCount !== rows.length) {
-      console.error(
-        `MISMATCH: selected ${rows.length} rows but updated ${res.rowCount}. ` +
-          `Investigate before trusting the tiles.`
+    // Preview and write as one decision: the select's snapshot is what the
+    // update is verified against, so both belong in the same transaction —
+    // committed together on a match, rolled back together on a mismatch,
+    // never a preview that already committed by the time the count is
+    // checked.
+    await client.query("begin");
+    try {
+      const { rows } = await client.query(
+        `select id, tenant_id, company, role_title, source,
+                to_char(created_at, 'YYYY-MM-DD HH24:MI') as created
+           from jobs where ${PREDICATE} order by created_at`
       );
-      process.exitCode = 1;
-    } else {
-      console.log(`\nFlagged ${res.rowCount} row(s) never_live.`);
+
+      console.log(`\n${rows.length} row(s) match:`);
+      for (const r of rows) {
+        console.log(`  ${r.created}  [${r.tenant_id}]  ${r.company} — ${r.role_title}  (${r.source})`);
+      }
+
+      if (rows.length === 0) {
+        console.log("\nNothing to do.");
+        await client.query("commit");
+      } else {
+        const res = await client.query(`update jobs set never_live = true where ${PREDICATE}`);
+        if (res.rowCount !== rows.length) {
+          console.error(
+            `MISMATCH: selected ${rows.length} rows but updated ${res.rowCount}. ` +
+              `Investigate before trusting the tiles.`
+          );
+          await client.query("rollback");
+          process.exitCode = 1;
+        } else {
+          await client.query("commit");
+          console.log(`\nFlagged ${res.rowCount} row(s) never_live.`);
+        }
+      }
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      throw e;
     }
   }
 } catch (e) {

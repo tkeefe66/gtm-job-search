@@ -137,6 +137,13 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       // Two independent ways to already be closed: the link 404s, or the
       // employer's own board does not list the role. The second is what
       // actually catches reseller links, which rarely 404.
+      //
+      // checkJobUrl runs on links[i].url, which after upgradeLink may be a
+      // "posting"-precision URL built from a GUESSED board slug rather than
+      // the URL the search actually returned. That does not weaken this
+      // signal: a "posting" URL is read off the board API's own listing, so a
+      // wrong guess would land on a live stranger's posting (a 200) rather
+      // than a 404 — a guess can produce a false "live", never a false "dead".
       const deadUrl = urlStatuses[i] === "dead";
       const isDead = deadUrl || links[i].unlisted;
 
