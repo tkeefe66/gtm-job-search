@@ -229,11 +229,21 @@ export default function Watchlist() {
               ? ` · Last checked ${formatDate(c.last_checked_at)}`
               : " · Never checked"}
             {c.tracking_enabled &&
-              (isDue(c.last_checked_at, c.crawl_interval_days)
-                ? " · Due now"
-                : due
-                  ? ` · Next check ${formatDate(due.toISOString())}`
-                  : "")}
+              (isDue(c.last_checked_at, c.crawl_interval_days) ? (
+                <>
+                  {" · "}
+                  <strong className="font-semibold text-ink/70">Due now</strong>
+                </>
+              ) : due ? (
+                <>
+                  {" · Next check "}
+                  <strong className="font-semibold text-ink/70">
+                    {formatDate(due.toISOString())}
+                  </strong>
+                </>
+              ) : (
+                ""
+              ))}
           </p>
 
           {c.last_crawl_status === "empty" && (
