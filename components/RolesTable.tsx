@@ -1029,36 +1029,38 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
             <div key={job.id} className={idx < filtered.length - 1 || expandedId === job.id ? "border-b border-slate" : ""}>
               {/* Main row */}
               <div
-                className={`flex cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-canvas ${expandedId === job.id ? "bg-canvas" : ""}`}
+                className={`flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 transition hover:bg-canvas ${expandedId === job.id ? "bg-canvas" : ""}`}
                 onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}
               >
-                {/* stopPropagation: ticking a row must not also expand it. */}
-                <input
-                  type="checkbox"
-                  checked={selected.has(job.id)}
-                  onChange={() => toggleSelected(job.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  aria-label={`Select ${job.company} — ${job.role_title}`}
-                  className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
-                />
+                <div className="flex shrink-0 items-center gap-4">
+                  {/* stopPropagation: ticking a row must not also expand it. */}
+                  <input
+                    type="checkbox"
+                    checked={selected.has(job.id)}
+                    onChange={() => toggleSelected(job.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Select ${job.company} — ${job.role_title}`}
+                    className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-ink"
+                  />
 
-                {/* Fit score circle */}
-                <div
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                    job.fit_score && job.fit_score >= 4
-                      ? "bg-[#DCFCE7] text-[#14532D]"
-                      : job.fit_score === 3
-                      ? "bg-[#FEF3C7] text-[#92400E]"
-                      : job.fit_score && job.fit_score <= 2
-                      ? "bg-[#F3F4F6] text-[#6B7280]"
-                      : "bg-[#F3F4F6] text-[#9CA3AF]"
-                  }`}
-                >
-                  {job.fit_score ?? "—"}
+                  {/* Fit score circle */}
+                  <div
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                      job.fit_score && job.fit_score >= 4
+                        ? "bg-[#DCFCE7] text-[#14532D]"
+                        : job.fit_score === 3
+                        ? "bg-[#FEF3C7] text-[#92400E]"
+                        : job.fit_score && job.fit_score <= 2
+                        ? "bg-[#F3F4F6] text-[#6B7280]"
+                        : "bg-[#F3F4F6] text-[#9CA3AF]"
+                    }`}
+                  >
+                    {job.fit_score ?? "—"}
+                  </div>
                 </div>
 
                 {/* Company + title + meta */}
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-full sm:basis-0">
                   <div className="flex flex-wrap items-baseline gap-x-1.5">
                     <span className="font-medium text-ink">{job.company}</span>
                     <span className="text-ink/40">·</span>
@@ -1094,7 +1096,7 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                 </div>
 
                 {/* Badges + status */}
-                <div className="flex shrink-0 flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto" onClick={(e) => e.stopPropagation()}>
                   {job.stage && <StageBadge stage={job.stage} />}
                   {job.category && (
                     <span className="inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-xs text-ink/60 border border-slate">
