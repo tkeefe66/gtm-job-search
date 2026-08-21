@@ -6,6 +6,7 @@ import {
   getTrackedCompanies,
   setCareersUrl,
   setCrawlInterval,
+  setIgnoreLocationRule,
   setTracking,
   trackCompanyByName,
 } from "@/app/actions/watchlist";
@@ -96,6 +97,17 @@ export default function Watchlist() {
     setRowBusy(company, true);
     try {
       const res = await setTracking(company, enabled);
+      if (res.error) setNotice(res.error);
+      await load();
+    } finally {
+      setRowBusy(company, false);
+    }
+  }
+
+  async function handleSetIgnoreLocationRule(company: string, ignore: boolean) {
+    setRowBusy(company, true);
+    try {
+      const res = await setIgnoreLocationRule(company, ignore);
       if (res.error) setNotice(res.error);
       await load();
     } finally {
@@ -220,6 +232,23 @@ export default function Watchlist() {
                   </option>
                 ))}
               </select>
+            </label>
+          )}
+
+          {c.tracking_enabled && (
+            <label
+              className="mt-1 flex items-center gap-1 text-xs text-ink/50"
+              title="Search for roles at this company regardless of the location rule on Settings — for a company you're pursuing even if the role isn't remote or local yet."
+            >
+              <input
+                type="checkbox"
+                checked={c.ignore_location_rule}
+                disabled={busyRows.has(c.company)}
+                onChange={(e) =>
+                  void handleSetIgnoreLocationRule(c.company, e.target.checked)
+                }
+              />
+              Ignore location
             </label>
           )}
 

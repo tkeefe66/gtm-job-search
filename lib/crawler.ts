@@ -77,6 +77,30 @@ export async function loadRunContext(): Promise<RunContext> {
   return { criteria, fitInputs, profile, criteriaChangedAt };
 }
 
+/**
+ * The criteria a single company's crawl should actually run against.
+ *
+ * `locationRule` is a soft, model-obeyed instruction baked straight into the
+ * search/extraction prompts (never a hard filter, and never seen by
+ * scoreFit) — so a role can go unfound simply because the model honoured a
+ * location constraint the tenant doesn't want applied to THIS company. The
+ * override replaces it with an explicit any-location note rather than
+ * omitting the line, so the model is told, not merely left silent.
+ *
+ * Pure and per-company: `ctx.criteria` is shared across an entire cron
+ * batch (see RunContext's doc comment), so this must return a new object
+ * rather than mutate it, or the override would leak into the next
+ * company's crawl.
+ */
+export function criteriaForCompany(criteria: Criteria, ignoreLocation: boolean): Criteria {
+  if (!ignoreLocation) return criteria;
+  return {
+    ...criteria,
+    locationRule:
+      "Location is not a filter for this company — include on-site, hybrid, and remote roles regardless of city.",
+  };
+}
+
 export function buildExtractionPrompt(
   company: string,
   page: ExtractedPage,
@@ -697,11 +721,15 @@ export async function crawlCompany(
       status = "needs_url";
       errorMessage = `Could not find a careers page for "${company}". Add one manually on the Watchlist page.`;
     } else {
+      // This company's own override, not ctx.criteria mutated in place —
+      // ctx is shared across every company in a cron batch.
+      const criteria = criteriaForCompany(ctx.criteria, tracked.ignore_location_rule);
+
       // A company that previously needed the search tier skips the fetch
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
       let fetchResult: FetchTierResult | null = null;
       if (tracked.crawl_method !== "search") {
-        fetchResult = await extractViaFetch(company, careersUrl, ctx.criteria, ctx.profile);
+        fetchResult = await extractViaFetch(company, careersUrl, criteria, ctx.profile);
       }
 
       if (fetchResult?.kind === "roles") {
@@ -722,7 +750,7 @@ export async function crawlCompany(
         const searchResult = await extractViaSearch(
           company,
           careersUrl,
-          ctx.criteria,
+          criteria,
           ctx.profile
         );
         roles = searchResult.roles;

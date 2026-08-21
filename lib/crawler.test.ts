@@ -19,6 +19,7 @@ import {
   classifyFetchOutcome,
   closureEvidenceTitles,
   closureRunsFromRows,
+  criteriaForCompany,
   LAST_TRUSTWORTHY_RUN_SQL,
   rolesFromRaw,
   runProvidesClosureEvidence,
@@ -135,6 +136,27 @@ describe("buildExtractionPrompt", () => {
     expect(prompt).toContain("Reykjavik only.");
     expect(prompt).not.toContain("Denver");
     expect(prompt).not.toContain("Head of Revenue Operations");
+  });
+});
+
+describe("criteriaForCompany", () => {
+  test("replaces locationRule with an any-location note when ignoreLocation is true", () => {
+    const result = criteriaForCompany(DEFAULT_CRITERIA, true);
+    expect(result.locationRule).not.toBe(DEFAULT_CRITERIA.locationRule);
+    expect(result.locationRule.toLowerCase()).toContain("not a filter");
+  });
+
+  test("leaves every other field untouched when overriding location", () => {
+    const result = criteriaForCompany(DEFAULT_CRITERIA, true);
+    expect(result.titles).toEqual(DEFAULT_CRITERIA.titles);
+    expect(result.locations).toEqual(DEFAULT_CRITERIA.locations);
+    expect(result.stackTerms).toEqual(DEFAULT_CRITERIA.stackTerms);
+    expect(result.fitBrain).toBe(DEFAULT_CRITERIA.fitBrain);
+  });
+
+  test("returns locationRule unchanged when ignoreLocation is false", () => {
+    const result = criteriaForCompany(DEFAULT_CRITERIA, false);
+    expect(result.locationRule).toBe(DEFAULT_CRITERIA.locationRule);
   });
 });
 

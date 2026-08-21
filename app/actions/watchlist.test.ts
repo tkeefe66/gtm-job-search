@@ -75,6 +75,7 @@ import {
   addToWatchlist,
   checkCompanyNow,
   getWatchedCompanyKeys,
+  setIgnoreLocationRule,
   setTracking,
   trackCompanyByName,
 } from "./watchlist";
@@ -245,6 +246,23 @@ describe("resolveWriteTarget tells 'could not look' apart from 'not there'", () 
     expect(res.error).toBeUndefined();
     expect(h.state.writes).toHaveLength(1);
     expect(h.state.writes[0].payload.tracking_enabled).toBe(false);
+  });
+});
+
+describe("setIgnoreLocationRule", () => {
+  test("a clean read with a matching row writes the flag", async () => {
+    readOk([{ company: "Clay", careers_url: null }]);
+    const res = await setIgnoreLocationRule("clay", true);
+    expect(res.error).toBeUndefined();
+    expect(h.state.writes).toHaveLength(1);
+    expect(h.state.writes[0].payload.ignore_location_rule).toBe(true);
+  });
+
+  test("a clean read with no such row does not write", async () => {
+    readOk([]);
+    const res = await setIgnoreLocationRule("Nope", true);
+    expect(res.error).toContain("is not on the watchlist");
+    expect(h.state.writes).toHaveLength(0);
   });
 });
 

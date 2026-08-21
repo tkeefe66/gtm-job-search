@@ -209,6 +209,14 @@ export interface TrackedCompany {
    * signal is contract awards or facility licences fills this instead.
    */
   extras: Record<string, string>;
+  /**
+   * Overrides `criteria.locationRule` for this company's crawl only — the
+   * tenant is deliberately pursuing this company regardless of location
+   * (e.g. angling to get an on-site role turned remote). See
+   * `criteriaForCompany` in lib/crawler.ts. Never touches Discover's "Find
+   * Roles" path, which has no watchlist awareness.
+   */
+  ignore_location_rule: boolean;
 }
 
 export interface CrawlRun {

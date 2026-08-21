@@ -511,6 +511,24 @@ export async function setTracking(
   return { error: error?.message };
 }
 
+export async function setIgnoreLocationRule(
+  company: string,
+  ignore: boolean
+): Promise<{ error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
+
+  const target = await resolveWriteTarget(company);
+  if (target.error) return { error: target.error };
+
+  const { error } = await supabase.forTenant(await resolveTenantId())
+    .from("watchlist")
+    .update({ ignore_location_rule: ignore })
+    .eq("company", target.company);
+  return { error: error?.message };
+}
+
 export async function setCareersUrl(
   company: string,
   url: string

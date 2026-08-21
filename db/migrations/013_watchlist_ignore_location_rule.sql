@@ -1,0 +1,25 @@
+-- Per-company override of criteria.locationRule for the crawler only.
+--
+-- WHY. locationRule is a soft, model-obeyed instruction baked into the
+-- crawler's search/extraction prompts (never a hard filter, and never seen
+-- by scoreFit — see lib/crawler.ts, lib/company-role-prompt.ts). That means
+-- a tenant deliberately chasing an on-site role at one company (angling to
+-- get it turned remote, for instance) has no way to stop the model from
+-- self-filtering that company's roles on location, short of blanking the
+-- tenant-wide rule for every other company too. This column lets one
+-- watchlist row opt out without touching the shared criteria.
+--
+-- Boolean, defaulting false, same shape as tracking_enabled: read per
+-- company inside crawlCompany (lib/crawler.ts) via criteriaForCompany, which
+-- clones the shared RunContext's criteria for that one company rather than
+-- mutating it — ctx.criteria is shared across an entire cron batch.
+--
+-- Scope is deliberately narrow: this affects the crawler only (the
+-- scheduled crawl and the manual "Check now" button). Discover's "Find
+-- Roles" button has no watchlist awareness today and stays untouched.
+--
+-- NO GRANT NEEDED, same reasoning as migrations 010 and 012: migration 009's
+-- column-list revoke is scoped to `users`; `watchlist` still holds
+-- migration 003's table-level grant to app_rw, which covers columns added
+-- later.
+alter table watchlist add column if not exists ignore_location_rule boolean not null default false;
