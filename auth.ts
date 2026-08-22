@@ -158,10 +158,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     /**
      * Runs BEFORE the adapter creates a user, which is what makes it the right
-     * place to reject an identity — and the wrong place to create the waitlist
-     * row. Returning false here aborts before `createUser`, so a rejected signup
-     * leaves nothing for the admin to approve; that is why a PENDING user is
-     * allowed through to creation and denied later at session read instead.
+     * place to reject an identity. Returning false here aborts before
+     * `createUser`, so a rejected signup leaves no row behind at all. Anything
+     * that returns true here is created 'active' immediately (db/schema.sql's
+     * column default) — there is no pending/waitlist step any more.
      */
     async signIn({ profile }) {
       const sub = profile?.sub;
@@ -219,36 +219,34 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
      *
      * So the row is created by the normal signup path and promoted here, at the
      * one moment the user demonstrably controls the address: Google has just
-     * verified it. Everyone else is created `pending` and waits for approval.
+     * verified it. Everyone else is created `active` (the column default) and
+     * gets in immediately — this only ever needs to set `role`.
      */
     async createUser({ user }) {
       const admin = process.env.ADMIN_EMAIL;
       if (!admin || !user.email || user.email.toLowerCase() !== admin.toLowerCase()) return;
       try {
-        await authPool().query(
-          `update users set status = 'active', role = 'admin', approved_at = now() where id = $1`,
-          [user.id]
-        );
+        await authPool().query(`update users set role = 'admin' where id = $1`, [user.id]);
         console.log("auth: promoted the configured admin on first sign-in");
       } catch (err) {
         // EXPECTED on any database carrying db/migrations/009: `role` is no
         // longer writable by app_rw, because a table-level UPDATE grant on this
         // column is a privilege-escalation path for any future mass-assigning
-        // write. The statement sets status, role and approved_at together, so it
-        // fails as a whole and promotes nothing — there is no half-promoted row.
+        // write.
         //
         // Swallowed rather than rethrown because this runs inside an Auth.js
         // EVENT: throwing here fails the sign-in that just succeeded, turning a
-        // missing promotion into a locked door. The account is created and
-        // 'pending'; the owner approves it with the statement below, run as the
-        // database owner rather than as the app.
+        // missing promotion into a locked door. The account is still created
+        // 'active' (the column default) regardless of this UPDATE's outcome —
+        // only `role` is at risk here, not access — so a failed promotion just
+        // means the owner is signed in as a plain user until they run the
+        // statement below, as the database owner rather than as the app.
         const message = err instanceof Error ? err.message : String(err);
         console.error(
           `auth: could not self-promote the configured admin (${message}). ` +
             `This is expected once db/migrations/009_users_column_grants.sql is applied. ` +
             `Promote manually, as the database owner:\n` +
-            `  update users set status = 'active', role = 'admin', approved_at = now() ` +
-            `where email = '${admin}';`
+            `  update users set role = 'admin' where email = '${admin}';`
         );
       }
     },

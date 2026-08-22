@@ -187,10 +187,12 @@ create table if not exists users (
   google_sub    text unique,
 
   -- Only 'active' is allowed in; everything else, INCLUDING an unrecognised
-  -- value, is refused (accessFor fails closed). 'pending' is what the waitlist
-  -- lists — the row must be written even though no session is issued, or the
-  -- admin has nothing to approve.
-  status        text not null default 'pending',
+  -- value, is refused (accessFor fails closed). New users default to 'active'
+  -- so sign-in is immediate — there is no approval gate any more. 'pending'
+  -- still exists as a status a row CAN hold (accessFor still refuses it), but
+  -- nothing sets it any more; 'suspended'/'denied' remain the admin's levers
+  -- for after-the-fact moderation. See db/migrations/014_auto_activate_users.sql.
+  status        text not null default 'active',
   role          text not null default 'user',
 
   created_at    timestamptz not null default now(),
