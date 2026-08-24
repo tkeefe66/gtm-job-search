@@ -1,0 +1,21 @@
+/* Spacing — tighter than the previous system; the page should feel set,
+   not laid out. 4px base. */
+:root {
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 12px;
+  --s-6: 16px;
+  --s-7: 22px;
+  --s-8: 30px;
+
+  /* Document rhythm */
+  --gap-bullet: 5px;
+  --gap-role: 13px;
+  --gap-section: 20px;
+  --gap-header: 22px;
+  --indent-bullet: 16px;
+  --page-margin: 0.68in;
+  --rail: 96px;
+}

@@ -1,4 +1,4 @@
-# AI-tailored resume builder — design, revision 2
+# AI-tailored resume builder — design, revision 3
 
 Date: 2026-08-24
 Status: approved for planning
@@ -6,8 +6,24 @@ Status: approved for planning
 Revision 1 was reviewed by three independent subagents, each against a
 different lens (technical correctness, adversarial tenant-isolation
 security, and scope/completeness). No security gap survived review, but two
-factual errors and a set of real scope gaps did. This revision fixes all of
-them.
+factual errors and a set of real scope gaps did. Revision 2 fixed them.
+
+**Revision 3: the Claude Design project revision 2 pointed at was itself the
+wrong one.** `697a0eb1-…` ("Resume design system," teal/clay, Source Sans 3 +
+IBM Plex Mono) was a different, earlier project. The real one, given directly
+by the user, is `6546d121-b800-44ac-966c-cd65638071a5` ("My Resume Design
+System") — an editorial broadsheet in Newsreader + JetBrains Mono with a
+single deep-navy accent. The template has now actually been ported into the
+repo and verified in a browser, not merely planned — see "Rendering and
+export" below, which is rewritten to describe what's built rather than what's
+proposed. The `BaseResume` shape in "Data model" is also revised to match the
+shape the shipped `ResumeDocument.tsx` actually renders, which differs from
+revision 2's guess in real ways: no `skills` field (this design has no skills
+section, and "no skills matrix" is one of the system's own non-negotiables),
+`tagline` lives on `contact` not at the top level, a new `advisory` list
+(the design has three repeatable lists, not two), and `education`/`advisory`
+share one row shape rather than two distinct types — the design itself treats
+them identically.
 
 ## What changed from revision 1
 
@@ -79,9 +95,10 @@ because every other design decision downstream has to satisfy that first.
 ## Scope for v1
 
 **In scope**: one structured base resume per tenant; one existing designed
-template, hand-reimplemented as a React component; an AI tailoring pass per
-tracked job that rewrites the summary and reorders/re-emphasizes bullets and
-skill order; PDF export via browser print; an optional one-time bootstrap
+template, already ported as a React component (`components/resume/ResumeDocument.tsx`
+— see "Rendering and export"); an AI tailoring pass per tracked job that
+rewrites the summary and reorders/re-emphasizes bullets; PDF export via
+browser print; an optional one-time bootstrap
 from the résumé text captured at onboarding, for tenants who onboarded that
 way.
 
@@ -168,7 +185,7 @@ client-side check is invented.
 
 ### `base_resume` — an `app_settings` row, not a new table
 
-Structured contact info, summary, work history, education, and skills for
+Structured contact info, summary, work history, advisory, and education for
 one tenant is exactly the shape `profile` already stores: a whole-object
 jsonb value, replaced wholesale on save, repaired field-by-field on read
 rather than rejected outright when malformed. `base_resume` becomes a
@@ -181,41 +198,66 @@ handles would force a fourth shape onto that function for no benefit. The
 key)` upsert in `lib/settings-store.ts` need no changes to support a new
 key. No migration required for this half of the data model.
 
-Shape:
+Shape — this is `ResumeData` as actually implemented in
+`components/resume/ResumeDocument.tsx` (the shipped render component; see
+"Rendering and export"), adopted verbatim as the storage/editing shape too so
+there's no translation layer between what's saved and what's rendered:
 
 ```ts
+interface ResumeLink {
+  label: string; // "Website" / "LinkedIn" / "GitHub" — never a raw URL,
+                  // per the design system's own rule (USAGE.md): links are
+                  // labeled by destination, not shown as text
+  href: string;
+}
+
 interface ResumeContact {
   name: string;
-  email: string;
-  phone: string;
+  tagline: string;   // one line, renders next to the name — distinct from
+                      // `summary` below, which is the longer paragraph
   location: string;
-  links: string[]; // e.g. LinkedIn, portfolio — free-form, order-preserving
+  phone: string;
+  email: string;
+  links: ResumeLink[];
 }
 
 interface WorkHistoryEntry {
-  id: string;        // client-generated (crypto.randomUUID()); stable React key
-                      // across add/remove/reorder in the editor — array index
-                      // is not safe for that once entries can be deleted
-  company: string;
+  id: string;          // client-generated (crypto.randomUUID()); stable React
+                        // key across add/remove/reorder in the editor — array
+                        // index is not safe for that once entries can be deleted
   title: string;
-  startDate: string; // free-form ("2021", "Mar 2021") — not parsed, only displayed
-  endDate: string;   // "" or "Present" both valid
+  org: string;          // e.g. "Demandbase"
+  locationLine: string; // e.g. "Remote — San Francisco, CA" — combined
+                         // remote/onsite + city, free-form, not parsed
+  acquisitionNote?: string; // e.g. "(acquired by Demandbase)" — omitted
+                             // entirely when there is none
+  dates: string;        // e.g. "July 2025 – Present" — one free-form field,
+                         // not split start/end; never parsed, only displayed
+  /** EMPTY bullets is the signal that this entry renders as a single
+   *  compressed row (title/org/dates only) instead of a full role block —
+   *  the design system's own rule (USAGE.md §6: "anything from 2018 or
+   *  earlier is a single row, never a role entry"), not a separate flag. */
   bullets: string[];
 }
 
-interface EducationEntry {
-  id: string;         // same reason as WorkHistoryEntry.id
-  school: string;
-  degree: string;
-  year: string;
+/** Advisory and Education both render as the same two-line row
+ *  (title/org/dates) — the design system treats them identically
+ *  (USAGE.md §6), so one type covers both rather than two near-duplicate
+ *  ones. For an education row, `title` holds the degree and `org` the
+ *  school. */
+interface ResumeRow {
+  id: string;
+  title: string;
+  org: string;
+  dates: string;
 }
 
 interface BaseResume {
   contact: ResumeContact;
   summary: string;
   workHistory: WorkHistoryEntry[];
-  education: EducationEntry[];
-  skills: string[];
+  advisory: ResumeRow[];
+  education: ResumeRow[];
 }
 
 /** A tailored resume is a BaseResume with the same shape, produced by the
@@ -224,6 +266,12 @@ interface BaseResume {
  *  nested inside this value — no wrapper type needed. */
 type TailoredResume = BaseResume;
 ```
+
+There is deliberately no `skills` field. The design system's own
+non-negotiables (`SKILL.md`) rule out a skills matrix or rating bars across
+all four résumé variants, and none of them render a skills section at all —
+carrying a `skills` array in the data model with nowhere in the shipped
+template to render it would be dead weight invented ahead of need.
 
 None of `ResumeContact`'s fields exist anywhere in `Profile` today — this is
 new surface area, not a relabeling of something onboarding already
@@ -378,17 +426,14 @@ by hand.
    `TailoredResume` (same shape as `BaseResume`), but the result is
    validated against the input base resume before it's ever stored or
    shown:
-   - `contact` and `education` must be exactly equal to the base resume's
-     values. If the model changed them anyway, the base resume's original
-     values are substituted back in before saving.
-   - `skills` must be a reordering of the same set — same elements, any
-     order. If the model added, dropped, or altered an element, the base
-     resume's original skill order is substituted back in.
+   - `contact`, `advisory`, and `education` must be exactly equal to the
+     base resume's values. If the model changed any of them anyway, the
+     base resume's original values are substituted back in before saving.
    - `workHistory` must have the same entries, in the same order, matched
-     by `id` — same `company`/`title`/`startDate`/`endDate` for every
-     entry. Only `bullets` within each entry may differ. Any entry that
-     fails this check has its non-`bullets` fields restored from the base
-     resume.
+     by `id` — same `title`/`org`/`locationLine`/`acquisitionNote`/`dates`
+     for every entry. Only `bullets` within each entry may differ. Any
+     entry that fails this check has its non-`bullets` fields restored
+     from the base resume.
    This is what makes "without fabricating experience" a property the
    system enforces rather than a hope the prompt expresses — a model that
    ignores instructions and invents a job title still can't get it saved.
@@ -409,14 +454,18 @@ feature works identically either way.
 
 ## UI entry points
 
-**`/resume`** is the base-resume editor: contact fields, a summary
-textarea, repeatable work-history entries (add / remove / reorder, each
-with company, title, dates, and a repeatable bullet list), repeatable
-education entries, and a repeatable skills list. If `base_resume` has
-never been saved and `profile.answers.resume` is non-empty, the empty
-form shows a "Prefill from my onboarding résumé" button that calls
-`bootstrapFromOnboarding()`. Saving over a **non-empty** existing base
-resume asks for confirmation first (see "Overwrite safety" below).
+**`/resume`** is the base-resume editor: contact fields (including the
+tagline, which sits with contact — see "Data model"), a summary textarea,
+repeatable work-history entries (add / remove / reorder, each with title,
+org, location line, optional acquisition note, dates, and a repeatable
+bullet list — leaving the bullet list empty is how an entry becomes a
+compressed single-line row, per "Data model"), and repeatable advisory and
+education entries (both the same title/org/dates row shape). If
+`base_resume` has never been saved and `profile.answers.resume` is
+non-empty, the empty form shows a "Prefill from my onboarding résumé"
+button that calls `bootstrapFromOnboarding()`. Saving over a **non-empty**
+existing base resume asks for confirmation first (see "Overwrite safety"
+below).
 
 **Tailoring is triggered from the Roles table, not from `/resume`
 directly.** Each row in `RolesTable` gets a "Tailor resume" button,
@@ -443,40 +492,79 @@ not more than that.
 
 ## Rendering and export
 
-The Claude Design project named "Resume design system"
-(`697a0eb1-…`) — a project, not one of the account's formal Design System
-objects — already contains a finished set of résumé design assets built
-from the tenant's actual résumé PDF: type and color tokens, six components
-(`ResumeHeader`, `RoleEntry`, `SystemsBlock`, `TagList`, `SectionTitle`,
-`CompressedRoles`), 19 style guideline specimens, and four finished résumé
-variants differing only in emphasis, not visual style — `index.html` ("the
-default send," a blended mix across the tenant's GTM/RevOps, product, and
-AI-systems-building experience), `resume-gtm.html`, `resume-product.html`,
-and `resume-ai.html`.
-**v1 ships `index.html`** — the balanced variant is the safest shell for a
-tailoring pass that has to adapt toward an unknown range of job types,
-rather than one already pre-angled toward a single career bucket.
+**This section describes work that is already done, not proposed.** The
+correct Claude Design project is `6546d121-b800-44ac-966c-cd65638071a5`,
+"My Resume Design System" — a project, not one of the account's formal
+Design System objects — an editorial broadsheet in **Newsreader** (variable
+serif) and **JetBrains Mono**, single deep-navy accent
+(`oklch(0.345 0.085 258)`), print-first, built from the tenant's actual
+résumé PDF. It ships four résumé variants differing only in tagline,
+summary, and which bullets survive — `index.html` ("the default send," a
+blended mix across the tenant's GTM/RevOps, product, and AI-systems-building
+experience), `resume-gtm.html`, `resume-product.html`, and `resume-ai.html`
+— all structurally identical. **v1 ships `index.html`** — the balanced
+variant is the safest shell for a tailoring pass that has to adapt toward an
+unknown range of job types, rather than one already pre-angled toward a
+single career bucket.
 
-Per the `claude-design-handoff` skill, what this project holds is a spec
-plus a prototype, not production code: `index.html`'s markup and the
-token files are mined for structure and values and hand-reimplemented
-into this repo's own styling conventions as a React component in
-`components/resume/`, taking a `BaseResume | TailoredResume` as props —
-not a literal import of the exported file. The project's own `readme.md`
-and `SKILL.md` (a "portable version for Claude Code") are the source of
-truth for the exact type scale, color tokens, and print-layout rules to
-carry over.
+This project's own docs override the generic `claude-design-handoff` skill's
+default caution about porting a design's runtime files. Most Claude Design
+bundles are a prototype whose CSS/JS is authoring scaffolding, mined for
+values and reimplemented into the host repo's own conventions. This one says
+otherwise, explicitly (`readme.md`): *"The whole system is three external
+references (`styles.css`, `doc-page.js`, `page-guides.js`) plus
+`.rsm`-scoped CSS, so it drops into any project without collision."* — and
+the skill's own instruction is that a bundle's stated intent wins over the
+generic default. So the port that's landed is split accordingly:
 
-Export is `window.print()` behind the component's `@media print`
-stylesheet — no PDF library, no server-side rendering. Because nothing in
-the design/handoff process validates print pagination, the template needs
-an explicit validation pass after handoff: page breaks landing mid-entry,
-margins, and multi-page overflow have to be checked by actually printing
-(or print-previewing) a resume with enough content to span more than one
-page, not assumed to fall out of how the template looks on screen. The
-design's own readme already states a target (two Letter pages at 0.7in
-margins, ≈1,842px of usable flow) — the validation pass confirms the
-hand-reimplementation actually hits it.
+- **Copied near-verbatim, byte-verified against the source:**
+  `public/resume-design/styles.css`, `public/resume-design/tokens/{colors,
+  document,fonts,spacing,typography}.css`, `public/resume-design/doc-page.js`,
+  `public/resume-design/page-guides.js`. `doc-page.js` is a real,
+  self-contained custom element (`<doc-page>`) that owns all print/pagination
+  geometry — `@page` injection, WebKit's thead/tfoot print bug, page-box
+  sizing — none of which this spec's earlier revisions anticipated needing
+  to write by hand; it already exists as production-intended code (its own
+  header: *"Re-running copy_starter_component with this kind overwrites this
+  file with the latest version"* — a maintained starter, not a prototype
+  harness). `page-guides.js` is a screen-only dev aid (draws a dashed
+  "page 2" marker) that the design's own `USAGE.md` says to keep: *"It hides
+  itself at print. It is a development aid, not decoration."*
+- **Reimplemented as JSX, not literally imported:** `components/resume/ResumeDocument.tsx`
+  reproduces `index.html`'s DOM structure — the `.rsm`-scoped markup itself —
+  driven by the `BaseResume`/`TailoredResume` data in "Data model" rather
+  than hardcoded text. `SKILL.md` is explicit that the `.jsx` files
+  elsewhere in the Claude Design project (`components/resume/*.jsx`) are
+  *"specifications, not runnable code"* and were not ported.
+- **A temporary, admin-gated preview route**, `app/resume-preview/page.tsx`
+  (reusing the existing `requireAdminPage()` — no new gating mechanism),
+  renders `ResumeDocument` against a fixture of the tenant's real résumé
+  content (`lib/__fixtures__/resume-preview-sample.ts`, kept out of `app/`
+  specifically so `lib/career-neutrality.test.ts`'s "previous owner" name
+  guard, which scans `app/`/`components/` only, doesn't need an exemption
+  for legitimate single-owner content — the same precedent
+  `lib/__fixtures__/fit-golden-set.json` already sets). This route exists
+  only to verify the port; it is **not** the real `/resume` route "UI entry
+  points" describes, and gets deleted once that route exists and
+  `ResumeDocument` is wired to live `getBaseResume()`/`getTailoredResume()`
+  data instead of the fixture.
+
+Every structural gotcha `USAGE.md` calls out as a silent-breakage trap is
+followed exactly in `ResumeDocument.tsx`: name and tagline share one
+wrapping `<div>` inside `.rsm-header` (three flat children would misplace
+the tagline); `.rsm-section-title` is a direct child of `.rsm-section`
+(wrapping it collapses the label rail); `.rsm-row` always sits inside a
+`.rsm-rows` wrapper (a bare `.rsm-row` renders as unstyled stacked text).
+
+Export is `window.print()` — `<doc-page>` owns the print geometry entirely;
+`USAGE.md` is explicit that nothing else should write `@page` rules or
+page-break CSS. No PDF library, no server-side rendering. This was verified
+directly rather than assumed: `doc-page.js`'s custom element registered with
+zero console errors, the navy accent and Newsreader/JetBrains Mono fonts
+rendered correctly, `@page` print geometry was confirmed injected, and the
+compressed early-career rows rendered as single lines — all checked in a
+live browser against the actual asset files now sitting in the repo, not
+against the Claude Design canvas.
 
 ## Testing
 
@@ -499,10 +587,10 @@ hand-reimplementation actually hits it.
   justification in "Tailoring call" step 3 for why this is worth doing
   despite the weaker case than `fit-prompt.ts`'s own.
 - A unit test for the post-call validation logic in step 5 of "Tailoring
-  call": given a model response that alters contact info, reorders/drops a
-  skill, or changes a work-history entry's company/title/dates, the
-  validated result matches the base resume for every field except the
-  bullets the model was actually allowed to touch.
+  call": given a model response that alters contact info, advisory,
+  education, or a work-history entry's `title`/`org`/`locationLine`/`dates`,
+  the validated result matches the base resume for every field except the
+  `bullets` the model was actually allowed to touch.
 - Migration correctness (the `create table`, RLS policy, and grant) isn't
   unit-testable in this codebase's suite — `npm test` covers pure logic
   only, per CLAUDE.md — so it's verified against the live database

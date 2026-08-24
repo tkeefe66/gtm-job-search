@@ -1,0 +1,45 @@
+/* Colors — one ink, one navy, paper. No second accent.
+   Navy is dark enough to print as near-black on a bad printer and still
+   read as a deliberate color on a good one. */
+:root {
+  /* Paper */
+  --paper: oklch(0.989 0.004 85);
+  --paper-sunk: oklch(0.965 0.006 85);
+  --paper-desk: oklch(0.92 0.006 85);
+
+  /* Ink ramp — warm near-black through hairline */
+  --ink: oklch(0.215 0.014 40);
+  --ink-2: oklch(0.42 0.012 40);
+  --ink-3: oklch(0.575 0.01 40);
+  --ink-4: oklch(0.735 0.008 40);
+
+  /* Rules */
+  --rule: oklch(0.885 0.007 45);
+  --rule-strong: oklch(0.62 0.012 40);
+
+  /* Deep navy — the one color */
+  --accent: oklch(0.345 0.085 258);
+  --accent-deep: oklch(0.275 0.075 258);
+  --accent-tint: oklch(0.955 0.014 258);
+  --accent-band: oklch(0.945 0.02 258);
+
+  /* Semantic aliases */
+  --text-name: var(--accent);
+  --text-body: var(--ink);
+  --text-secondary: var(--ink-2);
+  --text-meta: var(--ink-3);
+  --text-link: var(--accent);
+  --surface-page: var(--paper);
+  --surface-inset: var(--paper-sunk);
+  --border-hairline: var(--rule);
+  --border-section: var(--ink);
+  --marker-bullet: var(--accent);
+
+  /* Retained inventory (see readme) */
+  --accent-2: oklch(0.475 0.075 45);
+  --accent-2-deep: oklch(0.4 0.072 45);
+  --accent-2-tint: oklch(0.958 0.016 45);
+  --marker-accent: var(--accent);
+  --text-built: var(--accent-2-deep);
+  --surface-band: var(--accent-band);
+}

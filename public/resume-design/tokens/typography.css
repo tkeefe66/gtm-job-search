@@ -1,0 +1,36 @@
+/* Typography — wide steps, so hierarchy is never ambiguous.
+   52 → 17 → 14 → 10: each level is unmistakably a different level. */
+:root {
+  --fs-name: 52px;
+  --fs-tagline: 15px;
+  --fs-summary: 15px;
+  --fs-section: 12px;
+  --fs-role: 17px;
+  --fs-org: 13.5px;
+  --fs-body: 14px;
+  --fs-meta: 10px;
+  --fs-mono: 10px;
+
+  --lh-tight: 0.92;
+  --lh-role: 1.25;
+  --lh-body: 1.5;
+  --lh-summary: 1.52;
+
+  --tracking-name: -0.028em;
+  --tracking-section: 0.2em;
+  --tracking-meta: 0.02em;
+
+  --w-light: 400;
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-semibold: 600;
+  --w-bold: 700;
+
+  /* Semantic type roles */
+  --type-section: var(--w-semibold) var(--fs-section) / 1 var(--font-serif);
+  --type-role: var(--w-semibold) var(--fs-role) / var(--lh-role) var(--font-serif);
+  --type-org: italic var(--w-regular) var(--fs-org) / var(--lh-role) var(--font-serif);
+  --type-body: var(--w-regular) var(--fs-body) / var(--lh-body) var(--font-serif);
+  --type-meta: var(--w-regular) var(--fs-meta) / 1.4 var(--font-mono);
+  --type-mono: var(--w-medium) var(--fs-mono) / var(--lh-body) var(--font-mono);
+}
