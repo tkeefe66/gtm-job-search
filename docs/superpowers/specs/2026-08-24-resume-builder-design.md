@@ -11,13 +11,15 @@ them.
 
 ## What changed from revision 1
 
-- **The Claude Design "Resume design system" project is not empty.** It
-  already contains a finished, print-first design system built from the
-  actual source résumé — four variants, full type/color tokens, six React-
-  shaped components, and its own handoff notes. Revision 1 said the
-  template still needed to be designed; it doesn't. "Rendering and export"
-  below is rewritten to reflect this and names the specific variant v1
-  ships.
+- **The Claude Design project named "Resume design system" is not empty.**
+  It's a regular project (not one of the account's formal Design System
+  objects — those are `Tomkeefe.ai Design System`, `Dynasty Analyzer Design
+  System`, and `Modernist`, listed separately) that already contains a
+  finished, print-first set of résumé templates built from the actual
+  source résumé — four variants, full type/color tokens, six React-shaped
+  components, and its own handoff notes. Revision 1 said the template still
+  needed to be designed; it doesn't. "Rendering and export" below is
+  rewritten to reflect this and names the specific variant v1 ships.
 - **The migration needs an explicit grant.** `003_rls.sql` relies on
   `alter default privileges` for future tables, but the codebase's own
   actual precedent for "new table + RLS in one migration"
@@ -441,14 +443,16 @@ not more than that.
 
 ## Rendering and export
 
-The "Resume design system" Claude Design project (`697a0eb1-…`) already
-contains a finished design system built from the tenant's actual résumé
-PDF: type and color tokens, six components (`ResumeHeader`, `RoleEntry`,
-`SystemsBlock`, `TagList`, `SectionTitle`, `CompressedRoles`), 19 style
-guideline specimens, and four finished résumé variants differing only in
-emphasis, not visual style — `index.html` ("the default send," a blended
-mix across the tenant's GTM/RevOps, product, and AI-systems-building
-experience), `resume-gtm.html`, `resume-product.html`, and `resume-ai.html`.
+The Claude Design project named "Resume design system"
+(`697a0eb1-…`) — a project, not one of the account's formal Design System
+objects — already contains a finished set of résumé design assets built
+from the tenant's actual résumé PDF: type and color tokens, six components
+(`ResumeHeader`, `RoleEntry`, `SystemsBlock`, `TagList`, `SectionTitle`,
+`CompressedRoles`), 19 style guideline specimens, and four finished résumé
+variants differing only in emphasis, not visual style — `index.html` ("the
+default send," a blended mix across the tenant's GTM/RevOps, product, and
+AI-systems-building experience), `resume-gtm.html`, `resume-product.html`,
+and `resume-ai.html`.
 **v1 ships `index.html`** — the balanced variant is the safest shell for a
 tailoring pass that has to adapt toward an unknown range of job types,
 rather than one already pre-angled toward a single career bucket.
