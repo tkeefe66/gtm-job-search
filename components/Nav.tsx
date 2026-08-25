@@ -18,7 +18,9 @@ const TABS = [
  */
 export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
-  const tabs = isAdmin ? [...TABS, { label: "Accounts", href: "/admin" }] : TABS;
+  const tabs = isAdmin
+    ? [...TABS, { label: "Résumé", href: "/resume" }, { label: "Accounts", href: "/admin" }]
+    : TABS;
 
   return (
     <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
