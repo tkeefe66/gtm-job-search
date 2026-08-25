@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import ResumeDocument from "@/components/resume/ResumeDocument";
 import { tailorResumeForJob } from "@/app/actions/resume";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 export default function TailorPanel({
   career,
@@ -22,7 +23,11 @@ export default function TailorPanel({
     setError(null);
     startTransition(async () => {
       const res = await tailorResumeForJob(jobId);
-      if (res.error) setError(res.error);
+      // Presence, not truthiness: res.error can legitimately be "" on a
+      // database failure (describeWriteFailure substitutes UNDESCRIBED_DB_ERROR
+      // only where it's shown), and "" is falsy — a truthiness check would fall
+      // into the else branch and try to render a null selection as success.
+      if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       else setSelection(res.selection);
     });
   }
