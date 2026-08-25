@@ -1,0 +1,798 @@
+{
+  "identity": {
+    "name": "Tom Keefe",
+    "contacts": [
+      {
+        "label": "Denver, CO"
+      },
+      {
+        "label": "(617) 939-7239"
+      },
+      {
+        "label": "tkeefe66@gmail.com",
+        "href": "mailto:tkeefe66@gmail.com"
+      },
+      {
+        "label": "Website",
+        "href": "https://tomkeefe.ai"
+      },
+      {
+        "label": "LinkedIn",
+        "href": "https://www.linkedin.com/in/tomkeefesmc"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/tkeefe66"
+      }
+    ]
+  },
+  "positioning": [
+    {
+      "id": "blended",
+      "themes": [
+        "leadership",
+        "presales",
+        "systems"
+      ],
+      "tagline": "GTM operations leader — strategy, technical pre-sales, and the A.I. systems behind both",
+      "summary": "Senior GTM and marketing operations leader, 13+ years turning strategy, data, and technology into revenue. Builds the expert functions between Product and the field — pre-sales, playbooks, evangelism — and ships the A.I. systems behind them."
+    },
+    {
+      "id": "gtm",
+      "themes": [
+        "ops",
+        "data",
+        "leadership"
+      ],
+      "tagline": "GTM and revenue operations leader — pipeline architecture, data, and the teams that run them",
+      "summary": "Senior GTM and marketing operations leader, 13+ years owning the technology, data, and analytics behind enterprise revenue engines. Builds the quantitative spine — waterfall models, ICP analysis, capacity planning, attribution — and the teams that operate it."
+    },
+    {
+      "id": "product",
+      "themes": [
+        "presales",
+        "product",
+        "evangelism"
+      ],
+      "tagline": "Technical pre-sales and product evangelism — the expert function between Product and the field",
+      "summary": "GTM leader, 13+ years and seven inside the ABM/ABX product category. Builds the expert functions that sit between Product and the field — technical pre-sales, playbook libraries, executive evangelism — and carries field insight back into the roadmap."
+    },
+    {
+      "id": "ai",
+      "themes": [
+        "systems",
+        "product",
+        "data"
+      ],
+      "tagline": "GTM systems and A.I. operations — a practitioner-builder who ships the systems he specifies",
+      "summary": "GTM systems leader and practitioner-builder, 13+ years architecting B2B revenue engines and seven inside the ABM/ABX category. Designs the quantitative spine of GTM while building the agentic systems that run on it — in Claude Code, deployed and in daily use."
+    }
+  ],
+  "roles": [
+    {
+      "id": "gtm-experts",
+      "title": "Director of GTM Experts",
+      "org": "Demandbase",
+      "scope": "Remote — San Francisco, CA",
+      "dates": "July 2025 – Present",
+      "accounts": [
+        "BlackRock",
+        "Boeing",
+        "Microsoft",
+        "SAP Concur",
+        "Snowflake"
+      ],
+      "bullets": [
+        {
+          "id": "team",
+          "priority": 1,
+          "themes": [
+            "leadership",
+            "presales"
+          ],
+          "text": "Directs a global team of GTM and Data Solution Experts — digital marketing, B2B advertising, ABX, data — on strategies that shaped <strong>$50M+ in won revenue</strong>."
+        },
+        {
+          "id": "dse",
+          "priority": 2,
+          "themes": [
+            "presales",
+            "data"
+          ],
+          "text": "Owns the Data Solution Experts function end to end since April 2026, after informally managing it via dotted line as Principal GTM Expert: a technical pre-sales practice architecting how prospects activate the data offering inside their lake, CDP, and BI stack."
+        },
+        {
+          "id": "dse-scale",
+          "priority": 3,
+          "themes": [
+            "leadership",
+            "ops"
+          ],
+          "text": "Proposing to grow the Data Solution Experts function from 2 to 4: two Solutions Architect hires plus a DSE backfill, with the second Solutions Architect added specifically for consistent post-sales handoff."
+        },
+        {
+          "id": "playbook",
+          "priority": 4,
+          "themes": [
+            "presales",
+            "evangelism",
+            "leadership"
+          ],
+          "text": "Owns the GTM Playbook program — a <strong>30+ playbook</strong> library spanning the full product suite, adopted across Sales, Customer Success, and Partners."
+        },
+        {
+          "id": "ads",
+          "priority": 5,
+          "themes": [
+            "ops",
+            "evangelism"
+          ],
+          "text": "Launched Ads Assist, a three-month trial motion converting <strong>60%+ of participants</strong> into customers and now a repeatable field play."
+        },
+        {
+          "id": "presence",
+          "priority": 6,
+          "themes": [
+            "evangelism"
+          ],
+          "text": "Built the market-presence motion around live speaking and executive forums; the org has generated <strong>$25M+ in influenced pipeline</strong>."
+        },
+        {
+          "id": "orl",
+          "priority": 7,
+          "themes": [
+            "systems",
+            "ops"
+          ],
+          "text": "Designed and built an agent matching Gong call recordings to Salesforce opportunities, logging them to a custom Opp Resource Log object behind a Slack approval gate, routed through RevOps for production system access; <strong>500+ logs</strong> processed in the first month."
+        },
+        {
+          "id": "slack-updater",
+          "priority": 8,
+          "themes": [
+            "systems"
+          ],
+          "text": "Built a conversational Slack-to-Salesforce updater removing CRM-hygiene friction at the field level."
+        },
+        {
+          "id": "kpi",
+          "priority": 9,
+          "themes": [
+            "ops",
+            "leadership"
+          ],
+          "text": "Redefined the Expert team KPIs around strategic outcomes: pipeline influence, close rates, revenue attainment, and renewal impact."
+        },
+        {
+          "id": "roadmap",
+          "priority": 10,
+          "themes": [
+            "product",
+            "systems"
+          ],
+          "text": "Collaborates with Product, Data Science, and Engineering on roadmap priorities, particularly A.I. innovation."
+        },
+        {
+          "id": "citizendev",
+          "priority": 11,
+          "themes": [
+            "leadership",
+            "systems"
+          ],
+          "text": "Founded Demandbase's first citizen developer program: Claude Code, hosting, and a dedicated subdomain against real production GTM data, letting Experts and SCs build their own tools."
+        },
+        {
+          "id": "london-demo",
+          "priority": 12,
+          "themes": [
+            "systems",
+            "evangelism"
+          ],
+          "text": "Built the front-end demo experience for unreleased Demandbase One A.I. features in one week, starting from a bare-bones product template, for a London executive keynote shown on the main stage."
+        },
+        {
+          "id": "mojo",
+          "priority": 13,
+          "themes": [
+            "product",
+            "presales",
+            "leadership"
+          ],
+          "text": "Strategic Advisor to Mojo, Demandbase's unreleased A.I. orchestration layer for the GTM tech stack, since March 2026; authored a 6-document knowledge base enabling the product to ingest Marketo and Salesforce data and infer org strategy, and helped drive a target-persona pivot from Ad Campaign Managers to GTM Ops."
+        },
+        {
+          "id": "addevent",
+          "priority": 14,
+          "themes": [
+            "systems",
+            "ops"
+          ],
+          "text": "Built a self-hosted replacement for AddEvent, a third-party calendar-link generator used on event and webinar confirmations, eliminating a <strong>$350/year</strong> vendor dependency."
+        }
+      ]
+    },
+    {
+      "id": "principal",
+      "title": "Principal GTM Expert (Strategy &amp; Operations)",
+      "org": "Demandbase",
+      "scope": "Remote — San Francisco, CA",
+      "dates": "April 2024 – June 2025",
+      "accounts": [
+        "Palo Alto Networks",
+        "T-Mobile",
+        "Verizon",
+        "Comcast",
+        "M&T Bank"
+      ],
+      "bullets": [
+        {
+          "id": "advisor",
+          "priority": 1,
+          "themes": [
+            "presales",
+            "ops"
+          ],
+          "text": "Primary GTM operations, technology, and strategy advisor to enterprise prospects — <strong>$13M in influenced won revenue</strong> across Palo Alto Networks, T-Mobile, Verizon, and Comcast."
+        },
+        {
+          "id": "playbook",
+          "priority": 2,
+          "themes": [
+            "presales",
+            "evangelism"
+          ],
+          "text": "Founded the GTM Playbook program and authored much of the library, codifying workflow architectures across the full product suite."
+        },
+        {
+          "id": "voc",
+          "priority": 3,
+          "themes": [
+            "product"
+          ],
+          "text": "Voice of the customer, synthesizing user and leader feedback into insight that shaped Product and Engineering roadmaps."
+        },
+        {
+          "id": "amb",
+          "priority": 4,
+          "themes": [
+            "evangelism"
+          ],
+          "text": "Live-event thought-leadership ambassador, personally generating <strong>$5M+ in influenced pipeline</strong>."
+        },
+        {
+          "id": "partner",
+          "priority": 5,
+          "themes": [
+            "product",
+            "presales"
+          ],
+          "text": "Partnered with Technology Partnerships and Product to shape joint value propositions and co-create integration concepts."
+        },
+        {
+          "id": "award",
+          "priority": 6,
+          "themes": [
+            "systems",
+            "evangelism"
+          ],
+          "text": "2024 A.I. Revenue Summit A.I. Strategist Award; Demandbase Quarterly Value Award."
+        }
+      ]
+    },
+    {
+      "id": "sr-director",
+      "title": "Sr. Director of Marketing Operations",
+      "org": "Demandbase",
+      "scope": "Remote — San Francisco, CA",
+      "dates": "April 2021 – March 2024",
+      "bullets": [
+        {
+          "id": "own",
+          "priority": 1,
+          "themes": [
+            "ops",
+            "data",
+            "leadership"
+          ],
+          "text": "Owned global go-to-market technology, data, and analytics behind a <strong>$100M+</strong> pipeline engine."
+        },
+        {
+          "id": "buying",
+          "priority": 2,
+          "themes": [
+            "product",
+            "systems"
+          ],
+          "text": "Originated the product concept and architecture for Buying Groups, which shipped from a system built and operated in-house."
+        },
+        {
+          "id": "waterfall",
+          "priority": 3,
+          "themes": [
+            "data",
+            "ops"
+          ],
+          "text": "Built the multi-quarter pipeline waterfall model translating finance targets into segment-level opportunity, meeting, MQL, and MQA goals."
+        },
+        {
+          "id": "scale",
+          "priority": 4,
+          "themes": [
+            "leadership",
+            "ops"
+          ],
+          "text": "Scaled Marketing Operations from 2 FTEs to an <strong>8-person</strong> multi-level team across Programs, Analytics, Technology, and Data."
+        },
+        {
+          "id": "migrate",
+          "priority": 5,
+          "themes": [
+            "data",
+            "migration"
+          ],
+          "text": "Led the InsideView and DemandMatrix acquisition migrations in <strong>3 months</strong>; established SFDC as the single source of truth."
+        },
+        {
+          "id": "multi",
+          "priority": 6,
+          "themes": [
+            "product",
+            "leadership"
+          ],
+          "text": "Defined the shift from single- to multi-product GTM, expanding the suite from two offerings to five and standing up a new sales team."
+        },
+        {
+          "id": "report",
+          "priority": 7,
+          "themes": [
+            "data"
+          ],
+          "text": "Built full-funnel reporting in SFDC and Tableau CRM, including a combined People-and-Accounts double funnel for forecasting."
+        },
+        {
+          "id": "programs",
+          "priority": 8,
+          "themes": [
+            "ops",
+            "systems"
+          ],
+          "text": "Increased Marketing Programs <strong>46% YoY</strong> with Workato, Asana, new program SLAs, and a program request system."
+        },
+        {
+          "id": "stackies",
+          "priority": 9,
+          "themes": [
+            "ops",
+            "evangelism"
+          ],
+          "text": "2024 MarTech Stackies Award; 2021 Demandbase Company Leadership Award."
+        }
+      ]
+    },
+    {
+      "id": "director-db",
+      "title": "Director of Marketing Operations",
+      "org": "Demandbase",
+      "scope": "Remote — San Francisco, CA",
+      "dates": "June 2020 – April 2021",
+      "bullets": [
+        {
+          "id": "migrate",
+          "priority": 1,
+          "themes": [
+            "migration",
+            "ops"
+          ],
+          "text": "Led the Engagio-to-Demandbase migration in <strong>2.5 months</strong> and Pardot-to-Marketo in under three; named 2020 Marketer of the Year."
+        },
+        {
+          "id": "product",
+          "priority": 2,
+          "themes": [
+            "product",
+            "systems"
+          ],
+          "text": "Partnered with Product and Engineering to merge Engagio and Demandbase into one platform (ABX Cloud); lead contributor to QA and roadmap input."
+        }
+      ]
+    },
+    {
+      "id": "engagio",
+      "title": "Director of Marketing Operations",
+      "org": "Engagio",
+      "scope": "Onsite — San Mateo, CA",
+      "acquired": "acquired by Demandbase",
+      "dates": "August 2019 – June 2020",
+      "bullets": [
+        {
+          "id": "conv",
+          "priority": 1,
+          "themes": [
+            "ops",
+            "data"
+          ],
+          "text": "Lifted qualified-lead-to-pipeline conversion from <strong>28% to 53%</strong> with discovery-based forms and sharper Sales outreach."
+        },
+        {
+          "id": "arch",
+          "priority": 2,
+          "themes": [
+            "data"
+          ],
+          "text": "Owned all go-to-market operational data architecture across Marketing, Sales, Customer Success, and Product."
+        },
+        {
+          "id": "flow",
+          "priority": 3,
+          "themes": [
+            "ops"
+          ],
+          "text": "Re-designed the Marketing-to-Sales flow of insights, helping the organization achieve or exceed pipeline goals every quarter."
+        },
+        {
+          "id": "product",
+          "priority": 4,
+          "themes": [
+            "product"
+          ],
+          "text": "Collaborated with Product and Engineering to develop new Engagio Platform and Dash (attribution) features."
+        },
+        {
+          "id": "expert",
+          "priority": 5,
+          "themes": [
+            "presales",
+            "product"
+          ],
+          "text": "Utilized org-wide as an Expert Technologist: new sales deals, customer consulting, product feature architecture, and product QA testing."
+        },
+        {
+          "id": "trained",
+          "priority": 6,
+          "themes": [
+            "evangelism",
+            "ops"
+          ],
+          "text": "Trained Marketing, Sales, and Customer Success on the full Engagio product suite (Platform, Orchestrate, Dash), including technology process architecture and troubleshooting."
+        },
+        {
+          "id": "budget",
+          "priority": 7,
+          "themes": [
+            "ops",
+            "leadership"
+          ],
+          "text": "Owned budgets for both Marketing and Sales; developed and implemented ABM entitlements across all account segments."
+        },
+        {
+          "id": "award",
+          "priority": 8,
+          "themes": [
+            "ops",
+            "evangelism"
+          ],
+          "text": "Recipient of Engagio's 2019 Sales Partnership Award."
+        }
+      ]
+    },
+    {
+      "id": "streamsets",
+      "title": "Senior Marketing Technology &amp; Operations Manager",
+      "org": "StreamSets",
+      "scope": "Remote — San Francisco, CA",
+      "acquired": "acquired by Software AG",
+      "dates": "June 2018 – July 2019",
+      "bullets": [
+        {
+          "id": "strategy",
+          "priority": 1,
+          "themes": [
+            "ops"
+          ],
+          "text": "Led sales and marketing operations strategy and platforms for pipeline growth."
+        },
+        {
+          "id": "stack",
+          "priority": 2,
+          "themes": [
+            "systems",
+            "ops"
+          ],
+          "text": "Solely owned the technology stack: Marketo, SFDC, Outreach, Conversica, Hushly, On24, RingLead, DiscoverOrg, and Demandbase."
+        },
+        {
+          "id": "bizible",
+          "priority": 3,
+          "themes": [
+            "systems",
+            "data"
+          ],
+          "text": "Purchased, implemented, and optimized Bizible to measure program performance."
+        },
+        {
+          "id": "sdr",
+          "priority": 4,
+          "themes": [
+            "ops",
+            "data"
+          ],
+          "text": "Designed and managed the SDR sales process across all technologies to track activity, effectiveness, and KPIs."
+        },
+        {
+          "id": "intent",
+          "priority": 5,
+          "themes": [
+            "data",
+            "evangelism"
+          ],
+          "text": "Onboarded TechTarget's Priority Engine to incorporate third-party intent signals into GTM strategy; trained Sales on multi-platform processes for better analytics and forecasting."
+        }
+      ]
+    },
+    {
+      "id": "ayla-global",
+      "title": "Global Technology &amp; Operations Manager",
+      "org": "Ayla Networks",
+      "scope": "Remote — Santa Clara, CA",
+      "dates": "December 2017 – June 2018",
+      "bullets": [
+        {
+          "id": "direct",
+          "priority": 1,
+          "themes": [
+            "leadership",
+            "ops"
+          ],
+          "text": "Directed the strategy, structure, and platforms for sales and marketing operations to drive pipeline growth."
+        },
+        {
+          "id": "forecast",
+          "priority": 2,
+          "themes": [
+            "data"
+          ],
+          "text": "Provided pipeline analytics and forecasting reports to the Executive team."
+        },
+        {
+          "id": "velocity",
+          "priority": 3,
+          "themes": [
+            "ops"
+          ],
+          "text": "Enhanced sales velocity by digitizing legal procedures and streamlining workflows; designed and oversaw the operational process for Channel Sales."
+        }
+      ]
+    },
+    {
+      "id": "ayla-martech",
+      "title": "MarTech &amp; Operations Manager",
+      "org": "Ayla Networks",
+      "scope": "Remote — Santa Clara, CA",
+      "dates": "June 2017 – December 2017",
+      "bullets": [
+        {
+          "id": "budget",
+          "priority": 1,
+          "themes": [
+            "ops",
+            "leadership"
+          ],
+          "text": "Managed a <strong>$1M</strong> worldwide marketing budget spanning programs, events, and technology initiatives."
+        },
+        {
+          "id": "sal",
+          "priority": 2,
+          "themes": [
+            "ops",
+            "data"
+          ],
+          "text": "Improved SAL acceptance by <strong>57%</strong> by redesigning web forms and updating lead scoring."
+        },
+        {
+          "id": "stack",
+          "priority": 3,
+          "themes": [
+            "systems"
+          ],
+          "text": "Combined and maintained an integrated stack: Marketo, SFDC, Full Circle, ZenIQ, On24, and RingLead; designed solutions to identify and eliminate sales funnel bottlenecks."
+        }
+      ]
+    },
+    {
+      "id": "ayla-leadgen",
+      "title": "Lead Generation Manager",
+      "org": "Ayla Networks",
+      "scope": "Remote — Santa Clara, CA",
+      "dates": "May 2016 – June 2017",
+      "bullets": [
+        {
+          "id": "marketo",
+          "priority": 1,
+          "themes": [
+            "systems",
+            "migration"
+          ],
+          "text": "Oversaw Marketo implementation and daily operations, migrated from HubSpot."
+        },
+        {
+          "id": "abm",
+          "priority": 2,
+          "themes": [
+            "ops",
+            "data"
+          ],
+          "text": "Launched ABM strategy achieving a <strong>40% SAL rate</strong>; ran marketing programs contributing up to 53% of annual pipeline."
+        },
+        {
+          "id": "china",
+          "priority": 3,
+          "themes": [
+            "leadership",
+            "systems"
+          ],
+          "text": "Trained and managed China and Taiwan marketing teams in Marketo; served as Sales and Marketing Salesforce Administrator."
+        }
+      ]
+    },
+    {
+      "id": "goji",
+      "title": "Marketing Automation Manager",
+      "org": "Goji",
+      "scope": "Onsite — Boston, MA",
+      "dates": "February 2015 – April 2016",
+      "bullets": [
+        {
+          "id": "marketo",
+          "priority": 1,
+          "themes": [
+            "systems",
+            "migration"
+          ],
+          "text": "Owned day-to-day operations of Marketo and Pardot; led the migration to Marketo from HubSpot, processing over <strong>3,000</strong> net-new leads per day."
+        },
+        {
+          "id": "retention",
+          "priority": 2,
+          "themes": [
+            "ops",
+            "product"
+          ],
+          "text": "Launched a Customer Retention program, achieving a <strong>14% increase</strong>; managed a customer research and interview initiative to surface experience insights."
+        },
+        {
+          "id": "invoca",
+          "priority": 3,
+          "themes": [
+            "data"
+          ],
+          "text": "Managed Invoca to aggregate pipeline performance data for reviews and optimizations."
+        }
+      ]
+    },
+    {
+      "id": "ptc",
+      "title": "Marketing Automation Specialist",
+      "org": "PTC",
+      "scope": "Onsite — Boston, MA",
+      "dates": "April 2013 – October 2014",
+      "bullets": [
+        {
+          "id": "eloqua",
+          "priority": 1,
+          "themes": [
+            "systems",
+            "leadership"
+          ],
+          "text": "Served as System Administrator and Strategy Manager for Eloqua 9; led due diligence for a new Marketing Automation Platform."
+        },
+        {
+          "id": "growth",
+          "priority": 2,
+          "themes": [
+            "data"
+          ],
+          "text": "Grew the contact database by <strong>32%</strong> and boosted email volume by 53% in FY'14."
+        },
+        {
+          "id": "alerts",
+          "priority": 3,
+          "themes": [
+            "systems",
+            "ops"
+          ],
+          "text": "Developed the Support team's first lead alert system for MQLs and priority accounts."
+        }
+      ]
+    },
+    {
+      "id": "wb-mason",
+      "title": "Education Market Analyst; School Bids Analyst",
+      "org": "W.B. Mason",
+      "scope": "Onsite — Brockton, MA",
+      "dates": "October 2011 – April 2013",
+      "bullets": [
+        {
+          "id": "lead",
+          "priority": 1,
+          "themes": [
+            "leadership",
+            "ops"
+          ],
+          "text": "Lead analyst for the Education Market, reporting directly to the Director of Education; supported <strong>7,000+</strong> customers."
+        },
+        {
+          "id": "digital",
+          "priority": 2,
+          "themes": [
+            "systems"
+          ],
+          "text": "Designed and implemented systems to transition bidders from handwritten submissions to digital entry."
+        },
+        {
+          "id": "crm",
+          "priority": 3,
+          "themes": [
+            "systems",
+            "data"
+          ],
+          "text": "Collaborated with internal software teams to improve communication between analytical tools and Microsoft Dynamics CRM."
+        }
+      ]
+    }
+  ],
+  "advisory": [
+    {
+      "main": "GTM Advisor",
+      "scope": "Scale Venture Partners · San Francisco, CA",
+      "dates": "May 2023 – Present"
+    },
+    {
+      "main": "Advisor",
+      "scope": "Sendoso · San Francisco, CA",
+      "dates": "March 2022 – Present"
+    }
+  ],
+  "education": [
+    {
+      "main": "B.S. Business Administration",
+      "scope": "Saint Michael's College, Colchester, VT",
+      "dates": "2007 – 2011"
+    },
+    {
+      "main": "Demandbase ABM; Workato Automation Pro; Marketo Certified Expert",
+      "dates": "2016 – 2019"
+    },
+    {
+      "main": "Eloqua Fundamentals – Eloqua 9",
+      "dates": "2013"
+    }
+  ],
+  "rules": {
+    "taper": [
+      5,
+      4,
+      4,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "themes": [
+      "ops",
+      "data",
+      "presales",
+      "product",
+      "systems",
+      "evangelism",
+      "leadership",
+      "migration"
+    ],
+    "notes": "taper[i] caps bullets on roles[i]. compressAfter: roles at or past this index render as one-line compressed rows on the résumé, keeping their bullet pools available for bios and interview prep. Bullets are selected, never authored. One <strong> per bullet, around a figure only.",
+    "compressAfter": 5
+  }
+}

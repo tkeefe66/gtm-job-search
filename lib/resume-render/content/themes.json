@@ -1,0 +1,229 @@
+{
+  "$schema": "Theme vocabulary for JD → theme derivation. Themes are fixed; add one only by adding bullets that support it.",
+  "themes": [
+    {
+      "id": "ops",
+      "label": "Revenue / marketing operations",
+      "covers": "Owning the GTM tech stack, process design, SLAs, program throughput, funnel mechanics, KPI definition.",
+      "jdSignals": [
+        "marketing operations",
+        "revenue operations",
+        "RevOps",
+        "GTM operations",
+        "process design",
+        "funnel",
+        "SLA",
+        "campaign operations",
+        "lead management",
+        "routing",
+        "lifecycle"
+      ],
+      "evidence": "The GTM tech stack and funnel mechanics — strongest at Sr. Director (2021–2024) and Engagio."
+    },
+    {
+      "id": "data",
+      "label": "Data, analytics, and modelling",
+      "covers": "Pipeline waterfall models, ICP analysis, attribution, forecasting, reporting architecture, data warehouse/CDP activation.",
+      "jdSignals": [
+        "analytics",
+        "attribution",
+        "forecasting",
+        "pipeline model",
+        "data warehouse",
+        "CDP",
+        "BI",
+        "Snowflake",
+        "Tableau",
+        "segmentation",
+        "ICP",
+        "capacity planning",
+        "reporting"
+      ],
+      "evidence": "The pipeline waterfall model, double-funnel reporting, and the Data Solution Experts practice."
+    },
+    {
+      "id": "presales",
+      "label": "Technical pre-sales and solutions",
+      "covers": "Advising enterprise prospects, solution architecture, technical discovery, the expert function between Product and the field.",
+      "jdSignals": [
+        "pre-sales",
+        "presales",
+        "solutions engineer",
+        "solutions architect",
+        "solutions consultant",
+        "sales engineering",
+        "technical advisor",
+        "customer-facing",
+        "enterprise prospects",
+        "POC",
+        "trial"
+      ],
+      "evidence": "The Data Solution Experts function, $13M in advisory influence, Ads Assist."
+    },
+    {
+      "id": "product",
+      "label": "Product partnership and roadmap",
+      "covers": "Voice of the customer into roadmap, product concepts originated, platform merges, QA, multi-product GTM.",
+      "jdSignals": [
+        "product management",
+        "roadmap",
+        "product marketing",
+        "voice of the customer",
+        "platform",
+        "product strategy",
+        "PRD",
+        "discovery",
+        "launch"
+      ],
+      "evidence": "Buying Groups origination, the ABX Cloud merge, the single-to-multi-product shift."
+    },
+    {
+      "id": "systems",
+      "label": "Building — A.I. and automation",
+      "covers": "Agentic workflows shipped hands-on, internal tooling, automation platforms, deployment.",
+      "jdSignals": [
+        "AI",
+        "A.I.",
+        "agent",
+        "agentic",
+        "LLM",
+        "automation",
+        "workflow",
+        "Claude",
+        "build",
+        "ship",
+        "prototype",
+        "technical",
+        "engineering",
+        "API",
+        "integration",
+        "Workato",
+        "Zapier"
+      ],
+      "evidence": "The Opp Resource Log agent, the Slack CRM updater, the citizen developer program, the London demo, and the full stacks owned at StreamSets and Ayla."
+    },
+    {
+      "id": "evangelism",
+      "label": "Evangelism and market presence",
+      "covers": "Live speaking, executive forums, thought leadership, playbook libraries, field enablement.",
+      "jdSignals": [
+        "evangelism",
+        "thought leadership",
+        "speaking",
+        "community",
+        "enablement",
+        "field enablement",
+        "webinar",
+        "conference",
+        "content",
+        "brand",
+        "advocacy"
+      ],
+      "evidence": "$25M+ influenced pipeline from market presence, $5M+ personally, the 30+ playbook library."
+    },
+    {
+      "id": "leadership",
+      "label": "Team leadership and scale",
+      "covers": "Hiring, org design, managing managers, global teams, KPI ownership, coverage models.",
+      "jdSignals": [
+        "manage",
+        "lead a team",
+        "hiring",
+        "org design",
+        "people leader",
+        "director",
+        "head of",
+        "VP",
+        "headcount",
+        "mentor",
+        "global team",
+        "cross-functional"
+      ],
+      "evidence": "The global Expert team, the DSE growth proposal, 2 FTEs to 8 at Sr. Director, and the China/Taiwan teams at Ayla."
+    },
+    {
+      "id": "migration",
+      "label": "Migrations and consolidation",
+      "covers": "Post-acquisition data and platform migrations under deadline, single-source-of-truth work.",
+      "jdSignals": [
+        "migration",
+        "consolidation",
+        "M&A",
+        "acquisition",
+        "integration",
+        "replatform",
+        "implementation",
+        "rollout",
+        "Marketo",
+        "Pardot",
+        "Salesforce",
+        "SFDC"
+      ],
+      "evidence": "InsideView/DemandMatrix in 3 months, the Engagio and Pardot-to-Marketo migrations, and the HubSpot-to-Marketo moves at Ayla and Goji."
+    }
+  ],
+  "derivation": {
+    "method": "Read the JD. Pick 2-4 themes, most important first. Weight by what the role is measured on, not by what it mentions in passing — a JD that says \"AI\" once in a boilerplate paragraph is not a systems role.",
+    "examples": [
+      {
+        "jd": "Director of Revenue Operations — own the funnel model, forecasting, and the RevOps team",
+        "themes": [
+          "ops",
+          "data",
+          "leadership"
+        ],
+        "positioning": "gtm"
+      },
+      {
+        "jd": "Principal Solutions Architect — technical pre-sales for enterprise data customers",
+        "themes": [
+          "presales",
+          "data",
+          "product"
+        ],
+        "positioning": "product"
+      },
+      {
+        "jd": "Head of GTM Systems & AI — build the agentic workflows behind the revenue engine",
+        "themes": [
+          "systems",
+          "data",
+          "ops"
+        ],
+        "positioning": "ai",
+        "lead": "ai"
+      },
+      {
+        "jd": "Product Marketing Lead — voice of the customer, launches, field enablement",
+        "themes": [
+          "product",
+          "evangelism",
+          "presales"
+        ],
+        "positioning": "product"
+      },
+      {
+        "jd": "VP Marketing Operations — scale the team through an acquisition",
+        "themes": [
+          "leadership",
+          "migration",
+          "ops"
+        ],
+        "positioning": "gtm"
+      }
+    ]
+  },
+  "knownGaps": {
+    "note": "Themes deliberately absent from the vocabulary because the pool has no honest evidence for them. If a JD leads on one of these, coverage() reports it and the app should treat the role as a stretch — not paper over it.",
+    "absent": [
+      "partner/channel sales",
+      "product-led growth",
+      "pricing and packaging",
+      "demand gen media buying at scale",
+      "people management above director level",
+      "international expansion",
+      "engineering management"
+    ]
+  },
+  "evidenceNote": "`evidence` is qualitative on purpose — it names the work, never a bullet count. Counts drift the moment a bullet is added to career.json, so `coverage()` is the single source of truth for how many bullets back a theme and whether support is strong, thin, or absent. Never hardcode counts here."
+}

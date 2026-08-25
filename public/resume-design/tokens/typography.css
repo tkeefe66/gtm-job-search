@@ -1,36 +1,18 @@
-/* Typography — wide steps, so hierarchy is never ambiguous.
-   52 → 17 → 14 → 10: each level is unmistakably a different level. */
-:root {
-  --fs-name: 52px;
-  --fs-tagline: 15px;
-  --fs-summary: 15px;
-  --fs-section: 12px;
-  --fs-role: 17px;
-  --fs-org: 13.5px;
-  --fs-body: 14px;
-  --fs-meta: 10px;
-  --fs-mono: 10px;
+/* Wide steps, so hierarchy is never ambiguous: 52 -> 17 -> 14 -> 10.
+   Each level is unmistakably a different level. Print-first px. */
+:root{
+--text-name:52px;--text-2xl:26px;--text-xl:17px;--text-lg:15px;--text-base:14px;--text-sm:13.5px;--text-xs:12px;--text-micro:10px;
+--text-hero:64px;--text-display:40px;
 
-  --lh-tight: 0.92;
-  --lh-role: 1.25;
-  --lh-body: 1.5;
-  --lh-summary: 1.52;
+--weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;
+--leading-tight:0.92;--leading-snug:1.25;--leading-normal:1.5;--leading-loose:1.6;
+--tracking-tight:-0.028em;--tracking-normal:0;--tracking-wide:0.06em;--tracking-label:0.2em;
 
-  --tracking-name: -0.028em;
-  --tracking-section: 0.2em;
-  --tracking-meta: 0.02em;
-
-  --w-light: 400;
-  --w-regular: 400;
-  --w-medium: 500;
-  --w-semibold: 600;
-  --w-bold: 700;
-
-  /* Semantic type roles */
-  --type-section: var(--w-semibold) var(--fs-section) / 1 var(--font-serif);
-  --type-role: var(--w-semibold) var(--fs-role) / var(--lh-role) var(--font-serif);
-  --type-org: italic var(--w-regular) var(--fs-org) / var(--lh-role) var(--font-serif);
-  --type-body: var(--w-regular) var(--fs-body) / var(--lh-body) var(--font-serif);
-  --type-meta: var(--w-regular) var(--fs-meta) / 1.4 var(--font-mono);
-  --type-mono: var(--w-medium) var(--fs-mono) / var(--lh-body) var(--font-mono);
+/* role aliases */
+--type-name:var(--weight-bold) var(--text-name)/var(--leading-tight) var(--font-display);
+--type-section:var(--weight-semibold) var(--text-xs)/1 var(--font-display);
+--type-role:var(--weight-semibold) var(--text-xl)/var(--leading-snug) var(--font-display);
+--type-org:italic var(--weight-regular) var(--text-sm)/var(--leading-snug) var(--font-display);
+--type-body:var(--weight-regular) var(--text-base)/var(--leading-normal) var(--font-body);
+--type-meta:var(--weight-regular) var(--text-micro)/1.4 var(--font-mono);
 }

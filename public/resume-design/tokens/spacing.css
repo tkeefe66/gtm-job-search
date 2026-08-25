@@ -1,21 +1,16 @@
-/* Spacing — tighter than the previous system; the page should feel set,
-   not laid out. 4px base. */
-:root {
-  --s-1: 2px;
-  --s-2: 4px;
-  --s-3: 6px;
-  --s-4: 8px;
-  --s-5: 12px;
-  --s-6: 16px;
-  --s-7: 22px;
-  --s-8: 30px;
+:root{
+/* 4px base, tightened at the low end — the page should feel set, not laid out. */
+--space-0:0;--space-05:2px;--space-1:4px;--space-2:6px;--space-3:8px;--space-4:12px;--space-5:16px;--space-6:22px;--space-7:30px;--space-8:40px;--space-9:48px;--space-10:56px;--space-11:64px;--space-12:80px;
 
-  /* Document rhythm */
-  --gap-bullet: 5px;
-  --gap-role: 13px;
-  --gap-section: 20px;
-  --gap-header: 22px;
-  --indent-bullet: 16px;
-  --page-margin: 0.68in;
-  --rail: 96px;
+/* page geometry */
+--page-width:8.5in; /* @kind spacing */
+--page-height:11in; /* @kind spacing */
+--page-margin:0.68in;--page-margin-tight:0.5in;
+--rail:96px;--col-gap:22px;
+--col-side:2.05in; /* @kind spacing */
+--measure-prose:66ch;--measure-bullet:78ch;
+
+/* document rhythm */
+--gap-bullet:5px;--gap-role:13px;--gap-section:20px;--gap-header:22px;--indent-bullet:16px;
+--stack-entry:var(--gap-role);--stack-section:var(--gap-section);--stack-bullet:var(--gap-bullet);
 }
