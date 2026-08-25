@@ -93,22 +93,30 @@ interface ThemeResponse {
  * is logged to and never returned from, since SDK error text can embed the
  * request URL and sometimes the key itself.
  *
- * Degrading to an empty theme list on failure, rather than surfacing an
- * `{error}`, is safe specifically here: `selectBullets()` still returns a
- * valid, if unfocused, selection from `{ themes: [] }` — there is no unsafe
- * state for an empty list to produce, unlike a fit score computed from an
- * empty brain.
+ * The return shape distinguishes two cases that used to collapse onto the
+ * same `[]`: the model call itself FAILING (auth, network, rate limit, an
+ * unparseable response — caught below, `failed` set) versus the model running
+ * successfully and legitimately finding no matching themes (a real, if
+ * unfocused, `{ themes: [] }` result — `selectBullets()` handles that fine,
+ * there is no unsafe state for it to produce, unlike a fit score computed
+ * from an empty brain). Only the caller (`tailorResumeForJob`) gets to decide
+ * what a failure means for the tailored-resume row; this function's job is
+ * only to say, truthfully, whether the call happened.
  */
-async function deriveThemes(job: JobSummaryFields): Promise<string[]> {
+async function deriveThemes(job: JobSummaryFields): Promise<{ themes: string[]; failed?: string }> {
   try {
     const { system, prompt } = buildThemePrompt(job, themeVocabulary as ThemeVocabulary);
     const raw = await complete({ system, prompt, maxTokens: 500 });
     const parsed = parseJson<ThemeResponse>(raw);
     const validIds = new Set((themeVocabulary as ThemeVocabulary).themes.map((t) => t.id));
-    return Array.isArray(parsed.themes) ? parsed.themes.filter((id) => validIds.has(id)) : [];
+    const themes = Array.isArray(parsed.themes) ? parsed.themes.filter((id) => validIds.has(id)) : [];
+    return { themes };
   } catch (err) {
+    // The real error is logged, and logged is the only place it goes — same
+    // closed-set rule as scoreFitInner: SDK error text can embed the request
+    // URL and sometimes the key itself, so it may never reach the browser.
     console.error("deriveThemes error:", err);
-    return [];
+    return { themes: [], failed: "Failed to tailor resume." };
   }
 }
 
@@ -132,13 +140,27 @@ export async function tailorResumeForJob(
   if (budget.capped) return { themes: [], selection: null, error: budget.capped };
   if (budget.error !== undefined) return { themes: [], selection: null, error: budget.error };
 
-  const themes = budget.result!;
+  // The model call itself failed (auth, network, rate limit, unparseable
+  // response) — distinct from a successful call that legitimately found no
+  // themes. Tokens were still billed (reconciliation runs regardless of `fn`'s
+  // outcome), but nothing may be written to tailored_resumes: doing so would
+  // store a row that LOOKS like a completed tailoring with an empty selection,
+  // and the "Tailor" button would simply not reappear with no signal to the
+  // user that anything went wrong.
+  if (budget.result!.failed !== undefined) {
+    return { themes: [], selection: null, error: budget.result!.failed };
+  }
+
+  const themes = budget.result!.themes;
   const selection = selectBullets(career as CareerRecord, { themes });
 
   const { error } = await supabase
     .forTenant(actor.tenantId)
     .from("tailored_resumes")
-    .upsert({ tenant_id: actor.tenantId, job_id: jobId, content: { themes, selection } }, { onConflict: "tenant_id,job_id" });
+    .upsert(
+      { job_id: jobId, content: { themes, selection }, generated_at: new Date().toISOString() },
+      { onConflict: "tenant_id,job_id" }
+    );
   const described = describeWriteFailure(error ? error.message : undefined, "save that tailored resume");
   if (described !== undefined) return { themes, selection, error: described };
 
