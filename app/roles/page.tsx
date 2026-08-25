@@ -12,6 +12,6 @@ export const dynamic = "force-dynamic";
 // round trip to RolesTable's own load(). RolesTable stays a client component;
 // it just receives the number.
 export default async function RolesPage() {
-  await requireActorPage();
-  return <RolesTable compFloor={await readCompFloor()} />;
+  const actor = await requireActorPage();
+  return <RolesTable compFloor={await readCompFloor()} isAdmin={actor.isAdmin} />;
 }

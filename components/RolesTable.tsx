@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
 import { splitUnclear } from "@/lib/link-report";
@@ -179,7 +180,13 @@ type StatusFilter =
   | { kind: "sentinel"; key: "All" | "Open" | "Out" }
   | { kind: "status"; key: string };
 
-export default function RolesTable({ compFloor }: { compFloor: number | null }) {
+export default function RolesTable({
+  compFloor,
+  isAdmin,
+}: {
+  compFloor: number | null;
+  isAdmin: boolean;
+}) {
   const [jobs, setJobs] = useState<Job[]>([]);
   // Rows getJobs dropped because they were already dead when found. Set only
   // from a load — the optimistic edits below cannot change it, since none of
@@ -1179,6 +1186,14 @@ export default function RolesTable({ compFloor }: { compFloor: number | null }) 
                       )}
                       {job.careers_url && (
                         <a href={job.careers_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Careers page →</a>
+                      )}
+                      {isAdmin && (
+                        <Link
+                          href={`/resume?jobId=${job.id}`}
+                          className="text-sm underline underline-offset-2 hover:text-ink/60"
+                        >
+                          Tailor resume →
+                        </Link>
                       )}
                       <button
                         onClick={() => handleDelete(job.id)}
