@@ -40,7 +40,18 @@ interface JobRow {
   company_description: string | null;
 }
 
-async function loadJobForTenant(tenantId: string, jobId: string): Promise<JobRow | null> {
+/**
+ * `error` is distinct from "no such row" — a DB failure and a genuine 404
+ * used to collapse onto the same `null`, which made every caller report the
+ * generic "Could not find that job" even when the real cause was a transient
+ * DB outage. `describeWriteFailure` handles the empty-message AggregateError
+ * case (an entirely unreachable database), same as every other write/read
+ * path in this app.
+ */
+async function loadJobForTenant(
+  tenantId: string,
+  jobId: string
+): Promise<{ job: JobRow | null; error?: string }> {
   const { data, error } = await supabase
     .forTenant(tenantId)
     .from("jobs")
@@ -49,9 +60,9 @@ async function loadJobForTenant(tenantId: string, jobId: string): Promise<JobRow
     .maybeSingle();
   if (error) {
     console.error("loadJobForTenant error:", error);
-    return null;
+    return { job: null, error: describeWriteFailure(error.message, "load that job") };
   }
-  return (data as JobRow | null) ?? null;
+  return { job: (data as JobRow | null) ?? null };
 }
 
 function toSummaryFields(job: JobRow): JobSummaryFields {
@@ -71,12 +82,34 @@ interface ThemeResponse {
   themes: string[];
 }
 
+/**
+ * Never throws. `deriveThemes` runs as `withBudget`'s `fn`, and `withBudget`
+ * only catches its own `SearchUnavailableError` — anything else a `fn` throws
+ * propagates straight out of `tailorResumeForJob` uncaught. `parseJson` throws
+ * a raw `SyntaxError` (not a sentinel return) on unparseable model output, so
+ * without this catch a malformed response would crash the action instead of
+ * producing the `{error}` shape every caller expects — mirrors the catch in
+ * `scoreFitInner` (app/actions/parse-role.ts), which the real SDK/parse error
+ * is logged to and never returned from, since SDK error text can embed the
+ * request URL and sometimes the key itself.
+ *
+ * Degrading to an empty theme list on failure, rather than surfacing an
+ * `{error}`, is safe specifically here: `selectBullets()` still returns a
+ * valid, if unfocused, selection from `{ themes: [] }` — there is no unsafe
+ * state for an empty list to produce, unlike a fit score computed from an
+ * empty brain.
+ */
 async function deriveThemes(job: JobSummaryFields): Promise<string[]> {
-  const { system, prompt } = buildThemePrompt(job, themeVocabulary as ThemeVocabulary);
-  const raw = await complete({ system, prompt, maxTokens: 500 });
-  const parsed = parseJson<ThemeResponse>(raw);
-  const validIds = new Set((themeVocabulary as ThemeVocabulary).themes.map((t) => t.id));
-  return Array.isArray(parsed.themes) ? parsed.themes.filter((id) => validIds.has(id)) : [];
+  try {
+    const { system, prompt } = buildThemePrompt(job, themeVocabulary as ThemeVocabulary);
+    const raw = await complete({ system, prompt, maxTokens: 500 });
+    const parsed = parseJson<ThemeResponse>(raw);
+    const validIds = new Set((themeVocabulary as ThemeVocabulary).themes.map((t) => t.id));
+    return Array.isArray(parsed.themes) ? parsed.themes.filter((id) => validIds.has(id)) : [];
+  } catch (err) {
+    console.error("deriveThemes error:", err);
+    return [];
+  }
 }
 
 export async function tailorResumeForJob(
@@ -84,7 +117,8 @@ export async function tailorResumeForJob(
 ): Promise<{ themes: string[]; selection: ResumeSelection | null; error?: string }> {
   const actor = await requireResumeAdmin();
 
-  const job = await loadJobForTenant(actor.tenantId, jobId);
+  const { job, error: loadError } = await loadJobForTenant(actor.tenantId, jobId);
+  if (loadError) return { themes: [], selection: null, error: loadError };
   if (!job) {
     return { themes: [], selection: null, error: "Could not find that job" };
   }
@@ -124,7 +158,11 @@ export async function getTailoredResume(
     .maybeSingle();
   if (error) {
     console.error("getTailoredResume error:", error);
-    return { themes: [], selection: null, error: error.message };
+    // Presence, not truthiness: an unreachable database's AggregateError has
+    // message === "", which `describeWriteFailure` substitutes text for — a
+    // bare `error.message` here would return `{error: ""}`, which every
+    // caller's `if (result.error)` check reads as falsy, i.e. success.
+    return { themes: [], selection: null, error: describeWriteFailure(error.message, "load that tailored resume") };
   }
   if (!data) return { themes: [], selection: null };
 
@@ -136,12 +174,19 @@ export async function getTailoredResume(
  * Just enough of a tracked job to show as context on /resume?jobId=... —
  * the base spec requires the target job's title and company be shown there.
  * Reuses loadJobForTenant rather than a second query shape.
+ *
+ * `null` means "no such job" — a genuine 404, the caller's cue to render a
+ * not-found state. A DB failure is NOT the same thing and must not render as
+ * one: it comes back as `{ roleTitle: "", company: "", error }` instead, so a
+ * caller that checks `.error` before treating an empty title as real can tell
+ * "the database is down" from "this job doesn't exist."
  */
 export async function getJobContext(
   jobId: string
-): Promise<{ roleTitle: string; company: string } | null> {
+): Promise<{ roleTitle: string; company: string; error?: string } | null> {
   const actor = await requireResumeAdmin();
-  const job = await loadJobForTenant(actor.tenantId, jobId);
+  const { job, error } = await loadJobForTenant(actor.tenantId, jobId);
+  if (error) return { roleTitle: "", company: "", error };
   if (!job) return null;
   return { roleTitle: job.role_title, company: job.company };
 }
