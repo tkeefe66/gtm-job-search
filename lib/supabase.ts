@@ -135,6 +135,10 @@ export const TENANT_TABLES = [
   "discovered_startups",
   "role_searches",
   "crawl_runs",
+  // Added by migration 015. tenant_id is declared inline in CREATE TABLE,
+  // not via ALTER TABLE ... ADD COLUMN, so it is invisible to
+  // lib/supabase.test.ts's retrofit-pattern regex — added here by hand.
+  "tailored_resumes",
 ] as const;
 
 export function isTenantTable(table: string): boolean {
