@@ -59,8 +59,17 @@ export default async function ResumePage({
 
   return (
     <div className="mx-auto max-w-3xl p-8">
+      {/* Not pagination-shell script (that's ResumeDocument.tsx's next/script
+          tags for doc-page.js/page-guides.js) — this is the actual styling
+          for the .rsm markup those scripts paginate. The deleted temporary
+          preview route carried the same tag; ResumeDocument.tsx itself never
+          loads it, so this route must. */}
+      <link rel="stylesheet" href="/resume-design/styles.css" />
       <h1 className="text-xl font-semibold">Résumé</h1>
       {contextNode}
+      {existing.error !== undefined && (
+        <p className="mt-1 text-sm text-[#92400E]">{existing.error}</p>
+      )}
       <div className="mt-6">
         <TailorPanel
           career={career as CareerRecord}
