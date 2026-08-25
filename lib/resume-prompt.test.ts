@@ -29,9 +29,8 @@ describe("buildThemePrompt", () => {
     expect(prompt).not.toContain("Fit summary:");
   });
 
-  test("lists every theme id from the vocabulary, not a hardcoded subset", () => {
+  test("system prompt renders byte-identically to the checked-in fixture", () => {
     const { system } = buildThemePrompt(FIXTURE_JOB_FULL, FIXTURE_VOCABULARY);
-    expect(system).toContain("ops");
-    expect(system).toContain("systems");
+    expect(system).toBe(fixture("resume-prompt.system.txt"));
   });
 });
