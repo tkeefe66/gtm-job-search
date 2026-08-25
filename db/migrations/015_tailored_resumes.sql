@@ -24,6 +24,8 @@ create index if not exists tailored_resumes_tenant_idx
 alter table tailored_resumes enable row level security;
 alter table tailored_resumes force row level security;
 
+drop policy if exists tenant_isolation on tailored_resumes;
+
 create policy tenant_isolation on tailored_resumes
   using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
   with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
