@@ -10,6 +10,16 @@ engine — `selectBullets`/`renderBody`/`coverage`), `lib/resume-render/content/
 (the checked-in career record and theme vocabulary), the `tailored_resumes`
 table, and gating on `actor.isAdmin`.
 
+Reviewed by two independent subagents before this version — a correctness
+pass (verified the merge logic's types, the SQL/RLS/grant pattern, the
+Next.js body-size default, Railway's private-networking behavior, and the
+priority-ordering direction against the real code) and an adversarial
+security pass focused on what this spec adds beyond the already-reviewed
+base spec (the audio-upload path, the Whisper service's exposure, and
+whether the approval gate is actually enforced or only asserted in prose).
+Both passes' findings are folded in below rather than tracked as a
+separate revision history, since this is the document's first version.
+
 ## The problem
 
 Revision 4's tailoring pipeline is deliberately, structurally incapable of
@@ -75,10 +85,17 @@ reason to exist, and this app already has the muscle memory for a
 bearer-secret pattern to reuse.
 
 **Binding gotcha, worth stating up front because it silently breaks
-otherwise**: Railway's private network is IPv6-only. The whisper service
-must bind `::`, not `0.0.0.0` or `127.0.0.1` — binding to either of the
-latter makes every private-network call fail with `ECONNREFUSED` in a way
-that's easy to misdiagnose as an auth or routing problem.
+otherwise**: Railway's private network is IPv6-only **for environments
+created before 2025-10-16** — Railway's own docs say newer environments
+resolve both IPv4 and IPv6. This project's environment almost certainly
+predates that cutoff (confirmed as a strong inference from deploy history,
+not a fetched creation date), so treat it as IPv6-only in practice, but
+verify against the actual `whisper` service rather than assuming the older
+behavior forever. Either way the safe move is the same: the whisper
+service must bind `::`, not `0.0.0.0` or `127.0.0.1` — binding to either of
+the latter makes every private-network call fail with `ECONNREFUSED` in a
+way that's easy to misdiagnose as an auth or routing problem, and `::`
+works under both networking modes.
 
 **Auth**: the shape of `lib/cron-auth.ts` — a shared secret, both sides
 hash to a fixed-length digest, compared with a constant-time comparison,
@@ -98,22 +115,47 @@ transcript. **This is the one action in the whole résumé feature that
 needs input validation the rest of it never did**, because every other
 action takes structured JSON or a `jobId`, never a file upload:
 
-- **Size ceiling.** Next.js Server Actions default to a 1MB request-body
-  limit; a real voice clip blows past that trivially. `bodySizeLimit` needs
-  raising in `next.config.js` for this route specifically (or the action
-  needs to be a route handler instead of a Server Action, if scoping the
-  raised limit to just this one path matters more than staying consistent
-  with how the rest of the app's actions are shaped) to a generous but
-  bounded cap — a few MB is enough for a short spoken answer.
-- **Content-type check.** Reject anything that isn't an audio MIME type
-  before it's forwarded to `whisper` — an unvalidated upload endpoint is a
-  bigger liability than a résumé-text action ever was, even gated to the
-  app owner alone.
+- **Size ceiling, via a route handler, not a raised global limit.**
+  Next.js Server Actions default to a 1MB request-body limit (confirmed
+  against this repo's installed Next.js 14.2 — `experimental.serverActions.bodySizeLimit`);
+  a real voice clip blows past that trivially. **Resolved in favor of a
+  dedicated route handler** (`app/api/resume/transcribe/route.ts`) rather
+  than raising `next.config.js`'s `bodySizeLimit` globally: a global raise
+  widens the request-body ceiling for every Server Action in the app —
+  including ones with no reason to accept more than a few KB, like a
+  settings save — for the benefit of exactly one path. A route handler
+  scopes the larger cap (a few MB, generous but bounded, enough for a
+  short spoken answer) to just this one endpoint.
+- **Content-type check**, before forwarding to `whisper`. This is a
+  client-declared `Content-Type` check, not magic-byte sniffing — trivially
+  spoofable in principle, but the caller is admin-gated (see "Gating"), so
+  a spoofed type only risks a crafted file reaching Whisper's own decoder,
+  not an attacker-reachable path.
+- **Accepted, not fully closed: the body is received before the admin
+  check runs.** Every Server Action and route handler in this app checks
+  auth inside the handler body, not via middleware (middleware here can't
+  reach Postgres — see CLAUDE.md's architecture notes) — so `web` buffers
+  an uploaded body before `requireResumeAdmin()` gets a chance to reject a
+  non-admin or unauthenticated caller who has the endpoint's shape from the
+  client bundle. This is the same ordering every other action already has;
+  what's new here is the payload can be MB-sized instead of KB-sized. The
+  route-handler-scoped size cap above bounds how bad that gets — it doesn't
+  eliminate the ordering, and no rate-limiting is in scope for v1.
 
 The transcript **pre-fills** the answer text box; it is never submitted
 automatically. Voice is a convenience for getting words into the box, not
 a new trust boundary — the same human-approval gate downstream applies
 identically to a typed answer and a transcribed one.
+
+**Private networking is defense-in-depth, not the only control, and
+that's worth saying plainly rather than leaving implicit.** The
+`WHISPER_SECRET` bearer check (below) is what actually protects the
+service; private-network-only placement is what keeps it from needing to
+face that check against the public internet at all. This app has
+documented history of exactly the Railway-misconfiguration class that
+would undo the second part (`ADMIN_EMAIL` repointing is CLAUDE.md's own
+worked example of this trap) — see "Deploy and rollout" for the explicit
+check this earns.
 
 *(Considered and rejected: browser-native `SpeechRecognition` — zero new
 infrastructure, but Chrome-only and sends audio to Google. Self-hosting was
@@ -227,20 +269,49 @@ every future job in the same theme, which defeats it.
 
 ### Merging into `CareerRecord`
 
-A pure function, `mergeApprovedDrafts(career: CareerRecord, approved: DraftRow[]): CareerRecord`,
-in `lib/resume-render/merge-drafts.ts` (this app's own code — not part of
-the vendored `render.js`, which owns rendering/selection, not this app's
-storage layer): deep-copies `career`, and for each `approved` row appends
-`{ id: bullet_id, priority, themes, text }` to the matching `role_id`'s
-`bullets` array. A row whose `role_id` no longer matches any role in the
-current `content/resume.json` (the file changed since the draft was
-approved) is skipped, not thrown — logged, not fatal, since the static
-file can be hand-edited independently of the database at any time.
+**The approval gate is enforced twice, independently, not asserted once in
+prose.** The whole safety claim of this feature — "nothing drafted is
+selectable without explicit approval" — rests on this merge step, so it is
+specified as two separate, redundant checks rather than one function
+trusted to get it right, the same doubled-check habit this codebase
+already uses elsewhere for a similarly load-bearing absence check (the ATS
+board-resolution pass verifies absence "by status and again by response
+shape," CLAUDE.md):
+
+1. **The loading query filters at the source.** Whatever loads rows for
+   merging — call it `listApprovedDrafts(tenantId)` — queries
+   `resume_bullet_drafts` `where status = 'approved'` explicitly (via the
+   tenant-scoped `supabase.forTenant(tenantId)` builder, per "Gating"
+   below — never a hand-written query missing the tenant filter). Its
+   return type is `ApprovedDraftRow`, a narrower type than the raw table
+   row: `priority: number` (never `null` — the column is nullable at the
+   schema level only because a `draft` row hasn't been assigned one yet;
+   an `ApprovedDraftRow` by construction always has one, since approval is
+   exactly the step that assigns it). This also resolves a real type gap
+   an earlier review caught: pushing a raw row's `priority: number | null`
+   onto `ResumeBullet.priority: number` (`render.d.ts`) doesn't type-check
+   without this narrowing.
+2. **`mergeApprovedDrafts` re-filters internally rather than trusting its
+   caller.** `mergeApprovedDrafts(career: CareerRecord, rows: ApprovedDraftRow[]): CareerRecord`,
+   in `lib/resume-render/merge-drafts.ts` (this app's own code — not part
+   of the vendored `render.js`, which owns rendering/selection, not this
+   app's storage layer): deep-copies `career`, and for each row appends
+   `{ id: bullet_id, priority, themes, text }` to the matching `role_id`'s
+   `bullets` array. Even though `ApprovedDraftRow` can't represent an
+   unapproved row by construction, the function still doesn't assume its
+   caller is `listApprovedDrafts` specifically — a defensive check belongs
+   here precisely because this function is the last line of defense if the
+   loading side is ever refactored, copy-pasted, or gets a second caller
+   that forgets the `where` clause. A row whose `role_id` no longer matches
+   any role in the current `content/resume.json` (the file changed since
+   the draft was approved) is skipped, not thrown — logged, not fatal,
+   since the static file can be hand-edited independently of the database
+   at any time.
 
 `tailorResumeForJob` and the gap-detection `coverage()` call both run
-against `mergeApprovedDrafts(career, approvedRows)`, never the bare
-`content/resume.json` import directly, once this ships — the static file
-is the *floor* of the pool, not the whole of it.
+against `mergeApprovedDrafts(career, await listApprovedDrafts(tenantId))`,
+never the bare `content/resume.json` import directly, once this ships —
+the static file is the *floor* of the pool, not the whole of it.
 
 ## Gating
 
@@ -252,12 +323,37 @@ file's exports — `transcribeAudio`, `listGaps`, `draftCurationBullet`,
 `app/actions/resume.ts` already defines (no second gate function invented
 for this file).
 
+**`approveDraft(id)`/`rejectDraft(id)` are admin-gated AND tenant-scoped —
+being admin is not, on its own, license to mutate any row by id.** This
+codebase has two real, established precedents for "mutate a row by id" and
+they differ on purpose: `admin.ts`'s `setStatus(id, …)` writes to `users`
+directly (a genuinely global table an admin operates across every tenant),
+while every tenant-owned table is reached through
+`supabase.forTenant(actor.tenantId).from(table).eq("id", id)…`, which
+folds the tenant predicate into the query the same way RLS folds it into
+the database. `resume_bullet_drafts` is the second kind — an
+admin-gated action that mutated it by id alone, without going through
+`forTenant`, would be pattern-matching the wrong precedent. Concretely:
+`approveDraft`/`rejectDraft`/`saveDraftAnswer` all resolve their row via
+`supabase.forTenant(actor.tenantId).from("resume_bullet_drafts").eq("id", id)`,
+never a bare `.from("resume_bullet_drafts").eq("id", id)` and never
+`rawQuery()`. (Being in `TENANT_TABLES` — see "Data model" — makes the
+unscoped `supabase.from()` form throw at all, which is the mechanical
+backstop for this; stating the scoped shape explicitly here is about not
+reaching for `rawQuery()` to work around that throw.)
+
 ## Testing
 
 - `mergeApprovedDrafts` — pure function, unit tested directly: an approved
-  row lands in the right role at the right priority; a `draft`/`rejected`
-  row is never merged; a row whose `role_id` doesn't match any current
-  role is skipped without throwing.
+  row lands in the right role at the right priority; a row whose `role_id`
+  doesn't match any current role is skipped without throwing. Because the
+  function's real parameter type is `ApprovedDraftRow[]` (see "Merging
+  into `CareerRecord`"), the "a draft/rejected row is never merged" case
+  can't be expressed by passing a same-typed-but-unapproved row — cover it
+  instead as a `listApprovedDrafts` test (`where status = 'approved'`
+  actually excludes `draft`/`rejected` rows), so both halves of the
+  double-checked approval gate are independently tested, not just the one
+  a same-shaped input could exercise.
 - A fixture test for the drafting prompt builder (`lib/curation-prompt.ts`),
   same pattern as `lib/resume-prompt.ts`'s.
 - The admin-gate refusal test extends to cover every export in
@@ -277,10 +373,21 @@ Adds to the base spec's migration/RLS steps:
    `whisper` service before either can reach the other; confirm the
    `whisper` service binds `::` (not `0.0.0.0`), or every private-network
    call fails closed with `ECONNREFUSED` and no clear signal why.
-2. Run the `resume_bullet_drafts` migration; confirm RLS, the grant, and
+2. **Confirm `whisper` has no public domain provisioned** — private
+   networking is defense-in-depth on top of the `WHISPER_SECRET` check
+   (see "Voice"), not a substitute for it, and this app has documented
+   history of exactly the class of Railway misconfiguration that would
+   accidentally expose a service meant to stay internal.
+3. Run the `resume_bullet_drafts` migration; confirm RLS, the grant, and
    its own `TENANT_TABLES` addition the same way "Deploy and rollout" in
    the base spec verifies `tailored_resumes`.
-3. End-to-end check as the app owner: record a short voice answer, confirm
+4. Confirm gating end-to-end as the app owner, restating the base spec's
+   own check rather than assuming it still holds once curation adds new UI
+   to `/resume`: the gap list, draft cards, and voice recorder all render
+   for the admin account. If a second, non-admin test account is
+   available, confirm none of that new UI appears and `approveDraft`/
+   `rejectDraft`/`transcribeAudio` all refuse a non-admin caller directly.
+5. End-to-end check as the app owner: record a short voice answer, confirm
    a transcript comes back; approve a drafted bullet; run
    `tailorResumeForJob` again for a job matching that bullet's theme and
    confirm it can actually be selected — proof the merge step is wired in,
