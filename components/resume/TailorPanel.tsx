@@ -54,8 +54,8 @@ export default function TailorPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      {error && <p className="text-sm text-[#92400E]">{error}</p>}
-      <div className="flex items-center gap-3">
+      {error && <p className="text-sm text-[#92400E] print:hidden">{error}</p>}
+      <div className="flex items-center gap-3 print:hidden">
         <button
           onClick={() => window.print()}
           className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink"
@@ -69,6 +69,9 @@ export default function TailorPanel({
         >
           {isPending ? "Regenerating…" : "Regenerate"}
         </button>
+        <span className="text-xs text-ink/50">
+          Click any text below to edit it directly — for Google Docs, select all and copy/paste after editing.
+        </span>
       </div>
       <ResumeDocument career={career} selection={selection} />
     </div>

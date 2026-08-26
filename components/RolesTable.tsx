@@ -1111,6 +1111,14 @@ export default function RolesTable({
                     </span>
                   )}
                   <ProvenanceBadge source={job.source} />
+                  {isAdmin && (
+                    <Link
+                      href={`/resume?jobId=${job.id}`}
+                      className="rounded-md border border-ink bg-ink px-2 py-1 text-xs font-medium text-white transition hover:bg-ink/90"
+                    >
+                      Tailor resume →
+                    </Link>
+                  )}
                   <StatusSelect value={job.status} statuses={statuses} onChange={(s) => handleStatus(job, s)} />
                 </div>
               </div>
@@ -1186,14 +1194,6 @@ export default function RolesTable({
                       )}
                       {job.careers_url && (
                         <a href={job.careers_url} target="_blank" rel="noreferrer" className="text-sm underline underline-offset-2 hover:text-ink/60">Careers page →</a>
-                      )}
-                      {isAdmin && (
-                        <Link
-                          href={`/resume?jobId=${job.id}`}
-                          className="text-sm underline underline-offset-2 hover:text-ink/60"
-                        >
-                          Tailor resume →
-                        </Link>
                       )}
                       <button
                         onClick={() => handleDelete(job.id)}

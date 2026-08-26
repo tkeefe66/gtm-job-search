@@ -60,9 +60,11 @@ export default async function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body className="min-h-screen bg-canvas text-ink antialiased">
-        <Nav isAdmin={isAdmin} />
-        {needsKey && <NeedsKeyBanner />}
-        <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6">
+        <div className="print:hidden">
+          <Nav isAdmin={isAdmin} />
+          {needsKey && <NeedsKeyBanner />}
+        </div>
+        <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 print:max-w-none print:p-0">
           {children}
         </main>
       </body>

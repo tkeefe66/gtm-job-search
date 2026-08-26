@@ -43,34 +43,34 @@ export default async function ResumePage({
   let contextNode: React.ReactNode;
   if (context === null) {
     contextNode = (
-      <p className="mt-1 text-sm text-[#92400E]">
+      <p className="mt-1 text-sm text-[#92400E] print:hidden">
         That job couldn't be found — it may have been deleted.
       </p>
     );
   } else if (context.error !== undefined) {
-    contextNode = <p className="mt-1 text-sm text-[#92400E]">{context.error}</p>;
+    contextNode = <p className="mt-1 text-sm text-[#92400E] print:hidden">{context.error}</p>;
   } else {
     contextNode = (
-      <p className="mt-1 text-sm text-ink/70">
+      <p className="mt-1 text-sm text-ink/70 print:hidden">
         For {context.roleTitle} at {context.company}
       </p>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-8">
+    <div className="mx-auto max-w-3xl p-8 print:max-w-none print:p-0">
       {/* Not pagination-shell script (that's ResumeDocument.tsx's next/script
           tags for doc-page.js/page-guides.js) — this is the actual styling
           for the .rsm markup those scripts paginate. The deleted temporary
           preview route carried the same tag; ResumeDocument.tsx itself never
           loads it, so this route must. */}
       <link rel="stylesheet" href="/resume-design/styles.css" />
-      <h1 className="text-xl font-semibold">Résumé</h1>
+      <h1 className="text-xl font-semibold print:hidden">Résumé</h1>
       {contextNode}
       {existing.error !== undefined && (
-        <p className="mt-1 text-sm text-[#92400E]">{existing.error}</p>
+        <p className="mt-1 text-sm text-[#92400E] print:hidden">{existing.error}</p>
       )}
-      <div className="mt-6">
+      <div className="mt-6 print:mt-0">
         <TailorPanel
           career={career as CareerRecord}
           jobId={jobId}

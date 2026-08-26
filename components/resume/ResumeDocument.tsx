@@ -40,8 +40,24 @@ export default function ResumeDocument({ career, selection }: ResumeDocumentProp
     <>
       <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
       <Script src="/resume-design/page-guides.js" strategy="afterInteractive" />
-      <style>{`doc-page:not(:defined) { visibility: hidden; }`}</style>
-      <doc-page margin="0.68in" dangerouslySetInnerHTML={{ __html: html }} />
+      <style>{`
+        doc-page:not(:defined) { visibility: hidden; }
+        /* Chrome/Firefox draw a focus outline on whichever element literally
+           carries contenteditable, even though the caret sits in a nested
+           slotted node — suppressed the same way any WYSIWYG surface does. */
+        doc-page[contenteditable] { outline: none; cursor: text; }
+      `}</style>
+      {/* No onInput handler: edits are intentionally not captured back into
+          React state or persisted anywhere. This is live-DOM click-to-edit,
+          not a data-model change — "Regenerate" or a reload discards edits
+          by re-setting this HTML from the algorithmic selection, which is
+          the whole reason no state syncing is needed. */}
+      <doc-page
+        margin="0.68in"
+        contentEditable
+        suppressContentEditableWarning
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </>
   );
 }
