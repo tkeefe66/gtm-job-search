@@ -38,16 +38,17 @@ export default function ResumeDocument({ career, selection }: ResumeDocumentProp
   const html = renderBody(career, selection);
   return (
     <>
-      {/* page-guides.js (the on-screen "PAGE 2" dashed-line overlay) is
-          deliberately NOT loaded here. It estimates page breaks by dividing
-          the rendered height by the page height alone — zero awareness of
-          break-inside/break-after/break-before — so it draws its line at a
-          different spot than the real print engine (which honors all
-          three). It showed a misleading break between a role's header and
-          its bullets even after that was fixed in the actual print output,
-          which is worse than no on-screen indicator at all: the real
-          Print / Export PDF button is the only accurate check. */}
+      {/* The vendored page-guides.js (the "PAGE 2" dashed-line overlay) is
+          deliberately NOT loaded here — it estimates breaks by dividing
+          rendered height by page height alone, with zero awareness of
+          break-inside/break-after/break-before, so it drew its line between
+          a role's header and its bullets even after the real print output
+          stopped splitting there. rsm-page-guides.js (this app's own,
+          coupled to .rsm-role's actual structure) walks the same break
+          rules document.css enforces, so it can't suggest a break the real
+          print engine would refuse. */}
       <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
+      <Script src="/resume-design/rsm-page-guides.js" strategy="afterInteractive" />
       <style>{`
         doc-page:not(:defined) { visibility: hidden; }
         /* Chrome/Firefox draw a focus outline on whichever element literally
