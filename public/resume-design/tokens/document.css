@@ -24,20 +24,34 @@
 .rsm-section-title{grid-column:1;grid-row:1/span 99;align-self:start;font:var(--type-section);font-variant-caps:all-small-caps;letter-spacing:var(--tracking-label);color:var(--accent-600);margin:0;padding-top:1px}
 
 /* Role entries */
-/* With the current taper the tallest role is ~375px against a 925px page, so a role never needs
-   to span pages; avoiding the break removes stranded org lines and split bullet lists. */
-.rsm-role{break-inside:avoid;padding-bottom:var(--gap-role);margin-bottom:var(--gap-role);border-bottom:var(--border-hair) solid var(--border-hairline)}
+/* NOT break-inside:avoid, deliberately, diverging from the ported design system: the header's
+   ~375px-fits-easily assumption only holds when the role starts near the top of a page. Whichever
+   role happens to fall right after the masthead/summary — a different role for every tailored
+   selection, since selectBullets() picks a different theme match per job — can be pushed entirely
+   onto the next page by that rule, stranding 300-400px of blank space at the bottom of page 1
+   (observed: taper-capped "Director of GTM Experts" at 354px, page content ~925px, page-1 remainder
+   too short to hold it whole). break-after:avoid on the head/org, plus break-before:avoid on the
+   first bullet below, keep the header from ever being stranded ALONE — the actual failure this
+   design was guarding against — while letting a role's later bullets flow onto the next page
+   instead of dragging the whole block there. */
+.rsm-role{padding-bottom:var(--gap-role);margin-bottom:var(--gap-role);border-bottom:var(--border-hair) solid var(--border-hairline)}
 .rsm-role:last-of-type{border-bottom:0}
 .rsm-role-head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-6);break-after:avoid}
 .rsm-role-title{font:var(--type-role);letter-spacing:-0.012em;color:var(--text-primary);margin:0}
 .rsm-role-dates{font:var(--type-meta);color:var(--text-muted);white-space:nowrap;font-variant-numeric:lining-nums tabular-nums}
-.rsm-role-org{font:var(--type-org);color:var(--text-secondary);margin:1px 0 var(--space-3)}
+.rsm-role-org{font:var(--type-org);color:var(--text-secondary);margin:1px 0 var(--space-3);break-after:avoid}
 .rsm-role-org b{font-style:italic;font-weight:var(--weight-semibold);color:var(--text-primary)}
 .rsm-role-org em{font-style:italic;color:var(--text-muted)}
 
 /* Bullets — 7px navy hairline markers, never discs. */
-.rsm-bullets{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--gap-bullet)}
-.rsm-bullets li{position:relative;padding-left:var(--indent-bullet);orphans:3;widows:3}
+/* Plain block flow, not flex-column: doc-page.js's own usage docs are explicit that flex/grid
+   containers don't fragment across print pages ("only real CSS columns flow and break across
+   pages") — a flex-column bullet list that needs to split between two pages (now that .rsm-role
+   above no longer forces the whole role onto one page) is exactly the case that warning covers.
+   margin-top replaces the flex `gap`. */
+.rsm-bullets{list-style:none;margin:0;padding:0}
+.rsm-bullets li{position:relative;padding-left:var(--indent-bullet);margin-top:var(--gap-bullet);orphans:3;widows:3}
+.rsm-bullets li:first-child{margin-top:0;break-before:avoid}
 .rsm-bullets li::before{content:"";position:absolute;left:1px;top:0.62em;width:7px;height:1px;background:var(--accent-600)}
 .rsm-bullets strong{font-weight:var(--weight-semibold);color:var(--text-primary)}
 .rsm-subrole{font:var(--type-org);font-weight:var(--weight-semibold);color:var(--text-primary);margin:var(--space-5) 0 var(--space-3);break-after:avoid}
