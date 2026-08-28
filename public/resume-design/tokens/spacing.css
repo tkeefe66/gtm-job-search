@@ -6,7 +6,12 @@
 --page-width:8.5in; /* @kind spacing */
 --page-height:11in; /* @kind spacing */
 --page-margin:0.68in;--page-margin-tight:0.5in;
---rail:96px;--col-gap:22px;
+/* 96px let the rail's own longest word ("Certifications", ~123px at --type-section's
+   12px/0.2em tracking) overflow its column — with text-wrap:balance active (doc-page.js's
+   global h1-h6 default; .rsm-section-title is an h2) that forced a mid-word break
+   ("PROFESSIONA"/"L") instead of a normal word-boundary wrap. 132px clears the longest
+   word plus a small buffer. */
+--rail:132px;--col-gap:22px;
 --col-side:2.05in; /* @kind spacing */
 --measure-prose:66ch;--measure-bullet:78ch;
 
