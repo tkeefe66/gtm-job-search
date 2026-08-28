@@ -280,6 +280,70 @@ and NOT through `db/apply-schema.mjs`, which would re-create the `insights_cache
 table that `006_drop_insights.sql` dropped. Design:
 `docs/superpowers/specs/2026-08-17-never-live-roles-design.md`.
 
+**Résumé tailoring** (`/resume`, admin-gated) turns a tracked role into a résumé
+selected from the checked-in career record — never freely generated text; see
+`docs/superpowers/specs/2026-08-24-resume-builder-design.md` for the full
+data model (`content/resume.json`'s bullet pool, `selectBullets()`,
+`tailored_resumes`). The "Tailor resume →" entry point lives on the
+**collapsed** `/roles` row itself (`components/RolesTable.tsx`, in the badge
+strip next to the status dropdown) — it used to be inside the expanded row
+detail only, which is easy to miss; don't move it back there without a reason.
+Export is `window.print()` behind `print:hidden`/`print:p-0` classes added to
+`app/layout.tsx`, `app/resume/page.tsx`, and `TailorPanel.tsx` — nothing hides
+app chrome (nav, page header, buttons) at print by default, so a NEW page that
+calls `window.print()` needs the same scoping or it captures the whole app
+shell, not just its own content. The rendered résumé (`ResumeDocument.tsx`'s
+`<doc-page>`) is `contentEditable` — bullet text can be clicked and edited
+directly in the browser, matching the design system's own stated intent — but
+edits are **never persisted**: nothing captures them back into React state or
+the database, so "Regenerate" or a reload discards them by re-setting the
+HTML from the algorithmic selection. That's deliberate, not an oversight;
+Google Docs export is select-all-and-paste, not an API integration.
+
+**The three `public/resume-design/tokens/*.css` files are no longer
+byte-identical to the ported Claude Design source, and that's deliberate,
+not drift.** The design spec above describes them as "copied near-verbatim
+and byte-verified" — true as of the initial port, false as of 2026-08-28.
+Real print defects surfaced once an actual tailored résumé (multi-bullet
+roles, not the design system's own shorter sample content) was tested
+end-to-end, and fixing them meant diverging from the vendored CSS:
+`document.css`'s `.rsm-role` no longer carries `break-inside:avoid` — that
+rule assumed every role fits in whatever space is left on the current page,
+which broke whenever the first role after the masthead/summary didn't fit,
+jumping the WHOLE role to the next page and stranding 300-400px of blank
+space instead of the small orphaned-header gap the rule meant to prevent.
+Replaced with `break-after:avoid` on the role head/org plus
+`break-before:avoid` on the first bullet, so the header can never be
+stranded alone but later bullets can flow onto the next page.
+`.rsm-bullets` switched from `display:flex;flex-direction:column` to plain
+block flow (`margin-top` instead of flex `gap`) — `doc-page.js`'s own usage
+docs explicitly warn that flex/grid containers don't fragment cleanly across
+print pages, which is exactly what a bullet list now needs to do since the
+break-inside change above. `spacing.css`'s `--rail` went from `96px` to
+`132px`: the longest section-label word ("Certifications") measures ~123px
+at `--type-section`'s 12px/0.2em tracking, so no single word fit — combined
+with `doc-page.js`'s global `text-wrap:balance` on headings, that forced a
+literal mid-word break ("PROFESSIONA"/"L") instead of a normal word-boundary
+wrap. **If this design system is ever re-synced from Claude Design, these
+three changes will be silently reverted** — check `git log` on
+`public/resume-design/tokens/` before trusting a fresh port over what's
+running in production.
+
+**`public/resume-design/page-guides.js` (the vendored on-screen page-break
+overlay) is not loaded — `components/resume/ResumeDocument.tsx` loads
+`public/resume-design/rsm-page-guides.js` instead, a small app-owned
+replacement.** The vendored version estimates page breaks by dividing
+rendered height by page height alone, with zero awareness of
+break-inside/break-after/break-before, so it drew its "PAGE 2" line between
+a role's header and its bullets even after the fix above made the real
+print output stop splitting there — a wrong on-screen indicator being worse
+than none is what justified writing a replacement rather than just
+deleting it. `rsm-page-guides.js` walks `.rsm-role`'s actual structure and
+only offers a break where `document.css` actually allows one; it's still an
+estimate (font-metric rounding and orphans/widows aren't modeled), so
+Print / Export PDF remains the ground truth for anything this guide and the
+real output might disagree on.
+
 ## Closed: the three career-agnostic gaps (2026-08-18)
 
 All three were closed in one pass. Recorded rather than deleted, because each one's REASONING still constrains the next change.
