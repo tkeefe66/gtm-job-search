@@ -8,7 +8,7 @@ Multi-tenant, career-agnostic, AI-powered job search tool. Next.js 14 (App Route
 
 **The shared-password gate is GONE, and there is no middleware.** `middleware.ts`, `app/gate/` and `app/api/gate/` were deleted on 2026-08-17, along with the `GATE_TOKEN` variable on `web`. That gate was always labelled throwaway (`docs/superpowers/specs/2026-08-16-multi-tenant-auth-design.md` — revision 2; the 08-15 file is the superseded revision 1, kept only as a record) and it was removed once Google sign-in plus the pending-approval waitlist covered everything it did, because past that point it was pure redundancy that forced a shared secret on every invitee.
 
-**What replaced it is per-surface, not global, so the coverage argument has to be re-made whenever a surface is added.** Middleware was attractive precisely because it covered Server Actions for free — those are RPC endpoints addressed by an ID that ships in the client bundle, so gating pages does nothing for them. Nothing covers them for free any more. The three standing invariants are: every `page.tsx` calls `requireActorPage()` (or `requireAdminPage()` for `/admin`); every exported server action refuses a session-less call, which `app/actions/auth-required.test.ts` asserts by importing each file in `app/actions/` and calling every exported function; and the only deliberately public surfaces are `/signin`, `app/api/auth/[...nextauth]` (the OAuth handshake) and the two cron routes `app/api/cron/crawl-next` and `app/api/cron/crawl` (a shared `CRON_SECRET` bearer check in `lib/cron-auth.ts`, failing closed). `app/page.tsx` holds no data and only redirects to `/discover`. The two actions on that test's `CRON_CALLED` exemption list were probed directly at removal time and refuse a session-less call anyway — they reach `resolveTenantId()`, which falls through to `requireActor()` outside a platform context. Adding a page without `requireActorPage()` is now an unguarded surface with no framework backstop, and only review catches it. (The Edge-runtime constraint that made middleware unable to do real auth still stands: it cannot reach Postgres, and Node-runtime middleware does not exist until Next 15.2.)
+**What replaced it is per-surface, not global, so the coverage argument has to be re-made whenever a surface is added.** Middleware was attractive precisely because it covered Server Actions for free — those are RPC endpoints addressed by an ID that ships in the client bundle, so gating pages does nothing for them. Nothing covers them for free any more. The three standing invariants are: every `page.tsx` calls `requireActorPage()` (or `requireAdminPage()` for `/admin`); every exported server action refuses a session-less call, which `app/actions/auth-required.test.ts` asserts by importing each file in `app/actions/` and calling every exported function; and the only deliberately public surfaces are `/signin`, `app/api/auth/[...nextauth]` (the OAuth handshake) and the three cron routes `app/api/cron/crawl-next`, `app/api/cron/crawl` and `app/api/cron/purge-resumes` (a shared `CRON_SECRET` bearer check in `lib/cron-auth.ts`, failing closed). `app/page.tsx` holds no data and only redirects to `/discover`. The two actions on that test's `CRON_CALLED` exemption list were probed directly at removal time and refuse a session-less call anyway — they reach `resolveTenantId()`, which falls through to `requireActor()` outside a platform context. Adding a page without `requireActorPage()` is now an unguarded surface with no framework backstop, and only review catches it. (The Edge-runtime constraint that made middleware unable to do real auth still stands: it cannot reach Postgres, and Node-runtime middleware does not exist until Next 15.2.)
 
 **A fourth invariant, learned the hard way on 2026-08-18: the session read must never deny by account status.** `getSessionAndUser` (`auth.ts`) enforces only what invalidates the session itself — the idle and absolute caps. Refusing a `pending`/`suspended`/`denied` user there returns `null`, which makes `auth()` report *no session* rather than a refused one, and `/signin` — which doubles as the waitlist screen — then cannot tell a waitlisted user from a stranger. It shows them the Google button, the click mints another session, `/discover` bounces them back, forever; one account logged three sessions in three minutes before this was found. Status denial belongs at the surfaces that can state a reason: `readActor` (`lib/require-actor.ts`) for every page and action, `signInView` (`lib/auth-policy.ts`) for the sign-in page. Both call `accessFor`, so fail-closed is unchanged, and status still arrives from the user row joined on every session read — a suspension bites on the next request. A source guard in `lib/auth-policy.test.ts` fails the build if `auth.ts` calls `accessFor` again.
 
@@ -299,6 +299,63 @@ edits are **never persisted**: nothing captures them back into React state or
 the database, so "Regenerate" or a reload discards them by re-setting the
 HTML from the algorithmic selection. That's deliberate, not an oversight;
 Google Docs export is select-all-and-paste, not an API integration.
+
+**Saving a résumé is a SEPARATE table from tailoring one, and the distinction is
+the whole feature.** `tailored_resumes` is the working DRAFT — one row per
+(tenant, job), upserted by Regenerate, holding `{themes, selection}` and never
+expiring. `saved_resumes` (migration 016) is the ARCHIVE — one row per explicit
+Save, many per job, holding frozen sanitized HTML that is mounted as stored and
+**never re-rendered through `renderBody`**, because re-rendering would silently
+apply today's career record and today's selection rules to a document the user
+saved as final. "Save as new version" on a saved résumé writes a NEW row and
+never overwrites the one open. `job_id` is `ON DELETE SET NULL`, so an archived
+résumé outlives the tracked role it came from; `role_title` and `company` are
+snapshotted onto the row for exactly that reason, which is why the draft screen
+withholds Save when it could not read the job rather than storing `""`.
+
+**Edits are captured only on Save, and the capture is `docPageEl.innerHTML`
+with the page guides stripped** (`components/resume/useResumeCapture.ts`). Two
+traps, both invisible until after a row is written: capturing the `.rsm` div's
+innerHTML instead of its parent's loses the root that `document.css` scopes the
+entire design to, and the saved résumé then renders as unstyled body text; and
+`rsm-page-guides.js` appends its overlay INSIDE `.rsm` while its styles go to
+`document.head`, so the guide nodes travel with a capture and their styling does
+not — they would freeze stale break markers into the row and print as literal
+"Page 2" text. The sanitizer (`lib/resume-sanitize.ts`) drops them again
+server-side. That allowlist is derived from three sources, not from
+`renderBody`'s tag output alone: the career record reaches the page through an
+UNESCAPED bullet path carrying `<strong>`, `contentEditable` adds `<br>`/`<b>`/
+`<i>` that the renderer never emits, and `render.js` puts an inline
+`margin-bottom:0` on the last section whose loss is a page break. A checked-in
+fixture pins the shipped record's full render through the sanitizer.
+
+**Retention is 60 days and its two SQL comparisons live in ONE place.**
+`lib/resume-retention.ts` exports `EXPIRED_PREDICATE` (`<=`) and
+`LIVE_PREDICATE` (`>`) as strings, plus the `isExpired` JS twin, because the
+comparison is expressed in SQL at three call sites where no vitest test can
+execute it — retyping either operator is the `compFloor` `>`-not-`>=` hazard
+this file records, and a test asserts the pair stays complementary. Three
+mechanisms enforce the window, deliberately redundant: the
+`CRON_SECRET`-guarded `app/api/cron/purge-resumes` route (primary, over EVERY
+tenant regardless of account status — a suspended user's storage must still
+expire, which is why it uses `listAllTenantIds` and not
+`listCrawlableTenants`), an opportunistic per-tenant purge inside
+`listSavedResumes` (so an active user's retention survives the cron being
+down, which this file records happening for days unnoticed), and a
+`LIVE_PREDICATE` filter on both reads so an unpurged expired row is never
+shown. What 60 days does NOT cover: the non-expiring `tailored_resumes` draft
+row, Railway's own database backups, and any file the user has downloaded.
+
+**Every raw statement against `saved_resumes` passes the tenant id as
+`rawQuery`'s THIRD argument.** `runAsTenant` sets an AsyncLocalStorage value,
+not the Postgres GUC, and `app_rw` is `nobypassrls` — so a tenant-table
+statement with no tenant set matches zero rows and returns no error. Adding the
+table to `TENANT_TABLES` protects the query BUILDER only and does nothing for
+raw SQL. `DESIGN_VERSION` in `lib/resume-download.ts` is stamped on every saved
+row and must be bumped BY HAND whenever anything under
+`public/resume-design/tokens/` changes; a row whose version differs from the
+current one is labelled "saved against an earlier document design" rather than
+silently re-styled.
 
 **The three `public/resume-design/tokens/*.css` files are no longer
 byte-identical to the ported Claude Design source, and that's deliberate,
