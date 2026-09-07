@@ -143,6 +143,33 @@ export async function listCrawlableTenants(): Promise<{
   return { tenants: data.map((r) => ({ id: r.id, isAdmin: r.role === "admin" })) };
 }
 
+/**
+ * EVERY tenant, whatever their account status.
+ *
+ * Deliberately NOT listCrawlableTenants(), which filters status = 'active'.
+ * That filter is right for deciding who to spend money crawling and wrong for a
+ * retention guarantee: a suspended or pending user's saved résumés would never
+ * be purged, and the promise made to the user is about storage.
+ *
+ * `users` is not RLS-protected (absent from 003's and 004's table lists), so
+ * this needs no tenant scope. The literal "Not authenticated" matters:
+ * app/actions/auth-required.test.ts asserts rejects.toThrow(/Not authenticated/),
+ * and the sibling idiom in this same feature (requireResumeAdmin) throws
+ * "Not authorized", which would not match.
+ */
+export async function listAllTenantIds(): Promise<{ tenantIds: string[]; error?: string }> {
+  if (!isPlatform()) throw new Error("Not authenticated");
+  const { data, error } = await rawQuery<{ id: string }>(
+    `select id from users order by created_at`
+  );
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "list tenants for the résumé purge"
+  );
+  if (described !== undefined) return { tenantIds: [], error: described };
+  return { tenantIds: data.map((r) => r.id) };
+}
+
 export interface TenantBudget {
   id: string;
   email: string;
