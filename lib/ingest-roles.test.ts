@@ -18,6 +18,17 @@ const h = vi.hoisted(() => ({
     slug: string;
     precision: "posting" | "absent" | "ambiguous" | "empty";
   } | null,
+  // The ATS deep-link path: vendor and slug are read out of the stored URL, so
+  // this is a different lookup from the guessed-slug one above and needs its
+  // own stub. Default is the inert outcome, so every pre-existing test in this
+  // file keeps its meaning.
+  verified: { kind: "notApplicable" } as
+    | { kind: "notApplicable" }
+    | { kind: "listed" }
+    | { kind: "unreachable" }
+    | { kind: "relink"; url: string }
+    | { kind: "unclear"; reason: "ambiguous" | "empty"; url: string }
+    | { kind: "absent"; url: string },
 }));
 
 vi.mock("@/lib/supabase", () => ({
@@ -40,12 +51,15 @@ vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => h.urlStatus)
 // below uses an aggregator link, which does reach it.
 vi.mock("@/lib/resolve-job-link", () => ({
   resolveEmployerLink: vi.fn(async () => h.resolved),
+  verifyPostingLink: vi.fn(async () => h.verified),
+  newBoardCache: () => new Map(),
 }));
 
 import { ingestRoles } from "./ingest-roles";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { addJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
+import { resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { Role } from "@/lib/types";
 
 const ROLE: Role = {
@@ -70,6 +84,7 @@ beforeEach(() => {
   h.addJobResult = { job: undefined, error: undefined };
   h.urlStatus = "live";
   h.resolved = null;
+  h.verified = { kind: "notApplicable" };
   vi.clearAllMocks();
 });
 
@@ -206,5 +221,99 @@ describe("never_live records only the definitive death signal", () => {
 
     expect(insertedRow().status).toBe("New");
     expect(insertedRow().never_live).toBe(false);
+  });
+});
+
+// The defect this path exists for: a stored Ashby link
+// (jobs.ashbyhq.com/baseten/<id>) whose posting id is dead. Ashby's posting
+// page is a client-rendered SPA that answers HTTP 200 and then paints "Job not
+// found", so checkJobUrl says "live"; and the URL classifies as `ats`, so the
+// old `!== "aggregator"` early return meant the employer's own honest board API
+// was never asked about the id. Both gates missed it.
+describe("an ATS deep link is verified against its own vendor's board", () => {
+  const STALE = "https://jobs.ashbyhq.com/baseten/b621b620-85eb-4f73-8d77-e4ebd458b02d";
+  const LIVE = "https://jobs.ashbyhq.com/baseten/5cd2f489-b9ee-428b-b252-94e83d55f107";
+  const ashbyRole = { ...ROLE, role_title: "GTM Engineer", job_url: STALE };
+
+  // Mutation this catches: restoring the `classifyJobLink(url) !== "aggregator"`
+  // early return in upgradeLink. The row is then stored pointing at the dead id.
+  test("a relink stores the board's URL and keeps the original as source_url", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.verified = { kind: "relink", url: LIVE };
+
+    await ingestRoles({ ...OPTS, company: "Baseten", roles: [ashbyRole] });
+
+    expect(insertedRow().job_url).toBe(LIVE);
+    expect(insertedRow().source_url).toBe(STALE);
+  });
+
+  // Mutation this catches: setting `unlisted: true` on this path — the obvious
+  // "the board doesn't have it, so it's gone" reading. It is strong evidence,
+  // but `unlisted` CLOSES the role and a closed role can never come back:
+  // ingestRoles' dedupe reads every row regardless of status. This change points
+  // links at the right place; it does not widen what closes roles.
+  test("a relinked role stays New and is never flagged never_live", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.verified = { kind: "relink", url: LIVE };
+
+    await ingestRoles({ ...OPTS, company: "Baseten", roles: [ashbyRole] });
+
+    expect(insertedRow().status).toBe("New");
+    expect(insertedRow().never_live).toBe(false);
+  });
+
+  // Mutation this catches: acting on any non-`listed` outcome — e.g. relinking
+  // to `url` whatever the kind is. A board we could not read says NOTHING about
+  // the posting, and an empty board never concludes anything anywhere in this
+  // codebase. Both must leave the row exactly as it arrived.
+  test("unreachable, empty, ambiguous, absent and listed all change nothing", async () => {
+    const inert = [
+      { kind: "unreachable" },
+      { kind: "listed" },
+      { kind: "unclear", reason: "empty", url: "https://jobs.ashbyhq.com/baseten" },
+      { kind: "unclear", reason: "ambiguous", url: "https://jobs.ashbyhq.com/baseten" },
+      { kind: "absent", url: "https://jobs.ashbyhq.com/baseten" },
+    ] as const;
+
+    for (const verified of inert) {
+      vi.clearAllMocks();
+      h.addJobResult = { job: { id: "job-1" } };
+      h.verified = verified as typeof h.verified;
+
+      await ingestRoles({ ...OPTS, company: "Baseten", roles: [ashbyRole] });
+
+      expect(insertedRow().job_url).toBe(STALE);
+      expect(insertedRow().source_url ?? null).toBeNull();
+      expect(insertedRow().status).toBe("New");
+      expect(insertedRow().never_live).toBe(false);
+    }
+  });
+
+  // Mutation this catches: routing ATS links through resolveEmployerLink (the
+  // guessed-slug path) as well as, or instead of, the read-slug one. That path
+  // can CLOSE a role on `absent`, which is exactly the blast radius this change
+  // is keeping small.
+  test("the guessed-slug resolver is never consulted for an ATS link", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.verified = { kind: "relink", url: LIVE };
+
+    await ingestRoles({ ...OPTS, company: "Baseten", roles: [ashbyRole] });
+
+    expect(vi.mocked(resolveEmployerLink)).not.toHaveBeenCalled();
+    expect(vi.mocked(verifyPostingLink)).toHaveBeenCalledWith(STALE, "GTM Engineer", expect.any(Map));
+  });
+
+  // Mutation this catches: dropping the aggregator branch while restructuring,
+  // or letting the new ATS branch swallow it.
+  test("an aggregator link still goes to the guessed-slug resolver, not the new path", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({
+      ...OPTS,
+      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+    });
+
+    expect(vi.mocked(resolveEmployerLink)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(verifyPostingLink)).not.toHaveBeenCalled();
   });
 });

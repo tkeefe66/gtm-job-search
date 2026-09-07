@@ -5,7 +5,8 @@ import { resolveTenantId } from "@/lib/tenant";
 import { updateJob, getJobStatuses } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
-import { resolveEmployerLink } from "@/lib/resolve-job-link";
+import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
+import type { BoardCache } from "@/lib/resolve-job-link";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { bucketFor } from "@/lib/job-statuses";
 import type { UnclearReason } from "@/lib/link-report";
@@ -114,10 +115,21 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
   );
 
   const report: LinkRepairReport = { ...empty };
+  // Shared across the whole pass: several roles at one company hit one board,
+  // and re-fetching it per role only risks a rate limit — which answers
+  // `unreachable`, which is inert, which would silently disable the check.
+  const boards = newBoardCache();
+  // Counted but NOT part of LinkRepairReport: `absent` is acted on by nobody,
+  // so surfacing it in the UI would offer a decision this pass will not honour.
+  // It is logged because the next change needs real-world frequency data before
+  // anyone decides whether a read-slug `absent` should become closable, and
+  // right now that information does not exist anywhere.
+  let absent = 0;
   for (let i = 0; i < jobs.length; i += BATCH) {
-    const results = await Promise.all(jobs.slice(i, i + BATCH).map(repairOne));
+    const results = await Promise.all(jobs.slice(i, i + BATCH).map((j) => repairOne(j, boards)));
     for (const r of results) {
       report.checked++;
+      if (r.absent) absent++;
       if (r.relinked) report.relinked++;
       if (r.closed) report.closed++;
       if (r.closedUnlisted) report.closedUnlisted++;
@@ -133,7 +145,8 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
       `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted), ` +
       `unclear ${report.unclear.length} ` +
-      `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved)`
+      `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved), ` +
+      `${absent} absent from the employer's own board (reported nowhere, closed never)`
   );
   return report;
 }
@@ -143,14 +156,63 @@ interface RepairOutcome {
   closed?: boolean;
   closedUnlisted?: boolean;
   unclear?: LinkRepairRow;
+  /**
+   * The employer's OWN board — vendor and slug read out of the stored link, not
+   * guessed — does not carry this posting id and lists nothing resembling the
+   * title. Nothing acts on it; it exists to be counted in the summary log.
+   */
+  absent?: boolean;
 }
 
-async function repairOne(job: Job): Promise<RepairOutcome> {
+async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   const url = job.job_url as string;
   const out: RepairOutcome = {};
   let liveUrl = url;
 
-  if (classifyJobLink(url) === "aggregator") {
+  const kind = classifyJobLink(url);
+
+  // An ATS deep link names its own vendor and slug, so they are READ out of the
+  // URL rather than guessed from the company name, and the board can be asked
+  // about this exact posting id. This branch is why the pass now catches a dead
+  // Ashby link: Ashby's posting page is a client-rendered SPA that answers 200
+  // and then paints "Job not found", so the checkJobUrl below sees it as
+  // healthy, and before this the whole board block sat behind
+  // `=== "aggregator"` — correct that the HOST is the employer, wrong that the
+  // posting id is therefore valid.
+  if (kind === "ats") {
+    const verified = await verifyPostingLink(url, job.role_title, boards);
+    if (verified.kind === "relink") {
+      const failure = describeWriteFailure(
+        // source_url keeps the link being overwritten, exactly as the
+        // aggregator branch does, and for the same non-lossy reason — even
+        // though the slug here was read rather than guessed.
+        (await updateJob(job.id, { job_url: verified.url, source_url: job.source_url ?? url }))
+          .error,
+        `relink ${job.company} / ${job.role_title}`
+      );
+      if (failure === undefined) {
+        out.relinked = true;
+        liveUrl = verified.url;
+      } else {
+        console.error(`repairJobLinks: ${failure}`);
+      }
+    } else if (verified.kind === "unclear") {
+      out.unclear = {
+        id: job.id,
+        company: job.company,
+        role_title: job.role_title,
+        url: verified.url,
+        reason: verified.reason,
+      };
+    } else if (verified.kind === "absent") {
+      out.absent = true;
+    }
+    // `listed` (the link is fine), `unreachable` (a board we could not read
+    // says nothing), `notApplicable` (a bare board page, or an ATS with no
+    // honest board API) and `absent` all do nothing. `absent` is deliberate:
+    // it is strong evidence the posting is gone, but closing a role also marks
+    // it never-live, and this change does not widen what closes roles.
+  } else if (kind === "aggregator") {
     const resolved = await resolveEmployerLink(job.company, job.role_title);
     if (resolved?.precision === "posting") {
       const failure = describeWriteFailure(

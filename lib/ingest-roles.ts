@@ -5,7 +5,8 @@ import { scoreFit } from "@/app/actions/parse-role";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
-import { resolveEmployerLink } from "@/lib/resolve-job-link";
+import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
+import type { BoardCache } from "@/lib/resolve-job-link";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -116,7 +117,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   // bot, so an expired copy of a posting passes as live and the role lands as
   // "New". Asking the employer's own board instead answers both questions at
   // once — where the real posting is, and whether it still exists.
-  const links = await Promise.all(fresh.map((r) => upgradeLink(company, r)));
+  // One cache for this ingest: twenty fresh roles at one company share a single
+  // board fetch instead of stampeding the same endpoint twenty times over.
+  const boards = newBoardCache();
+  const links = await Promise.all(fresh.map((r) => upgradeLink(company, r, boards)));
   const urlStatuses = await Promise.all(links.map((l) => checkJobUrl(l.url)));
   const unlisted = links.filter((l) => l.unlisted).length;
   console.log(
@@ -227,20 +231,52 @@ interface UpgradedLink {
 }
 
 /**
- * Swaps a reseller link for the employer's own posting where one can be found.
+ * Swaps a reseller link for the employer's own posting where one can be found,
+ * and repoints an employer's own DEEP link whose posting id has gone stale.
  *
- * Only aggregator links are looked up — an ATS link or a company domain is
- * already the employer, and probing boards for those would spend requests to
- * confirm what we have. Costs no Claude tokens.
+ * Two different lookups, because they answer two different questions:
  *
- * `unlisted` is set only on `absent` (nothing on the board resembles the
- * title), never on `ambiguous`: closing a live role because two postings had
- * similar names would be a worse bug than the one this fixes.
+ *  - An AGGREGATOR link says nothing about which board the role lives on, so
+ *    the slug has to be GUESSED from the company name. Everything downstream of
+ *    that guess hedges accordingly.
+ *  - An ATS deep link already names its vendor and slug, so they are READ
+ *    rather than guessed (`parseBoardLink`) and the board can be asked about
+ *    this exact posting id. That is what catches Ashby: its posting page is a
+ *    client-rendered SPA that answers HTTP 200 and then paints "Job not found",
+ *    so `checkJobUrl` sees a healthy link and the old `!== "aggregator"` early
+ *    return meant the employer's own honest board API was never consulted.
+ *
+ * A company domain or an ATS with no honest board API still returns early:
+ * there is nothing to ask.
+ *
+ * `unlisted` is set only on the aggregator path's `absent` (nothing on the
+ * guessed board resembles the title), never on `ambiguous`: closing a live role
+ * because two postings had similar names would be a worse bug than the one this
+ * fixes. It is deliberately NOT set on the new ATS path either — a missing
+ * posting id on a correctly-parsed board IS strong evidence, but `unlisted`
+ * closes a role and marks it never-live, and widening what closes roles is not
+ * what this change is for. Costs no Claude tokens.
  */
-async function upgradeLink(company: string, role: Role): Promise<UpgradedLink> {
+async function upgradeLink(
+  company: string,
+  role: Role,
+  boards: BoardCache
+): Promise<UpgradedLink> {
   const url = role.job_url || "";
   const plain: UpgradedLink = { url, sourceUrl: null, unlisted: false };
-  if (classifyJobLink(url) !== "aggregator") return plain;
+  const kind = classifyJobLink(url);
+
+  if (kind === "ats") {
+    const verified = await verifyPostingLink(url, role.role_title, boards);
+    // Only `relink` acts. `listed` is a healthy link; `unreachable`,
+    // `notApplicable`, `unclear` and `absent` are all inert here — see
+    // PostingVerification for why each one is.
+    return verified.kind === "relink"
+      ? { url: verified.url, sourceUrl: url, unlisted: false }
+      : plain;
+  }
+
+  if (kind !== "aggregator") return plain;
 
   const resolved = await resolveEmployerLink(company, role.role_title);
   if (!resolved) return plain;
