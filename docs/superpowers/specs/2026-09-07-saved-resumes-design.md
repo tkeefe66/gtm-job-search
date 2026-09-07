@@ -1,9 +1,14 @@
 # Saved résumés — design
 
 **Date:** 2026-09-07
-**Status:** approved, not yet implemented
-**Supersedes nothing.** Extends `2026-08-24-resume-builder-design.md` and
+**Status:** approved after two-reviewer pass, not yet implemented
+**Extends** `2026-08-24-resume-builder-design.md` and
 `2026-08-25-resume-curation-design.md`, both of which stay accurate.
+
+Revision note: an earlier draft of this file asserted four things about this
+codebase that were false, each verified false against real code during review.
+They are recorded at the bottom under "Corrections", because every one of them
+is a mistake the next person is equally likely to make.
 
 ## Problem
 
@@ -26,314 +31,559 @@ saved copies on demand, and for nothing to be retained beyond 60 days.
 
 ## Decisions
 
-Taken during brainstorming, recorded because each one closes off an
-alternative that will otherwise look reasonable again later:
-
 | Decision | Chosen | Rejected, and why |
 |---|---|---|
 | Save model | Explicit saves, many per role | Auto-saving into the single draft row: no way to compare two takes, and no save moment |
-| Stored form | Frozen rendered HTML | Selection + per-bullet overrides: needs stable bullet ids through `renderBody` plus DOM diffing, and drops edits made outside a bullet (masthead, summary, section labels) |
-| Retention | Cron purge **and** hide-on-read | Either alone: purge-only shows expired rows during a cron outage; read-only purge means "60 days of visibility", not 60 days of storage |
-| Export | `window.print()` + self-contained `.html` | `.docx`: a new dependency whose output cannot carry the rail, tracking and page rules faithfully |
-| Archive location | `/resume` with no `jobId` | A second nav tab: two résumé-shaped entries side by side, and today's dead-end screen survives |
-| Job deletion | Saved résumés survive | `ON DELETE CASCADE` (today's behaviour): deleting a role after applying destroys the record of what was sent |
-| Saved-résumé edits | Open → edit → save as a **new** version | In-place overwrite: the record of what was actually sent could change after the fact |
-| Draft edits | Still lost on reload, but warned | Auto-persist or `localStorage`: blurs the save moment, or adds a third place résumé text lives, invisible to the retention policy |
+| Stored form | Frozen rendered HTML + `design_version` | Selection + per-bullet overrides: needs stable bullet ids through `renderBody` plus DOM diffing, and drops edits made outside a bullet |
+| Freeze depth | Content frozen, presentation versioned | Snapshotting the token CSS per row: ~30KB/row and old résumés never pick up genuine design fixes |
+| Retention | Cron purge + opportunistic purge + hide-on-read | Any one alone — see "Retention" |
+| Export | `window.print()` + `.html` with `doc-page.js` inlined | A JS-free file: there are no `@page` rules in the token CSS to fall back on |
+| Archive location | `/resume` with no `jobId` | A second nav tab: two résumé-shaped entries side by side |
+| Job deletion | Saved résumés survive, `job_id` set null | `ON DELETE CASCADE` (today's behaviour): deleting a role after applying destroys the record of what was sent |
+| Saved-résumé edits | Open → edit → save as a **new** version | In-place overwrite: the record of what was sent could change after the fact |
+| Draft edits | Still lost on reload, but warned | Auto-persist or `localStorage`: blurs the save moment, or adds a third place résumé text lives, invisible to retention |
 
 ## Data model — `db/migrations/016_saved_resumes.sql`
 
-`tailored_resumes` is unchanged and keeps its current meaning: the **working
-draft**, one per job, upserted by Regenerate, holding `{themes, selection}`.
-The new table is the **archive** and holds frozen documents. Two tables rather
-than one because they have different lifetimes, different shapes, and only one
-of them expires.
+`tailored_resumes` is unchanged and keeps its meaning: the **working draft**,
+one per job, upserted by Regenerate, holding `{themes, selection}`. The new
+table is the **archive** and holds frozen documents. Two tables because they
+have different lifetimes, different shapes, and only one expires.
 
 ```sql
 create table if not exists saved_resumes (
-  id           uuid primary key default gen_random_uuid(),
-  tenant_id    uuid not null references users(id) on delete cascade,
-  job_id       uuid,                      -- provenance pointer; NO foreign key
-  role_title   text not null,             -- snapshotted at save
-  company      text not null,             -- snapshotted at save
-  label        text,                      -- optional; UI falls back to the date
-  html         text not null,             -- sanitized frozen render
-  created_at   timestamptz not null default now(),
-  expires_at   timestamptz not null
+  id             uuid primary key default gen_random_uuid(),
+  tenant_id      uuid not null references users(id) on delete cascade,
+  job_id         uuid references jobs(id) on delete set null,
+  role_title     text not null,           -- snapshotted at save
+  company        text not null,           -- snapshotted at save
+  label          text,                    -- null, never ""; UI falls back to the date
+  html           text not null,           -- sanitized frozen render
+  design_version text not null,           -- see "What frozen means"
+  content_hash   text not null,           -- sha256 of html, for the duplicate-save check
+  created_at     timestamptz not null default now(),
+  expires_at     timestamptz not null
 );
+
+create index if not exists saved_resumes_tenant_created_idx
+  on saved_resumes (tenant_id, created_at desc);
+create index if not exists saved_resumes_tenant_expires_idx
+  on saved_resumes (tenant_id, expires_at);
 ```
 
-Plus, mirroring migration 015 exactly: `enable`/`force row level security`, the
-`tenant_isolation` policy comparing `tenant_id` to
-`nullif(current_setting('app.tenant_id', true), '')::uuid`, and an explicit
-`grant select, insert, update, delete on saved_resumes to app_rw` (003's
-default-privileges clause is not relied on alone). Indexes on
-`(tenant_id, created_at desc)` for the archive list and on `(expires_at)` for
-the purge.
+Plus, mirroring migration 015 exactly: `enable`/`force row level security`,
+`drop policy if exists` before `create policy` (the migration runner wraps each
+file in one transaction), the `tenant_isolation` policy comparing `tenant_id`
+to `nullif(current_setting('app.tenant_id', true), '')::uuid`, and an explicit
+`grant select, insert, update, delete on saved_resumes to app_rw`.
+
+Both indexes are `(tenant_id, ...)`-leading because **every** query against
+this table is tenant-scoped, the purge included.
 
 `"saved_resumes"` must be added **by hand** to `TENANT_TABLES` in
 `lib/supabase.ts`: `tenant_id` is declared inline in `CREATE TABLE` rather than
-retrofitted by `ALTER TABLE`, so it is invisible to `lib/supabase.test.ts`'s
-retrofit-pattern regex — the same footnote migration 015 already carries.
+retrofitted by `ALTER TABLE`, so `lib/supabase.test.ts`'s regex
+(`/alter table (\w+)\s+add column if not exists tenant_id/gi`) cannot see it —
+the same footnote 015 already carries. No change to that test is needed.
 
-### Why `job_id` carries no foreign key
+### Why `job_id` keeps its foreign key
 
-Saved résumés must outlive a deleted role, which rules out `ON DELETE CASCADE`.
-The obvious replacement, `ON DELETE SET NULL`, makes Postgres run a referential
-action against a table under `FORCE ROW LEVEL SECURITY` — plausibly fine (RI
-checks are documented as bypassing RLS) but not something to assume in the one
-place where being wrong means a role deletion either fails or silently skips
-rows. Dropping the constraint removes the question. `job_id` is provenance;
-`role_title` and `company` are what make the row readable once the job is gone,
-and the UI offers a link back to the role only when that job still exists.
+An earlier draft dropped the FK, reasoning that `ON DELETE SET NULL` would run
+a referential action against a table under `FORCE ROW LEVEL SECURITY` and that
+this was unsafe to assume. **That reasoning is wrong and this codebase already
+disproves it**: `tailored_resumes` is `force row level security`
+(`015:24-25`) and carries `job_id uuid not null references jobs(id) on delete
+cascade` (`015:15`), and jobs are genuinely deleted by `app/actions/jobs.ts:89`
+— so that exact mechanism has run in production on every job deletion since 015
+shipped. Postgres documents it unconditionally: referential integrity checks
+always bypass row security, precisely so a cascade cannot leave orphans. The
+same table's `tenant_id ... on delete cascade` depends on it too.
+
+Keeping the FK also buys the archive something it otherwise has to pay for:
+`ON DELETE SET NULL` makes "does this job still exist?" a property of the row
+(`job_id IS NULL`), rather than a probe against `jobs` for every card rendered.
 
 ### Why `expires_at` is stored rather than computed
 
 The retention window becomes data on the row instead of arithmetic repeated
-across the purge, the list query and the countdown in the UI. The purge is then
-one indexed `delete ... where expires_at <= now()`, and a row's own expiry is
-inspectable in psql without knowing the constant.
+across the purge, the list query and the countdown in the UI, and a row's own
+expiry is inspectable in psql without knowing the constant.
+
+## What "frozen" means
+
+The row stores markup. Every pixel of its appearance comes from
+`public/resume-design/tokens/*.css` **at view time**, and CLAUDE.md records
+those files having already diverged from the vendored source (`--rail` 96→132,
+`.rsm-role`'s `break-inside` removal) with a standing warning that a re-sync
+silently reverts them. So a saved résumé's *layout* can still change after the
+fact.
+
+The promise this feature makes is therefore explicitly about **content**: the
+words, the bullets chosen, and the edits made are exactly what was saved, and
+cannot change. `design_version` records which design the row was authored
+against — a constant bumped by hand whenever `public/resume-design/tokens/`
+changes — so a row that predates a design change is identifiable rather than
+merely suspect. The column costs one `text` today and cannot be added
+retroactively for rows already written, which is the whole reason it is here
+now rather than later.
 
 ## Retention
 
-`lib/resume-retention.ts` — pure, tested:
+`lib/resume-retention.ts` — pure, tested, and the **single home of both
+predicates**:
 
-- `RETENTION_DAYS = 60`
-- `expiresAtFrom(now: Date): Date`
-- The boundary is pinned explicitly: a row whose `expires_at` is exactly `now()`
-  **is expired** (`<=` in the purge, `>` in every read). Stated here because
-  this repo has been bitten by exactly one boundary drifting between two call
-  sites before — see the `compFloor` `>`-not-`>=` rule in CLAUDE.md, which lives
-  in two places and must not diverge. The same discipline applies: the purge
-  predicate and the read predicate are complements of one another, and a test
-  asserts that a row at the boundary is invisible to reads **and** collected by
-  the purge.
+```ts
+export const RETENTION_DAYS = 60;
+export function expiresAtFrom(now: Date): Date;
+export const EXPIRED_PREDICATE = "expires_at <= now()";  // purge collects
+export const LIVE_PREDICATE    = "expires_at > now()";   // reads show
+```
 
-### The purge must be per-tenant, not one cross-tenant DELETE
+The predicates are exported as strings and interpolated by all three call
+sites, rather than retyped into each SQL statement. This is the difference
+between a test that bites and one that cannot: with the comparisons living in
+SQL literals inside the purge and the two read actions, a vitest test of
+`expiresAtFrom` cannot observe them, and changing the purge's `<=` to `<` would
+leave every proposed test green. With them exported, a test asserts the two are
+exact complements and a mutation to either fails it. CLAUDE.md records the
+`compFloor` `>`-not-`>=` rule as a standing two-places hazard; this is that
+hazard, closed rather than repeated.
 
-This is the design's one non-obvious constraint, and getting it wrong fails
-silently. `app_rw` is neither superuser nor `BYPASSRLS`, and `tenant_isolation`
+A row at exactly `expires_at === now()` is expired: invisible to reads,
+collected by the purge.
+
+### The purge must pass the tenant id explicitly
+
+This is the design's one genuinely dangerous detail. `app_rw` is created
+`nosuperuser` and `nobypassrls` (`003_rls.sql:18,24`), and `tenant_isolation`
 compares `tenant_id` to a per-connection GUC — **a query against a tenant table
-with no tenant set returns zero rows, with no error**. A single
-`delete from saved_resumes where expires_at <= now()` would therefore report
-success and delete nothing, forever, and the only symptom would be rows quietly
-outliving their retention window. `app/api/cron/crawl-next/route.ts` and
-`getBudgetOverview` (`app/actions/admin.ts`) both carry this reasoning already;
-the purge follows the same shape.
+with no tenant set returns zero rows, with no error.**
 
-`lib/saved-resume-purge.ts`:
+The GUC is set by `withTenant` (`lib/supabase.ts:192-229`), reached from exactly
+two places, both of which take the tenant id as an **explicit argument**:
+`QueryBuilder.execute()` via `forTenant`, and `rawQuery(text, values, tenantId)`
+(`lib/supabase.ts:453-455`). **`runAsTenant` does not set it** — it only writes
+an `AsyncLocalStorage` value (`lib/platform-context.ts:60-63`), which matters
+only when the code inside it calls a server action that resolves the tenant via
+`resolveTenantId()`. That is why `crawl-next` needs it and why a module doing
+its own SQL does not.
 
-1. `runAsPlatform(...)` — enumerate tenants.
-2. For each, `runAsTenant(tenantId, ...)` and delete that tenant's expired rows.
-3. One tenant's failure is logged and skipped, never fatal to the others —
-   the same rule `crawl-next` applies to a failed candidate read.
+So the purge follows `getBudgetOverview` (`app/actions/admin.ts:159-166`,
+`:205-207`), which passes the tenant straight to `rawQuery` and uses no
+`runAsTenant` at all:
 
-**Enumeration must not reuse `listCrawlableTenants()`.** That function filters
-`status = 'active'`, which is right for spending money on a crawl and wrong for
-a retention guarantee: a suspended or pending user's saved résumés would never
-be purged. A new `listAllTenantIds()` in `app/actions/admin.ts` selects every row in
-`users` regardless of status, guarded by `if (!isPlatform()) throw` exactly as
-`listCrawlableTenants` is — it enumerates across tenants, so it must be
-unreachable from a session-bearing caller. (A *deleted* user needs no
-handling — `tenant_id references users(id) on delete cascade` takes their rows
-with them.)
+```
+rawQuery("delete from saved_resumes where tenant_id = $1 and " + EXPIRED_PREDICATE + " returning id",
+         [tenantId], tenantId)
+```
+
+The third argument is what puts a policy in front of the statement. Omitting it
+produces exactly the silent zero-row delete this section exists to prevent.
+`lib/supabase.ts:441-446` states the rule directly: raw SQL is invisible to the
+builder's registry, so that parameter is the only thing protecting it —
+**adding `"saved_resumes"` to `TENANT_TABLES` protects none of these queries.**
+
+### The query builder cannot express most of this
+
+`QueryBuilder` supports only `.eq` and `.neq` (`lib/supabase.ts:275-282`).
+There is no `lt`/`gt`/`lte`/`in`. So the purge (`<=`), both reads (`>`), and
+bulk delete (`IN`) all go through `rawQuery(sql, values, tenantId)`. Only
+`saveResume` and single-id `deleteSavedResume` can use `forTenant`.
+
+### Enumeration
+
+`listCrawlableTenants()` must **not** be reused: it filters `status = 'active'`
+(`app/actions/admin.ts:136`), which is right for spending money on a crawl and
+wrong for a retention guarantee — a suspended or pending user's saved résumés
+would never be purged. A new `listAllTenantIds()` in `app/actions/admin.ts`
+selects every row in `users` (not an RLS-protected table, so no tenant scope is
+needed), guarded by `if (!isPlatform()) throw new Error("Not authenticated")` —
+that **literal string**, because `auth-required.test.ts:85` asserts
+`rejects.toThrow(/Not authenticated/)` and the sibling idiom in this same
+feature (`requireResumeAdmin`) throws `"Not authorized"`, which would not match.
+
+### `lib/saved-resume-purge.ts`
+
+Dependency-injected so both of its interesting behaviours are testable as pure
+logic, which `npm test` is scoped to:
+
+```ts
+runPurge({ listTenants, purgeTenant, now }): Promise<PurgeReport>
+```
+
+One tenant's failure is logged and skipped, never fatal to the others — the
+rule `crawl-next` applies to a failed candidate read. The report distinguishes
+them: `{ deleted, tenants, failed, oldestSurviving }`.
+
+### Three mechanisms, because the promise is about storage
+
+- **Cron purge** — the primary.
+- **Opportunistic purge** — `listSavedResumes` deletes the calling tenant's
+  expired rows before listing. Already tenant-scoped, one indexed statement.
+  This exists because the promise is "nothing stored past 60 days" and CLAUDE.md
+  records this repo's cron route 404-ing nightly for days with nothing
+  surfacing it; an active user's own retention must not depend on cron uptime.
+- **Hide-on-read** — both reads filter `LIVE_PREDICATE`, so a purge outage
+  cannot surface an expired résumé.
+
+The cron response carries `oldestSurviving` (the minimum `expires_at` still in
+the table) so a stalled purge is detectable from its own output, and returns
+non-200 when `failed > 0` — a run that reports `{deleted: n}` while half the
+tenants errored is the silent-success shape `.claude/skills/swallowed-string-errors`
+exists to prevent.
+
+### What 60 days does and does not cover
+
+Stated plainly because a user told "nothing is kept past 60 days" would
+otherwise infer more than is true:
+
+- **Covered:** every `saved_resumes` row.
+- **Not covered:** `tailored_resumes`, the working draft, which does not expire
+  — and its `{themes, selection}` plus the checked-in `content/resume.json`
+  reconstitutes the document. It is résumé content by reference. Deleting the
+  last saved résumé for a job deliberately does **not** delete that job's draft
+  row; the draft is a tailoring cache, not an archive entry.
+- **Not covered:** Railway Postgres backups, which retain deleted rows past 60
+  days on their own schedule.
+- **Not covered:** anything the user downloaded.
 
 ### `app/api/cron/purge-resumes/route.ts`
 
-Third cron route. `cronAuthorized(req)` from `lib/cron-auth.ts`, unchanged and
-fail-closed. `?dry=1` counts without deleting, following the batch route's
-doctrine that any presence of `dry` means dry-run unless explicitly disabled, so
-an unrecognised spelling fails toward not writing. Returns
-`{ deleted: n, tenants: m }`. Returns JSON, never a redirect — so the
-`req.url`/`localhost:8080` trap in CLAUDE.md does not apply.
+Third cron route. `export const dynamic = "force-dynamic"`, matching both
+existing routes. `cronAuthorized(req)` from `lib/cron-auth.ts`, unchanged and
+fail-closed, and `runAsPlatform` is entered **after** the secret check, never
+before — the platform identity is granted by `CRON_SECRET`, not by reaching the
+file. `?dry=1` counts without deleting, following the doctrine that any
+presence of `dry` means dry-run unless explicitly disabled, so an unrecognised
+spelling fails toward not writing.
 
-One line is added to the `crawler` service's start-command loop on Railway to
-call it once per run. **CLAUDE.md's list of deliberately-public surfaces must
-be updated to name three cron routes rather than two** — that list is the
-standing statement of what is intentionally unauthenticated, and a route added
-without amending it is indistinguishable from a route someone forgot to guard.
+One line is added to the `crawler` service's start-command loop to call it.
+**CLAUDE.md's list of deliberately-public surfaces must be updated to name
+three cron routes rather than two** — no test enumerates public routes, so only
+review catches an unamended list.
 
-### Hide-on-read
+## Capture and sanitization
 
-`listSavedResumes` and `getSavedResume` both filter `expires_at > now()`. Two
-independent mechanisms, neither trusted alone: cron deletes, reads hide. A cron
-outage cannot surface an expired résumé; a read-path bug cannot extend
-retention.
+### What is captured
 
-## Sanitization — `lib/resume-sanitize.ts`
+`docPageEl.innerHTML` — **not** the `.rsm` div's `innerHTML`. `document.css:5`
+scopes the entire design to `.rsm` (`.rsm{...}`, `.rsm a{...}`, `.rsm-header{...}`),
+and that wrapper is emitted by `renderBody` (`render.js:127`). Capturing one
+level too deep loses the root every selector hangs off, and the saved résumé
+renders as unstyled body text on every later view — a defect invisible until
+after the row is written. `saveResume` rejects a sanitized document with no
+`.rsm` root rather than storing one.
 
-Saving `contentEditable` HTML and re-rendering it through
-`dangerouslySetInnerHTML` is a stored-XSS surface. The realistic path is a paste
-from a job posting carrying an `<img onerror=...>`; `/resume` is admin-only and
-single-tenant, so the blast radius is small, but the row is stored and
-re-rendered on every view, so the control belongs server-side rather than in
-the client that produced the markup.
+**Page guides must be stripped before capture.**
+`public/resume-design/rsm-page-guides.js:138` does `rsm.appendChild(g)`, so the
+on-screen "Page 2" overlay divs live *inside* the captured subtree, and their
+styles are injected into `document.head` (`:59`) rather than travelling with
+them. Its `@media print` hide (`:57`) is why this has never shown up in
+printing. Left in, they would freeze stale break markers into every row and
+render as literal stray "Page 2" text in the downloaded file. The capture
+removes every `.rsm-page-guide` node, the sanitizer drops that class as
+belt-and-braces, and a test asserts a captured document contains none.
 
-**`sanitize-html` is added as a dependency** (server-side only) and wrapped in
-one module so the allowlist has a single definition and a test. Hand-rolling an
-HTML parser is the standard way to ship a sanitizer bypass; a sandboxed iframe
-would be stronger still but complicates the viewer, printing, and
-`rsm-page-guides.js` for a threat this size.
+### The allowlist
 
-The allowlist matches what `renderBody` actually emits — `div`, `span`, `p`,
-`b`, `em`, `section`, `header`, `h1`, `h2`, `h3`, `ul`, `li`, `dl`, `dt`, `dd`,
-`a` — plus `class` on all of them (the `.rsm-*` contract is what the design CSS
-selects on) and `href` on `a`, restricted to `http`, `https` and `mailto`.
-Everything else is dropped, including every `on*` handler, `style`, `script`,
-`iframe` and `img`.
+**Derived from three sources, not one.** An earlier draft took it from
+`renderBody`'s literal tag output, which is wrong twice over:
+
+1. **The career record contains markup.** `render.js` deliberately does *not*
+   escape three fields — bullet text (`:155`), role title (`:149`), and the
+   `<b>` interpolations at `:161`/`:173` — and `content/resume.json` holds **22
+   `<strong>` tags** inside bullet text. An allowlist without `strong` silently
+   strips every bold run from every archived résumé.
+2. **The HTML being saved is `contentEditable` output, not renderer output.**
+   Enter inserts `<br>` or a bare `<div>`; Cmd-B inserts `<b>` or `<span style>`;
+   paste brings arbitrary markup. Stripping `<br>` deletes a user's line breaks
+   at save with no message — a likelier bug than the `<img onerror>` paste the
+   sanitizer is built for.
+
+Allowed tags: `div span p b strong i em u br section header h1 h2 h3 ul ol li
+dl dt dd a`. Attributes: `class` on all (restricted to `rsm-*` via
+`allowedClasses`, minus `rsm-page-guide*`), `href` on `a` limited to `http`,
+`https`, `mailto`. Everything else dropped, including every `on*` handler,
+`script`, `iframe`, `img`.
+
+**One exception:** `render.js:169` emits `style="margin-bottom:0"` on the last
+`<section>` (`rows(..., last)` at `:179`, and `content/resume.json:755` has a
+non-empty `education` array, so this is on every render today). Stripped, the
+last section regains its `--gap-section` bottom margin, which at a page
+boundary is the difference between one page and two. `allowedStyles` permits
+`margin-bottom` on `section` only.
+
+Do **not** override `sanitize-html`'s default `nonTextTags`
+(`['script','style','textarea','option']`) — that default is what drops
+`<script>`'s *contents* rather than only its tag, and a "script stripped" test
+would pass against `disallowedTagsMode: 'escape'` while the payload survived as
+text.
+
+**`@types/sanitize-html` goes in `devDependencies` in the same change.**
+`sanitize-html` v2 ships no declarations; `tsconfig.json` sets `strict: true`
+and `skipLibCheck` does not help, because the *import* itself raises TS7016 and
+`npm run build` typechecks.
 
 `saveResume` rejects HTML over **512 KB** with a stated reason rather than
-truncating.
+truncating. `2026-08-25-resume-curation-design.md:118-128` established that
+Server Actions here cap request bodies at 1 MB by default; 512 KB of HTML plus
+React's action encoding sits under that, and the spec's own reason for the cap
+is that exceeding the framework limit surfaces as an opaque error rather than a
+sentence. The client checks the size before calling and shows the reason
+itself, so the framework limit is never the thing the user meets.
 
-Note for implementation: `tsconfig.json` declares no `target`, so
-`npm run build` typechecks at ES5 — no `/u` flag and no `\p{...}` escapes
-anywhere in this module, and `npx tsc --noEmit --target es2017` will not
-reproduce the failure.
+### The build trap
+
+`tsconfig.json` declares no `target`, so `npm run build` typechecks at **ES5**.
+In this module and its tests: no `/u` flag, no `\p{...}` escapes, and no
+`for...of` or spread over a `Set`/`Map` (TS2802 without `downlevelIteration`) —
+arrays only. `npx tsc --noEmit --target es2017` does not reproduce any of these.
 
 ## Server actions — `app/actions/saved-resumes.ts`
 
-A new file rather than growth in `app/actions/resume.ts`, which is already 214
-lines and focused on tailoring.
+A new file rather than growth in `app/actions/resume.ts` (already 214 lines and
+focused on tailoring).
 
-- `saveResume(jobId, html, label?)` → `{ id?: string; error?: string }`
-- `listSavedResumes()` → `{ resumes: SavedResumeSummary[]; error?: string }`
-- `getSavedResume(id)` → `{ resume: SavedResume | null; error?: string }`
-- `deleteSavedResume(id)` → `{ error?: string }`
-- `deleteSavedResumes(ids)` → `{ deleted: number; error?: string }`
+```ts
+saveResume({ jobId, html, label, roleTitle, company })  // → { id?, error? }
+listSavedResumes()                                      // → { resumes: SavedResumeSummary[], error? }
+getSavedResume(id)                                      // → { resume: SavedResume | null, error? }
+deleteSavedResume(id)                                   // → { error? }
+deleteSavedResumes(ids)                                 // → { deleted: number, error? }
+```
+
+`saveResume` takes `roleTitle`/`company` from the caller rather than reading the
+job row, because it must still succeed when the job is already gone and both
+columns are `not null`. It reads them from the job when `jobId` still resolves,
+and falls back to the caller's values otherwise.
+
+```ts
+interface SavedResumeSummary {
+  id: string; jobId: string | null;   // null ⇒ the role was deleted
+  roleTitle: string; company: string;
+  label: string | null; createdAt: string; expiresAt: string;
+}
+```
+
+`html` is deliberately **not** on the summary — at up to 512 KB per row it must
+be fetched on demand by `getSavedResume`, or the archive list ships every
+document in the tenant.
 
 `requireResumeAdmin` moves from `app/actions/resume.ts` to
 `lib/require-resume-admin.ts` and both files import it. One shared check, not a
-hand-copy — the failure mode `app/actions/auth-required.test.ts`'s own doc
-comment names ("a hand-written check is one someone forgets when adding the
-37th"). `resume.ts`'s existing behaviour is otherwise untouched.
+hand-copy. The move is also *necessary* for a reason worth recording: in a
+`"use server"` file every export becomes a POSTable RPC endpoint addressed by an
+id in the client bundle, so exporting an auth helper from `resume.ts` would
+publish it.
 
-Every action follows the `{ error?: string }` contract with **presence**
-checks, not truthiness: failures go through `describeWriteFailure(...)` and
-callers branch on `!== undefined`, because an unreachable database produces an
-`AggregateError` whose message is `""` and `if (res.error)` reads that as
-success. The project skill `.claude/skills/swallowed-string-errors` governs.
+**The auth guard is the first statement of every action and is never inside a
+`try`.** Only database and model failures are caught. This is load-bearing:
+`auth-required.test.ts` asserts each export *throws* `/Not authenticated/`, and
+the natural way to honour the `{ error?: string }` contract — a top-level
+`try/catch` — would convert that throw into a returned `{ error }` and fail the
+test. Every existing action gets this right (`app/actions/resume.ts:126`, `:174`,
+`:209`).
 
-`saveResume` reads `role_title` and `company` from the job row at save time and
-writes them onto the saved row. If the job is already gone it still saves, using
-whatever the draft page was showing.
+Failures otherwise route through `describeWriteFailure` and callers branch on
+`!== undefined`, never truthiness — an unreachable database produces an
+`AggregateError` whose message is `""`, which `if (res.error)` reads as success.
+`.claude/skills/swallowed-string-errors` governs.
+
+### Error states
+
+Enumerated because "returns `{error?}`" specifies a shape, not behaviour:
+
+- `deleteSavedResume` on an already-purged row → success, `{ }`. Deleting
+  something already gone is the outcome the user wanted.
+- `getSavedResume` on an expired-but-unpurged id → `{ resume: null }`; the
+  `?savedId=` screen renders a not-found state naming expiry as the likely
+  cause.
+- **Save as new version** from a row that expired while the tab sat open →
+  succeeds, and starts a fresh 60 days. The user is saving a document they are
+  looking at.
+- `saveResume` with a sanitized document lacking a `.rsm` root, or over 512 KB →
+  refused with the reason.
+- **Duplicate save**: `content_hash` is compared against that job's newest saved
+  row and the client confirms ("identical to the version you saved at 14:02 —
+  save anyway?") rather than silently creating cards that differ only by
+  timestamp. Editing a label after the fact is out of scope; the confirm
+  prevents the case that motivated it.
 
 ## UI
 
-All three screens are `/resume`, discriminated by search param. The existing
-Résumé nav tab needs no change.
+Three modes of `/resume`, discriminated by search param; **`savedId` wins over
+`jobId`** when both are present. The existing Résumé nav tab needs no change,
+and `RolesTable.tsx`'s "Tailor resume →" link is unchanged.
 
 ### `/resume` — the archive
 
-Every non-expired saved résumé for the tenant, newest first, grouped by role.
-Each card: role title @ company, save date, optional label, and
-`expires in N days` (emphasised under 7). Per card: **Open**, **Print**,
-**Download**, **Delete**. Multi-select with a **Delete selected** action once
-more than one is checked — the same shape `link-health.ts`'s report uses, and
-for the same reason: a bulk control that lives far from the rows it acts on
-reads as a button that does nothing.
+Every non-expired saved résumé, with a count. Grouped by role: the group key is
+`job_id`, falling back to `role_title|company` once the job is gone. Groups are
+ordered by their newest save; within a group, newest first.
 
-Delete is a hard delete behind a confirm, with no undo tier. A recoverable
-trash and a 60-day retention ceiling contradict each other.
+Each card: role title @ company, save date, optional label, and
+`expires in N days` (emphasised under 7). Per card: **Open** and **Delete**,
+plus multi-select with **Delete selected** once more than one is checked — the
+shape `link-health.ts`'s report uses, and for the same reason: a bulk control
+far from the rows it acts on reads as a button that does nothing. The confirm
+names the count and says the deletion cannot be undone.
+
+**Print and Download are deliberately not on the card.** Both need the row's
+HTML mounted in a `<doc-page>` to have any print geometry at all, and printing
+card 3 would require hiding cards 1, 2, 4…N — CLAUDE.md's standing warning that
+a new `window.print()` surface needs its own `print:hidden` scoping, with a
+harder version of the problem. Both route through **Open**.
 
 Empty state keeps the current copy pointing at Roles.
 
-### `/resume?jobId=...` — the draft
+### `/resume?jobId=…` — the draft
 
-As today, plus:
+As today, plus a **Save** button (enabled whether or not anything was edited —
+saving the algorithmic render as-is is legitimate) with an optional inline label
+field; blank stores `null`, not `""`, so "unlabelled" is one state. After a save:
+an inline confirmation naming what was saved, and a link to it.
 
-- a **Save** button (enabled whether or not anything was edited — saving the
-  algorithmic render as-is is legitimate), with an optional inline label field
-  beside it; left blank, the card falls back to the save date, and `label` is
-  stored as `null` rather than `""` so "unlabelled" is one state and not two,
-- an unsaved-edits marker once the document receives input,
-- a `beforeunload` guard, so leaving or Regenerating cannot silently discard
-  work,
-- a list of that role's existing saved versions, linking to `?savedId=`.
+An unsaved-edits marker appears once the document receives input. **Regenerate
+gets its own confirm when that flag is set** — Regenerate is a React state
+change that re-sets `dangerouslySetInnerHTML` (`ResumeDocument.tsx:59-63`), not
+a navigation, so `beforeunload` never fires for it. `beforeunload` covers tab
+close and external navigation only; `window.print()` does not fire it either.
 
-Edits remain live-DOM only. Save is what makes them durable, and that is now
-stated in the UI rather than only in a comment.
+Below: that role's existing saved versions, linking to `?savedId=`.
 
-### `/resume?savedId=...` — one saved résumé
+Edits remain live-DOM only. Save is what makes them durable, said in the UI
+rather than only in a comment.
 
-Frozen HTML, editable in place, **Save as new version** (never overwrites the
-row that was opened), Print, Download, Delete. Saved résumés are immutable;
-this is the only way to iterate on one.
+### `/resume?savedId=…` — one saved résumé
+
+Frozen HTML mounted in a `<doc-page>`, editable in place, **Save as new
+version** (never overwrites the row that was opened), Print, Download, Delete.
+Saved résumés are immutable; this is the only way to iterate on one.
 
 ## Download
 
-Client-side `Blob`, assembled from the frozen markup plus the design CSS
-inlined in `styles.css`'s own `@import` order: `fonts`, `colors`, `typography`,
-`spacing`, `elevation`, `document`. No JavaScript in the output and no
-`<doc-page>` — a downloaded file is a plain document, not the paginating custom
-element — so `@page` rules carry the print geometry instead.
+A client-side `Blob` containing the frozen markup, the six token CSS files
+inlined in `styles.css`'s own `@import` order, **and `doc-page.js` inlined**.
 
-**"Self-contained" excludes web fonts.** `tokens/fonts.css` `@import`s Newsreader
-and JetBrains Mono from Google Fonts; a downloaded file opened offline falls
-back to the declared Georgia/Times and system-mono stacks. Stated here so it is
-a known property rather than a bug report later.
+The component is not optional. Its own source says "never write your own
+`@page` rule or hard-code paper dimensions in the content" (`doc-page.js:30`),
+and there are **no `@page` rules anywhere in the token CSS** — all print
+geometry lives in the component, which at print injects `@page { margin: 0 }`
+to deny Chrome its header/footer margin box and moves the visual margin onto
+the sheet's own padding (`:118-120`), plus WebKit/Chrome divergences
+(`:339-343`). `spacing.css:10` also records that `--rail: 132px` was sized
+against doc-page.js's global `text-wrap:balance` on headings, so a file without
+it wraps section labels differently — the exact defect that forced 96→132.
+"No JavaScript in the download" was a preference, and it costs fidelity.
+
+A test parses `styles.css`'s `@import` lines and asserts the inlined array
+equals them, so the CSS list cannot drift from the stylesheet — the same
+two-places discipline applied to the retention predicates.
+
+**"Self-contained" excludes web fonts.** `tokens/fonts.css` `@import`s
+Newsreader and JetBrains Mono from Google Fonts; opened offline the file falls
+back to the declared Georgia/Times and system-mono stacks.
 
 Select-all-copy from the opened file into Google Docs preserves formatting,
 which is the export path the base design doc already assumes.
 
 ## Auth invariants
 
-The three standing invariants in CLAUDE.md apply, and this change touches all
-three:
-
-- Every new `page.tsx` calls `requireActorPage()` — `/resume` already does, and
-  gains no new page files, since all three screens are search-param variants of
-  the existing route.
+- Every `page.tsx` calls `requireActorPage()` — `/resume` already does and
+  gains no new page files; all three screens are search-param variants.
 - Every exported server action refuses a session-less call.
-  `app/actions/auth-required.test.ts` imports every file in `app/actions/` and
-  calls every export, so `saved-resumes.ts` is covered the moment it exists —
-  no test edit needed, and that is the point of the test's shape.
+  `auth-required.test.ts` globs `app/actions/*.ts` with no per-file allowlist
+  (`CRON_CALLED` is a two-name set), so `saved-resumes.ts` is covered on
+  creation — **subject to the two conditions above**: the guard is the first
+  statement and uncaught, and `listAllTenantIds` throws the literal
+  `"Not authenticated"`.
 - The new cron route joins the deliberately-public list and must be named there.
 
-`saveResume` and friends are admin-gated on top of that, matching `/resume`'s
-existing `requireResumeAdmin`. This whole feature stays admin-only for the same
-reason the tailoring does: `content/resume.json` is one checked-in career
-record, not a per-tenant one.
+**The session check is not the admin check.** `2026-08-24-resume-builder-design.md:543-549`
+states that the blanket test "passes regardless of whether the `isAdmin` gate is
+even present," which is why it demanded a dedicated non-admin refusal test.
+This change moves `requireResumeAdmin` to a new file — the single edit most
+likely to break that gate — so **the existing non-admin refusal test is extended
+to every export of `saved-resumes.ts`.**
+
+This feature stays admin-only, for the same reason tailoring is:
+`content/resume.json` is one checked-in career record, not a per-tenant one.
 
 ## Testing
 
-`npm run build && npm test` is the gate. New pure tests:
+`npm run build && npm test` is the gate. Per the global `mutation-first-tests`
+skill, each of these asserts a boundary, a filter or a default, so each must be
+shown failing against a deliberately broken implementation before it counts.
 
-- `lib/resume-retention.test.ts` — the 60-day boundary, asserted from both
-  sides: a row at exactly `expires_at === now()` is invisible to reads and is
-  collected by the purge. Written so it fails if either predicate is changed
-  alone.
-- `lib/resume-sanitize.test.ts` — `on*` handlers stripped, `<script>` stripped,
-  `javascript:` href rejected, `.rsm-*` classes and the emitted tag set
-  preserved, over-size input rejected with a message.
-- `lib/saved-resume-purge.test.ts` — enumeration covers non-active tenants, and
-  one tenant's failure does not abort the rest.
+- `lib/resume-retention.test.ts` — `EXPIRED_PREDICATE` and `LIVE_PREDICATE` are
+  exact complements; the 60-day boundary from both sides. Fails if either
+  comparison is mutated alone.
+- `lib/resume-sanitize.test.ts` — **fixture round-trip**: the full
+  `renderBody(career)` output sanitizes byte-identically, so a tag added
+  upstream in the vendored renderer or in `content/resume.json` fails the build
+  instead of silently truncating documents. Plus: `<strong>` survives; `<br>`
+  survives; a realistic *browser-produced* fragment survives; `on*` stripped;
+  `<script>` stripped including contents; `javascript:` href rejected; the
+  `.rsm` root required; `rsm-page-guide` nodes dropped; over-size rejected.
+- `lib/saved-resume-purge.test.ts` — via `runPurge`'s injected dependencies:
+  enumeration covers non-active tenants, and one tenant's failure does not
+  abort the rest.
+- Download CSS list equals `styles.css`'s `@import` list.
+- The non-admin refusal test, extended to the new file.
 
-Per the global `mutation-first-tests` skill: each of these asserts a boundary, a
-filter or a default, so each must be shown failing against a deliberately broken
-implementation before it counts as coverage. The retention boundary and the
-purge's tenant enumeration are the two most likely to pass vacuously.
-
-Not covered by tests, verified by hand: the print output, the downloaded file
-opened in a browser and pasted into Google Docs, and the cron route via `?dry=1`.
+Verified by hand, not by tests: print output, the downloaded file opened and
+pasted into Google Docs, and the cron route via `?dry=1`.
 
 ## Deployment
 
-1. `db/migrations/016_saved_resumes.sql` applied manually to production —
-   **not** through `db/apply-schema.mjs`, which would re-create the
-   `insights_cache` table that `006_drop_insights.sql` dropped.
+1. Apply the migration with the repo's **forward-only ledger runner**, not by
+   hand and not via `db/apply-schema.mjs` (which would re-create the
+   `insights_cache` table `006_drop_insights.sql` dropped):
+
+   ```bash
+   railway run --service Postgres sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" node db/migrate.mjs --dry'
+   railway run --service Postgres sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" node db/migrate.mjs'
+   ```
+
+   Applying 016 by hand desynchronises the `schema_migrations` ledger and makes
+   the next run attempt it again.
 2. Push to `main`; the `web` service deploys from GitHub automatically.
 3. Add the purge call to the `crawler` service's start-command loop.
 4. Verify against the deployed commit, not the local one:
    `railway deployment list --service web --limit 1 --json` carries
    `meta.commitHash`.
 
-No new environment variables: the purge route reuses `CRON_SECRET`, which both
-services already have.
+No new environment variables: the purge route reuses `CRON_SECRET`.
+
+**One check worth running once**, because a whole section's reasoning rests on
+it: `select current_user, rolsuper, rolbypassrls from pg_roles where rolname =
+current_user`. Migration 003 creates `app_rw` `nologin` with its password set
+out of band; if production's `DATABASE_URL` actually connects as Railway's
+default superuser, RLS is bypassed and the per-tenant purge is merely correct
+rather than necessary.
+
+## Corrections to the first draft
+
+Recorded because each was verified false against real code, and each is a
+mistake the next person is equally likely to make:
+
+1. **"A cross-tenant DELETE, then `runAsTenant` to scope it."** `runAsTenant`
+   sets an AsyncLocalStorage value, not the Postgres GUC. The remedy
+   reintroduced the silent zero-row delete its own section warned about. The
+   tenant id goes to `rawQuery` as its third argument.
+2. **"No FK, because a referential action under FORCE RLS is unsafe to
+   assume."** `tailored_resumes` has done exactly that in production since
+   migration 015.
+3. **"The allowlist matches what `renderBody` emits."** It emits unescaped
+   career-record markup (22 `<strong>` tags), and the saved HTML is
+   `contentEditable` output carrying `<br>` besides.
+4. **"Applied manually to production."** `db/migrate.mjs` is a ledger runner
+   that applied 001–015.
 
 ## Out of scope
 
-- Making the career record per-tenant. This feature stays admin-only until that
-  happens, and nothing here assumes otherwise.
+- Making the career record per-tenant. This stays admin-only until that happens.
 - `.docx` export.
+- Renaming a saved résumé after the fact.
 - Sharing a saved résumé by link.
-- Any change to how bullets are selected — `selectBullets` and the theme
-  derivation are untouched.
+- Any change to how bullets are selected.
