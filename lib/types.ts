@@ -237,3 +237,35 @@ export type RoleSearchFamily = "title" | "stack";
 export interface RoleMatch extends Role {
   company: string;
 }
+
+export interface SavedResumeSummary {
+  id: string;
+  /** null means the tracked role was deleted; the row deliberately survives it. */
+  jobId: string | null;
+  roleTitle: string;
+  company: string;
+  label: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/**
+ * `html` is deliberately absent from the summary above: at up to 512 KB per row
+ * it would make the archive list ship every document in the tenant. It is
+ * fetched on demand by getSavedResume.
+ */
+export interface SavedResume extends SavedResumeSummary {
+  html: string;
+  designVersion: string;
+}
+
+export interface SaveResumeInput {
+  jobId: string;
+  html: string;
+  /** Snapshotted onto the row so the archive survives the job being deleted. */
+  roleTitle: string;
+  company: string;
+  label?: string | null;
+  /** Set by the client after the user confirms an identical re-save. */
+  allowDuplicate?: boolean;
+}
