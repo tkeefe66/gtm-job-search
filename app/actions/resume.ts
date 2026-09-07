@@ -1,7 +1,7 @@
 // app/actions/resume.ts
 "use server";
 
-import { requireActor } from "@/lib/require-actor";
+import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { withBudget } from "@/lib/metered";
 import { complete, parseJson } from "@/lib/model-call";
 import { supabase } from "@/lib/supabase";
@@ -15,19 +15,6 @@ import {
 } from "@/lib/resume-render/render";
 import career from "@/lib/resume-render/content/resume.json";
 import themeVocabulary from "@/lib/resume-render/content/themes.json";
-
-/**
- * Admin-only, checked SERVER-SIDE on every action — one shared function
- * rather than a hand-copy in each export, the exact failure mode
- * app/actions/auth-required.test.ts's own doc comment warns about ("a
- * hand-written check is one someone forgets when adding the 37th").
- * Mirrors app/actions/admin.ts's requireAdmin() exactly.
- */
-async function requireResumeAdmin() {
-  const actor = await requireActor();
-  if (!actor.isAdmin) throw new Error("Not authorized");
-  return actor;
-}
 
 interface JobRow {
   role_title: string;
