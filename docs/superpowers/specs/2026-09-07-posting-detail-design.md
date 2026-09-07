@@ -258,16 +258,50 @@ Per `mutation-first-tests`, each test must be shown to fail against the unfixed 
   assert a call-count test fails.
 - Batching: a pass over more rows than the limit returns a `remaining` count and
   reserves once per batch, not once per pass.
+- The rescore offer: shows while any `posting.enrichedAt` is newer than
+  `enrich_rescored_at`; disappears once the stamp advances past every enriched row;
+  never shows when nothing is scored. Mutate the comparison to `>=` and confirm a test
+  bites â the `compFloor` boundary hazard in the same shape.
 
 `npm run build && npm test` is the gate; `npm run build` is what typechecks at ES5.
 
-## Open question for the user
+## Part 4 — The rescore offer
 
-Once enrichment lands, ~60 rows will hold posting detail their stored `fit_score` was
-never computed from — the score is strictly less informed than a rescore would now be.
-Should the enrich report offer a rescore, the way `/settings` offers one after a
-criteria change (`compRescoreOffer`, `lib/rescore-progress.ts`)? It is the obvious next
-question and this spec deliberately does not decide it.
+Decided: enrichment offers a rescore. A row that has just gained real `key_skills` and
+`company_description` carries a `fit_score` computed from strictly less than a rescore
+would now use, so leaving it is leaving a knowingly stale score on screen.
+
+**The gate is server state, not a session flag** — the rule `compRescoreOffer`'s
+comment (`lib/rescore-progress.ts:101-107`) establishes, for the reason given there: a
+client component has no memory across page loads, and an offer that only exists in the
+session is missing for the user who closes the tab mid-pass. Concretely:
+
+- Enrich stamps `enrichedAt` inside the `posting` jsonb on every row it writes.
+- A new `app_settings` key `enrich_rescored_at` records when a rescore last ran against
+  enriched rows. Standalone, like `ONBOARDED_AT_KEY` — an app-written value nobody
+  edits, so it must NOT join `SETTING_KEYS`, whose shape guard is for the list/text/
+  number values that are `Criteria` fields.
+- The offer shows while any row's `posting.enrichedAt` is newer than that stamp.
+
+The decision is a pure function alongside the two that already exist, returning the
+same branded `RescoreReason`, so the wording cannot be hardcoded at the call site — the
+regression `fitBrainRescoreOffer`'s comment records (`lib/rescore-progress.ts:139-145`)
+was exactly that. It renders on the enrich report and on `/settings` beside the others.
+
+**The pass itself is `runRescorePass`, unscoped** (`lib/rescore-progress.ts:417`), never
+a hand-rolled loop. Scoping it to just the enriched rows was considered and rejected as
+premature: after a backfill, "enriched" is very nearly "every row", and scoping would
+mean a second SQL path parallel to `SCORED_JOBS_SQL` whose batching and termination
+rules would have to be re-derived — `passStartedAt` is what makes that loop terminate
+rather than bill forever, and duplicating it is the drift hazard this codebase keeps
+recording.
+
+**One wrinkle to state rather than discover.** `SCORED_JOBS_SQL` orders
+`updated_at asc`, and `updateJob` stamps `updated_at` unconditionally, so rows enriched
+most recently sort to the **back** of the rescore queue — the rows that most need a new
+score are reached last. Correct for a pass that runs to completion, mildly wrong for a
+user who stops early. Acceptable at this size; if it ever matters the fix is an explicit
+priority column, not a reordering hack.
 
 ## Risks
 
