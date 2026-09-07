@@ -75,6 +75,8 @@ export default async function ResumePage({
           career={career as CareerRecord}
           jobId={jobId}
           initialSelection={existing.selection}
+          roleTitle={context && context.error === undefined ? context.roleTitle : null}
+          company={context && context.error === undefined ? context.company : null}
         />
       </div>
     </div>

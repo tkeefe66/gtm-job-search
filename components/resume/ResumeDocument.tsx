@@ -22,6 +22,10 @@ export interface ResumeDocumentProps {
   career: CareerRecord;
   /** Omit to render every bullet in every role, unfiltered. */
   selection?: ResumeSelection;
+  /** Set by TailorPanel so it can capture the live document on Save. */
+  docPageRef?: React.RefObject<HTMLElement>;
+  /** Fires on the first and every subsequent edit, so Save can be armed. */
+  onEdit?: () => void;
 }
 
 /**
@@ -34,7 +38,12 @@ export interface ResumeDocumentProps {
  * contract lives in render.js so a change to the design system reaches
  * every consumer, per that file's own header comment.
  */
-export default function ResumeDocument({ career, selection }: ResumeDocumentProps) {
+export default function ResumeDocument({
+  career,
+  selection,
+  docPageRef,
+  onEdit,
+}: ResumeDocumentProps) {
   const html = renderBody(career, selection);
   return (
     <>
@@ -56,15 +65,18 @@ export default function ResumeDocument({ career, selection }: ResumeDocumentProp
            slotted node — suppressed the same way any WYSIWYG surface does. */
         doc-page[contenteditable] { outline: none; cursor: text; }
       `}</style>
-      {/* No onInput handler: edits are intentionally not captured back into
-          React state or persisted anywhere. This is live-DOM click-to-edit,
-          not a data-model change — "Regenerate" or a reload discards edits
-          by re-setting this HTML from the algorithmic selection, which is
-          the whole reason no state syncing is needed. */}
+      {/* onInput sets a DIRTY FLAG only — it still does not capture edits into
+          React state on every keystroke. The document is read once, on Save,
+          straight out of the DOM via captureResumeHtml. "Regenerate" or a
+          reload discards unsaved edits by re-setting this HTML from the
+          algorithmic selection, which is why no state syncing is needed;
+          saving is what makes an edit durable, and only then. */}
       <doc-page
+        ref={docPageRef as React.RefObject<HTMLElement>}
         margin="0.68in"
         contentEditable
         suppressContentEditableWarning
+        onInput={onEdit}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </>
