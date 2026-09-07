@@ -1,0 +1,162 @@
+"use client";
+
+import Link from "next/link";
+import Script from "next/script";
+import { useRouter } from "next/navigation";
+import { useRef, useState, useTransition } from "react";
+import { captureResumeHtml } from "@/components/resume/useResumeCapture";
+import {
+  deleteSavedResume,
+  getDownloadAssets,
+  saveResume,
+} from "@/app/actions/saved-resumes";
+import {
+  DESIGN_VERSION,
+  buildDownloadHtml,
+  downloadFilename,
+} from "@/lib/resume-download";
+import { daysUntil } from "@/lib/saved-resume-grouping";
+import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
+import type { SavedResume } from "@/lib/types";
+
+/**
+ * A frozen saved résumé, mounted as stored.
+ *
+ * Deliberately NOT rendered through renderBody: this row is a document, not a
+ * selection. Re-rendering it would silently apply today's career record and
+ * today's bullet-selection rules to something the user saved as final.
+ */
+export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
+  const router = useRouter();
+  const docPageRef = useRef<HTMLElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const days = daysUntil(resume.expiresAt, Date.now());
+  const stale = resume.designVersion !== DESIGN_VERSION;
+
+  function saveAsNew() {
+    const el = docPageRef.current;
+    if (!el) return;
+    setError(null);
+    const html = captureResumeHtml(el);
+    startTransition(async () => {
+      // Never an overwrite of the opened row: this writes a NEW row, which is
+      // what "frozen" means. jobId can be null once the role is untracked, and
+      // the column allows it.
+      const res = await saveResume({
+        jobId: resume.jobId as string,
+        html,
+        roleTitle: resume.roleTitle,
+        company: resume.company,
+        label: resume.label,
+      });
+      if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
+      else if (res.duplicateOf) {
+        setError("That is identical to the version you are viewing — nothing new was saved.");
+      } else router.push(`/resume?savedId=${res.id}`);
+    });
+  }
+
+  function download() {
+    setError(null);
+    startTransition(async () => {
+      const assets = await getDownloadAssets();
+      if (assets.error !== undefined) {
+        setError(assets.error || "Could not assemble the download.");
+        return;
+      }
+      const file = buildDownloadHtml({
+        markup: resume.html,
+        css: assets.css,
+        docPageJs: assets.docPageJs,
+        title: `Résumé — ${resume.roleTitle} at ${resume.company}`,
+      });
+      const url = URL.createObjectURL(new Blob([file], { type: "text/html" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadFilename(resume.roleTitle, resume.company, resume.createdAt);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  function remove() {
+    if (!window.confirm("Delete this saved résumé? This cannot be undone.")) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await deleteSavedResume(resume.id);
+      if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
+      else router.push("/resume");
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {error && <p className="text-sm text-[#92400E] print:hidden">{error}</p>}
+
+      <p className="text-xs text-ink/60 print:hidden">
+        {resume.roleTitle} at {resume.company} · saved{" "}
+        {new Date(resume.createdAt).toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })}
+        {resume.label ? ` · ${resume.label}` : ""} ·{" "}
+        <span className={days < 7 ? "text-[#92400E]" : undefined}>
+          expires in {days} {days === 1 ? "day" : "days"}
+        </span>
+        {stale && " · saved against an earlier document design"}
+      </p>
+
+      <div className="flex flex-wrap items-center gap-3 print:hidden">
+        <button
+          onClick={() => window.print()}
+          className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink"
+        >
+          Print / Export PDF
+        </button>
+        <button
+          onClick={download}
+          disabled={isPending}
+          className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
+        >
+          Download
+        </button>
+        <button
+          onClick={saveAsNew}
+          disabled={isPending}
+          className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
+        >
+          {isPending ? "Saving…" : "Save as new version"}
+        </button>
+        <button
+          onClick={remove}
+          disabled={isPending}
+          className="text-sm text-ink/60 underline underline-offset-2 hover:text-ink disabled:opacity-50"
+        >
+          Delete
+        </button>
+        <Link href="/resume" className="text-sm underline underline-offset-2">
+          All saved résumés
+        </Link>
+      </div>
+
+      <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
+      <Script src="/resume-design/rsm-page-guides.js" strategy="afterInteractive" />
+      <style>{`
+        doc-page:not(:defined) { visibility: hidden; }
+        doc-page[contenteditable] { outline: none; cursor: text; }
+      `}</style>
+      <doc-page
+        ref={docPageRef as React.RefObject<HTMLElement>}
+        margin="0.68in"
+        contentEditable
+        suppressContentEditableWarning
+        dangerouslySetInnerHTML={{ __html: resume.html }}
+      />
+    </div>
+  );
+}

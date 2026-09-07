@@ -5,6 +5,7 @@ import { getJobContext, getTailoredResume } from "@/app/actions/resume";
 import { listSavedResumes } from "@/app/actions/saved-resumes";
 import TailorPanel from "@/components/resume/TailorPanel";
 import SavedResumeList from "@/components/resume/SavedResumeList";
+import SavedResumeScreen from "@/components/resume/SavedResumeScreen";
 import type { CareerRecord } from "@/lib/resume-render/render";
 import career from "@/lib/resume-render/content/resume.json";
 
@@ -17,6 +18,11 @@ export default async function ResumePage({
 }) {
   const actor = await requireActorPage();
   if (!actor.isAdmin) redirect("/discover");
+
+  // savedId wins when both are present: it names one specific document, which
+  // is more specific than "the draft for this job".
+  const savedId = searchParams.savedId;
+  if (savedId) return <SavedResumeScreen id={savedId} />;
 
   const jobId = searchParams.jobId;
 
