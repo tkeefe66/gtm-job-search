@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
+import { hasLiveSession } from "@/lib/client-session";
 import { splitUnclear } from "@/lib/link-report";
 import { scoreFit } from "@/app/actions/parse-role";
 import { type Job } from "@/lib/types";
@@ -187,6 +189,7 @@ export default function RolesTable({
   compFloor: number | null;
   isAdmin: boolean;
 }) {
+  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   // Rows getJobs dropped because they were already dead when found. Set only
   // from a load — the optimistic edits below cannot change it, since none of
@@ -270,6 +273,18 @@ export default function RolesTable({
           (err: unknown) => ({ ok: false as const, err })
         ),
       ]);
+
+      // Either read rejecting (rather than returning `{ error }`) means
+      // requireActor() threw — most likely an expired session. A production
+      // build masks that throw down to a generic sentence before it reaches
+      // here (see hasLiveSession's doc comment), so instead of guessing from
+      // the text, ask Auth.js directly. A dead session means every retry
+      // below — including the reload commitWrite triggers on failure — would
+      // fail identically forever, so this redirects instead of banner-ing.
+      if ((!res.ok || !cfg.ok) && !(await hasLiveSession())) {
+        router.push("/signin");
+        return null;
+      }
 
       if (res.ok) {
         // describeWriteFailure, not `if (res.error)`. Presence, not truthiness:
@@ -372,6 +387,13 @@ export default function RolesTable({
     try {
       failure = describeWriteFailure((await write()).error, what);
     } catch (err) {
+      // A rejection here is requireActor() throwing, most likely from an
+      // expired session — check ground truth before assuming a DB outage.
+      // See the matching check in load() and hasLiveSession's doc comment.
+      if (!(await hasLiveSession())) {
+        router.push("/signin");
+        return;
+      }
       // describeWriteFailure, not a raw interpolation: a rejection can carry an
       // empty message for exactly the same reason a returned error can.
       failure = describeWriteFailure(
