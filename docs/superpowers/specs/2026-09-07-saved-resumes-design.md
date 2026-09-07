@@ -587,3 +587,22 @@ mistake the next person is equally likely to make:
 - Renaming a saved résumé after the fact.
 - Sharing a saved résumé by link.
 - Any change to how bullets are selected.
+
+## Verified at deploy (2026-09-07)
+
+**The role assumption holds, and it was checked against the app's own
+connection rather than the migration's.** `railway run --service Postgres psql`
+connects as `postgres`, which reports `rolsuper = t` and `rolbypassrls = t` —
+reading that as the answer would have been wrong. The `web` service's
+`DATABASE_URL` connects as **`app_rw`**, which is `rolsuper = f` and
+`rolbypassrls = f`, holding exactly SELECT/INSERT/UPDATE/DELETE on
+`saved_resumes`. Row security is therefore genuinely enforced for every
+statement the app issues, which is what makes passing the tenant id as
+`rawQuery`'s third argument NECESSARY rather than merely correct: without it a
+tenant-table statement matches zero rows and returns no error.
+
+Migration 016 applied at 2026-09-07 via `db/migrate.mjs` (16 on disk, 15
+previously applied). Verified in the live schema: `relrowsecurity` and
+`relforcerowsecurity` both true, the `tenant_isolation` policy present with both
+USING and WITH CHECK, both tenant-leading indexes created, and both foreign keys
+present — `job_id … ON DELETE SET NULL` and `tenant_id … ON DELETE CASCADE`.
