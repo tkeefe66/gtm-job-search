@@ -2,7 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireActorPage } from "@/lib/require-actor";
 import { getJobContext, getTailoredResume } from "@/app/actions/resume";
+import { listSavedResumes } from "@/app/actions/saved-resumes";
 import TailorPanel from "@/components/resume/TailorPanel";
+import SavedResumeList from "@/components/resume/SavedResumeList";
 import type { CareerRecord } from "@/lib/resume-render/render";
 import career from "@/lib/resume-render/content/resume.json";
 
@@ -11,23 +13,33 @@ export const dynamic = "force-dynamic";
 export default async function ResumePage({
   searchParams,
 }: {
-  searchParams: { jobId?: string };
+  searchParams: { jobId?: string; savedId?: string };
 }) {
   const actor = await requireActorPage();
   if (!actor.isAdmin) redirect("/discover");
 
   const jobId = searchParams.jobId;
+
+  // No jobId: the archive. The old pointer-at-Roles copy is kept verbatim as
+  // the empty state, since it is still exactly what a user with nothing saved
+  // needs to be told.
   if (!jobId) {
+    const { resumes, error } = await listSavedResumes();
     return (
-      <div className="mx-auto max-w-2xl p-8">
-        <h1 className="text-xl font-semibold">Résumé</h1>
-        <p className="mt-2 text-sm text-ink/70">
-          Tailor a résumé from a tracked role — open{" "}
-          <Link href="/roles" className="underline underline-offset-2">
-            Roles
-          </Link>{" "}
-          and click "Tailor resume" on the one you want.
-        </p>
+      <div className="mx-auto max-w-3xl p-8">
+        <h1 className="text-xl font-semibold">Saved résumés</h1>
+        {error !== undefined && <p className="mt-2 text-sm text-[#92400E]">{error}</p>}
+        {resumes.length === 0 ? (
+          <p className="mt-2 text-sm text-ink/70">
+            Nothing saved yet. Tailor a résumé from a tracked role — open{" "}
+            <Link href="/roles" className="underline underline-offset-2">
+              Roles
+            </Link>{" "}
+            and click "Tailor resume" on the one you want.
+          </p>
+        ) : (
+          <SavedResumeList resumes={resumes} />
+        )}
       </div>
     );
   }
