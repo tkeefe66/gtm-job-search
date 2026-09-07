@@ -1,35 +1,47 @@
 # Posting detail: persist, extract, backfill
 
 Date: 2026-09-07
-Status: designed, not implemented
+Status: designed, not implemented. Revised after review — see "Corrections" at the end
+for what changed and why, since several of the first draft's claims were wrong.
 
 ## Why
 
 Three defects, one cause: `ingestRoles` produces posting detail, uses it once, and
 throws it away.
 
-**1. Three columns are never written.** `lib/ingest-roles.ts`'s `addJob` call omits
-`key_skills`, `company_description` and `department`. All three columns already
-exist in `db/schema.sql`. The model's `description_summary` is passed to `scoreFit`
+**1. Two columns are never written.** `lib/ingest-roles.ts:150-174`'s `addJob` call
+omits `key_skills` and `company_description`. Both columns already exist
+(`db/schema.sql:19,24`). The model's `description_summary` is passed to `scoreFit`
 as `key_skills` on the line after the insert, then discarded.
 
-**2. Résumé tailoring runs on nulls.** `loadJobForTenant`
-(`app/actions/resume.ts:45`) selects eight columns, three of which are the three
-above. Every tailored résumé to date has been themed from `role_title`, `company`,
-`fit_summary`, `seniority` and `salary_range` — the job title and the app's own
-opinion of it, never the posting.
+(`department` is a third such column, but it has no producer anywhere —
+`lib/ingest-roles.ts:199` passes the literal `""` — so it belongs to part 2, not
+part 1. See correction C2.)
+
+**2. Résumé tailoring runs on nulls.** `loadJobForTenant` (`app/actions/resume.ts:45`)
+selects eight columns, three of which are those above plus `department`. Worse than
+inert: `lib/resume-prompt.ts:47` renders them through `optionalLine`, so they vanish
+from the theme prompt silently rather than appearing as empty. Every tailored résumé
+to date has been themed from `role_title`, `company`, `fit_summary`, `seniority` and
+`salary_range` — the job title and the app's own opinion of it, never the posting.
 
 **3. Scores drift between the initial score and a rescore.** `ingestRoles` scores
-with `key_skills: role.description_summary` and a composed `company_description`.
-`scoringArgsFor` (`lib/rescore-scope.ts:196`) reads those same fields back off the
-row and gets `""`. Same role, two different prompts, two different scores — and
-the rescore's is the one that persists. This is a general defect in the shape of
-the code, not a one-off: any scoring input that is computed at ingest rather than
-stored will diverge on rescore.
+with `key_skills: role.description_summary` and a composed `company_description`;
+`scoringArgsFor` (`lib/rescore-scope.ts:200,203`) reads those fields back off the row
+and gets `""`. The rescore is strictly impoverished, and its score is the one that
+persists. Nothing mitigates it, and a rescore is reachable from any `/settings` save
+of a crawler-relevant key as well as from `compRescoreOffer`.
 
-A fourth, cosmetic: for role-first search `ctx` is `{}`, so
-`` `${ctx.tagline ?? ""}. ${ctx.traction ?? ""}`.trim() `` composes the literal
-string `"."`, which is then sent to the model as the company description.
+Severity varies by path, which the first draft did not distinguish: on role-search the
+delta is small (a 1–2 sentence summary versus `""`), on Discover and Crawl it is real
+(tagline + traction lost entirely).
+
+A fourth, cosmetic but wider than first stated: `lib/ingest-roles.ts:133` composes
+`` `${ctx.tagline ?? ""}. ${ctx.traction ?? ""}`.trim() ``, which yields the literal
+string `"."` whenever both are absent. That is not only the role-search path — the
+Discover (`app/actions/roles.ts:172-179`) and crawler (`lib/crawler.ts:766-773`) paths
+pass `startup`/`tracked` fields that are frequently null, so any company with no
+tagline and no traction sends `"."` to the model as its description.
 
 ## Goals
 
@@ -39,136 +51,255 @@ either to work, and for the résumé builder downstream of both.
 
 ## Non-goals
 
-- **The row's rendering.** Retiring Stage / Backer / ARR / Exit signal / Industry
-  from the expanded row is a separate change. Those five are populated only from
-  the discovered-startup context and are inert in scoring by design
-  (`lib/fit-agreement.ts:67`); they are the wrong five fields to occupy the row,
-  but that is a display decision. This spec only makes the right data exist.
+- **The row's rendering.** Retiring Stage / Backer / ARR / Exit signal / Industry from
+  the expanded row is a separate change. Those five populate only from the
+  discovered-startup context and are inert in scoring by design
+  (`lib/fit-agreement.ts:67`).
 - **Conversational résumé refinement and the variant pool.** Depends on this.
-- **Widening what closes a role.** The `absent` member of `PostingVerification` is
-  plumbed and inert; it stays that way here.
+- **Widening what closes a role.** `PostingVerification`'s `absent` member stays inert.
+- **The `fit_summary` feedback loop.** Review surfaced a fourth drift this spec does
+  NOT fix and should not: ingest scores with `fit_summary: role.fit_signal` (the
+  extraction's one-liner) and then overwrites the column with the model's own rationale
+  (`lib/ingest-roles.ts:209-210`). Every rescore therefore feeds the model its previous
+  rationale where the first score saw the extraction's signal — a feedback loop, not
+  merely a difference. Persisting more columns cannot fix it; it needs a decision about
+  whether the rationale and the extraction signal should be separate columns. Recorded
+  here so it is not rediscovered as a symptom of this work.
 
 ## Design
 
-### 1. Persist what ingest already has
+### Part 1 — Persist what ingest already has
 
-Add `key_skills` (from `role.description_summary`), `company_description` and
-`department` to the `addJob` call in `ingestRoles`.
+Add `key_skills` (from `role.description_summary`) and `company_description` to the
+`addJob` call in `ingestRoles`. No migration; both columns exist.
 
-Fix the `"."` composition: an empty `ctx` must yield `""`, which is what the fit
-prompt renders as "unknown", not a lone period the model reads as content.
+Fix the `"."` composition so an empty `ctx` yields `""`. Note what `""` actually does:
+`lib/fit-prompt.ts:216,218,224` render `company_description`, `department` and
+`key_skills` raw, with no `|| "unknown"` fallback (only `salary_range`, `arr`, `backer`
+and `exit_signal` have defaults, lines 220-223). So `""` renders as a blank after the
+label. That is correct and better than `"."`, but if a literal "unknown" is wanted, that
+is a change to `buildFitPrompt`, which is pinned by all three fixtures in
+`lib/__fixtures__/` and would require regenerating them — out of scope here.
 
-**The structural guard.** A test asserting that every column `scoringArgsFor` reads
-is a column ingest writes. `lib/rescore-scope.ts` already keeps
-`SCORING_INPUT_COLUMNS` as an explicit list so that deleting a scoring input from
-the rescore side fails a test; this closes the other end of the same loop. Without
-it, defect 3 returns the next time a scoring input is computed inline.
+**The structural guard, restated so it is satisfiable.** The first draft asserted a test
+that would fail on day one. `SCORING_INPUT_COLUMNS` (`lib/rescore-scope.ts:36-48`) has
+eleven entries; ingest writes five, part 1 adds two, part 2 adds `department` — leaving
+`arr`, `exit_signal` and `backer`, which `scoringArgsFor` reads and `ingestRoles` has
+never written and cannot: their only producer is the manual `InlineEdit` at
+`components/RolesTable.tsx:1169-1175`.
 
-### 2. Extend extraction for decide + prep
+So the guard needs both an exemption set and a mechanism:
 
-`roleExtractionSchema` (`lib/search-criteria.ts:100`) asks for eight fields. Add:
+```
+EXEMPT = { arr, exit_signal, backer }
+  // hand-entered from the discovered-startup context; inert in scoring by
+  // design (lib/fit-agreement.ts:67). Ingest has no source for them.
+
+test: stub addJob, run ingestRoles over a fixture role, then assert
+      SCORING_INPUT_COLUMNS.filter(not in EXEMPT) ⊆ Object.keys(captured insert)
+```
+
+Capturing `addJob`'s argument is what makes this a real check rather than two
+hand-maintained lists compared against each other — the "copies of themselves" failure
+the existing comment at `lib/rescore-scope.ts:29-35` warns about.
+
+### Part 2 — Extend extraction for decide + prep
+
+`roleExtractionSchema` (`lib/search-criteria.ts:100-131`) asks for eight fields. Add:
 
 - `requirements` — what the posting says it needs, in the posting's own words.
-- `nice_to_haves` — stated preferences, kept separate because the decide question
-  is "am I disqualified" and these do not disqualify.
-- `department` — an existing column with no producer.
+- `nice_to_haves` — stated preferences, separate because the decide question is "am I
+  disqualified" and these do not disqualify.
+- `department` — creating the producer that part 1's column lacks.
 
-Stored in ONE new `posting jsonb` column, via `db/migrations/017_posting_detail.sql`.
+Stored in one new `posting jsonb` column via `db/migrations/017_posting_detail.sql`
+(confirmed the correct next number; `db/migrations/` ends at `016_saved_resumes.sql`).
+A migration file, not `db/apply-schema.mjs`, which would re-create the `insights_cache`
+table that `006_drop_insights.sql` dropped.
 
-- **jsonb, not three text columns:** the conversational-refinement work will want
-  more structure here, and one column means it does not cost a second migration.
-  Same reasoning `app_settings` already uses for key/value jsonb.
-- **A migration file, not `db/apply-schema.mjs`:** that script would re-create the
-  `insights_cache` table which `006_drop_insights.sql` dropped.
+**The column is nullable with NO default.** This is the same decision as part 3's "thin"
+predicate, which is literally `posting is null`; a `default '{}'` would make every
+pre-existing row look enriched and the backfill would skip the whole table.
 
-`Role` (`lib/types.ts`) gains the two new fields. `roleExtractionSchema` is consumed
-by `lib/company-role-prompt.ts`, `lib/role-search-prompt.ts` and `lib/crawler.ts`;
-all three inherit the new fields with no call-site change. `lib/prose-salvage.ts`
-maps a narrower shape and is unaffected.
+**Grants need no action** — migration 009's column-list revoke is `users`-only, and
+migration 003's table-level `grant … to app_rw` covers columns added later. Verified
+previously for migration 012; recorded here so nobody re-derives it.
+
+**Type it `posting: PostingDetail | null` and read it as `job.posting ?? null`
+everywhere** — the same defensive contract `never_live` (`lib/types.ts:153-159`) and
+`Startup.signal`/`extras` already carry for rows predating a column. `getJobs`
+(`app/actions/jobs.ts:22`) and `repairJobLinks` both `select *` into `Job`, and the ES5
+build will not catch a `job.posting.requirements` against a null.
+
+**`ROLE_FIELDS` must be updated too** (`lib/types.ts:83-91`). It is the `itemFields`
+list handed to `lib/prose-salvage.ts`, and its own comment says a missing name "just
+quietly stops being asked for" — a live call on 2026-08-18 returned `{title,url,salary}`
+for exactly this reason. `salvageSchemaFor` is open so nothing breaks loudly; the new
+fields would simply vanish on every salvaged role.
+
+**Two prompt tests will not bite.** `lib/company-role-prompt.test.ts:24` and
+`lib/role-search-prompt.test.ts:43` rebuild their expected prompt by *calling*
+`roleExtractionSchema`, so they go green on any schema change. The two `.toBe()`
+assertions in `lib/search-criteria.test.ts:443-462` isolate one entry each and are
+unaffected. Part 2 therefore needs its own assertion that the new fields are present.
 
 The new fields must be tolerated as absent: a model that omits them yields an empty
-list, never `undefined` reaching the row. Same repair-don't-reject contract as
-`resolveProfile` and `resolveStatuses`.
+list, never `undefined` reaching the row — the repair-don't-reject contract
+`resolveProfile` and `resolveStatuses` already establish.
 
-### 3. Backfill: bulk enrich
+### Part 3 — Backfill: bounded bulk enrich
 
 A new action `app/actions/enrich.ts`, surfaced as an **Enrich roles** button on
-`/roles` alongside Check links (`components/RolesTable.tsx:564` is the precedent
-for the wiring and the report banner).
+`/roles` (`components/RolesTable.tsx:564` is the precedent for wiring and the report
+banner).
 
-**Thin** means the row has a `job_url` and no `posting` value — it predates part 2,
-or its extraction returned nothing. Status must be non-terminal (`bucketFor`, the
-same filter `repairJobLinks` uses), so closed and rejected roles are never enriched.
-Re-running the pass must skip rows already enriched rather than re-billing them.
+**Thin** means `posting is null` and status is non-terminal (`bucketFor`, the filter
+`repairJobLinks` uses). Per thin row: verify the link (guardrail below) → plain HTTP
+fetch → `classifyFetchOutcome` (`lib/crawler.ts:339`, already exported) → one non-search
+Claude call over the stripped text → write `posting` plus part 1's columns.
 
-Per thin row:
+**Bounded, batched and paged — not one pass over 60 rows.** The first draft's single
+bulk pass was wrong twice over: `withBudget` (`lib/metered.ts:153-175`) reserves and
+checks the ceiling exactly ONCE per call, so N model calls inside one scope pass a
+single ceiling check at row 0 and then bill regardless; and 60 rows × (fetch + model
+call) will not answer inside Railway's 300s no-data edge timeout, losing the return
+value and with it any report of what was spent. `rescoreAll` is the template and it does
+this correctly: `clampRescoreLimit` (`lib/rescore-scope.ts:166-171`, default 25 / max
+100), one `withBudget` per batch, and the client pages on a returned `remaining` count.
+Enrich follows that shape exactly — a `clampEnrichLimit` twin, per-batch reservation,
+`remaining` returned, client-driven paging with progress.
 
-1. Verify the link. See the guardrail below.
-2. Plain HTTP fetch of `job_url`.
-3. `classifyFetchOutcome` (`lib/crawler.ts`, already exported): `shell` → skip.
-4. One non-search Claude call over the stripped text → fill `posting` plus the
-   three columns from part 1.
+**The link guardrail.** Enriching against a wrong URL writes fiction into the row, which
+is worse than leaving it thin. The rule is *positive evidence of wrongness*:
 
-`fetchPage` is currently private to `lib/crawler.ts`. Extract it — with
-`FETCH_TIMEOUT_MS` and `USER_AGENT` — into `lib/fetch-page.ts` and have both
-callers use it, rather than duplicating a second fetcher with its own timeout.
-
-**The link guardrail.** Enriching against a wrong URL writes fiction into the row,
-which is worse than leaving it thin. But blocking every unverifiable link would gut
-the backfill: most rows are company careers sites, where `verifyPostingLink`
-correctly returns `notApplicable`. So the rule is *positive evidence of wrongness*:
-
-| `verifyPostingLink` | Enrich? |
+| link / verification | enrich? |
 |---|---|
-| `listed`, `notApplicable`, `unreachable` | proceed |
-| `relink` | repair the link first, then enrich against the corrected URL |
-| `absent`, `unclear` | blocked, reported with the reason |
+| `classifyJobLink === "aggregator"` | resolve to the employer's posting first (`resolveEmployerLink`, the same treatment `upgradeLink` gives it); skip and report if that fails |
+| `verifyPostingLink` → `listed`, `unreachable` | proceed |
+| `verifyPostingLink` → `notApplicable` (own careers site) | proceed |
+| `verifyPostingLink` → `relink` | repair the link first, then enrich against the corrected URL |
+| `verifyPostingLink` → `absent`, `unclear` | blocked, reported with the reason |
 
-**Never escalate to search.** A JS shell yields no text. Falling back to the
-`web_search` tier would silently turn a free-tier backfill into a billed search
-across every row in the table. Skip, report, and let the user decide.
+The aggregator row is a correction: `verifyPostingLink` returns `notApplicable` for
+*both* a company careers site and every aggregator link, and CLAUDE.md records that 29
+of 61 rows were ZipRecruiter/Built In/Lensa. Enriching from a reseller's stale copy is
+precisely the fiction this guardrail exists to prevent, and it is worse than a wrong ATS
+link because the reseller answers 200 with plausible content long after the req closed.
 
-**Metering.** Runs under `withBudget` (`lib/metered.ts`) like every other model
-call. The nested-scope guard there means a single bulk pass reserves once.
+**The `relink` repair must reuse `repairOne`'s path, not reimplement it.** Repairing
+writes `{job_url, source_url: job.source_url ?? url}` — the first-relink-only rule at
+`app/actions/link-health.ts:170`. A second copy of that rule is exactly the drift hazard
+CLAUDE.md records for `compFloor`'s `>` vs `>=`. If the repair write fails, enrichment
+must not proceed against a corrected URL that was never stored.
 
-**Correction to an earlier claim in this design's discussion:** enrich should NOT
-call `emptySearchReason`. That guard is keyed to `RoleSearchFamily` and refuses on
-empty titles, stack terms or location terms — none of which enrichment uses. It
-would refuse a perfectly meaningful enrichment because the user has no location
-terms set. Extracting a posting's stated requirements is career-neutral and useful
-against any profile, so there is no profile state that makes this call meaningless.
-The gates that do apply are the ordinary ones: `requireActor()` in the action, and
-`requireActorPage()` on `/roles`, which already redirects an un-onboarded tenant.
+**Never escalate to search.** A JS shell yields no text; falling back to the `web_search`
+tier would silently turn a free-tier backfill into a billed search across the table.
+Skip, report, let the user decide.
+
+**Robots.** The crawler gates on `fetchAllowed()` *before* `fetchPage`
+(`lib/crawler.ts:365-371`), with an explicit "could not read the rules — don't guess"
+rule. Extracting `fetchPage` into `lib/fetch-page.ts` must carry `fetchRobotsTxt` /
+`fetchAllowed` with it and enrich must gate the same way. Silent divergence here is a
+policy regression, not a bug.
+
+**Gating.** `requireActor()` in the action, plus `readOnboardedAtFor(actor.tenantId)`
+(`lib/settings-store.ts`). Citing `requireActorPage()` on `/roles` as coverage — as the
+first draft did — is the mistake CLAUDE.md warns about explicitly: a Server Action is an
+RPC endpoint addressed by an ID that ships in the client bundle, so a page guard does
+nothing for it, and an un-onboarded tenant could call `enrichRoles()` directly and bill
+against it.
+
+`emptySearchReason` is still NOT the gate, but for a narrower reason than first stated:
+it refuses on empty titles, stack terms, locations *and an empty fit brain*
+(`lib/search-criteria.ts:335`). Enrichment reads none of those and is meaningful against
+any profile, so it would refuse valid work. The onboarding check above is the gate that
+actually applies.
+
+**The enrichment prompt lives in `lib/` as a builder plus a test**, never inline in the
+action — `"use server"` forbids non-async exports, which is why `buildFitPrompt` was
+moved out of `parse-role.ts`. It is also a career-neutrality surface: any example text
+in it ("e.g. Salesforce, Marketo") is the kind of thing
+`lib/career-neutrality.test.ts` exists to catch, and the kind it would miss.
+
+**Report shape.** Per-row outcomes with a presence-checked failure string, following
+`LinkRepairReport`'s `UnclearReason` pattern, and distinguishing *blocked* (guardrail)
+from *failed* (fetch died, model refused, write failed). Per the `{ error?: string }`
+contract, branch on `describeWriteFailure(...) !== undefined`, never truthiness.
+
+**Idempotence on an empty extraction.** If the model returns nothing usable, write
+`posting` as a real value carrying an explicit empty marker rather than leaving it null
+— otherwise that row is re-billed on every subsequent run. The report must count those
+separately so a systematic extraction failure is visible rather than looking like spend.
+
+## Deploy order
+
+`db/migrate.mjs` is a hand-run, forward-only runner and the `web` service deploys
+automatically on push to `main`. **Migrate first, then push.** Reversed, the running
+code writes `posting` before the column exists and every enrich write fails with
+`column "posting" does not exist`, surfaced through `describeWriteFailure` as a generic
+sentence about storage with no hint of the cause.
 
 ## Testing
 
-Per `mutation-first-tests`, each test must be shown to fail against the unfixed
-code before it counts.
+Per `mutation-first-tests`, each test must be shown to fail against the unfixed code.
 
-- Ingest writes all three columns — mutate by deleting each; the coverage test
-  in part 1 must fail.
-- The coverage test itself: add a fake column to `SCORING_INPUT_COLUMNS` and
-  confirm it goes red.
-- Empty `ctx` yields `""`, not `"."`.
-- Extraction schema: new fields present; a response omitting them yields empty
-  lists, not `undefined`.
-- Enrich: each row of the guardrail table, with the board fetch and page fetch
-  stubbed. `relink` must repair before enriching, and the enrichment must run
-  against the corrected URL, not the stored one.
-- A `shell` page is skipped and never reaches a model call — mutate by removing
-  the shell check and assert the call count test fails.
+- Ingest writes `key_skills` and `company_description` — delete each, the guard fails.
+- The guard itself: add a fake column to `SCORING_INPUT_COLUMNS`, confirm it goes red;
+  and confirm the exemption set is asserted, not merely subtracted, so removing
+  `arr` from the exemption list also goes red.
+- Empty `ctx` yields `""`, not `"."`, on all three ingest paths.
+- Extraction schema: new fields present (the two self-referential prompt tests cannot
+  provide this); a response omitting them yields empty lists, not `undefined`;
+  `ROLE_FIELDS` contains them.
+- Enrich: every row of the guardrail table, board and page fetches stubbed. An
+  aggregator link resolves before enriching. A `relink` repairs before enriching, and
+  enriches against the corrected URL. A failed repair write aborts that row.
+- A `shell` page is skipped and never reaches a model call — remove the shell check and
+  assert a call-count test fails.
+- Batching: a pass over more rows than the limit returns a `remaining` count and
+  reserves once per batch, not once per pass.
 
-`npm run build && npm test` is the gate. `npm run build` is what typechecks at
-ES5; `npx tsc --noEmit` does not reproduce it.
+`npm run build && npm test` is the gate; `npm run build` is what typechecks at ES5.
+
+## Open question for the user
+
+Once enrichment lands, ~60 rows will hold posting detail their stored `fit_score` was
+never computed from — the score is strictly less informed than a rescore would now be.
+Should the enrich report offer a rescore, the way `/settings` offers one after a
+criteria change (`compRescoreOffer`, `lib/rescore-progress.ts`)? It is the obvious next
+question and this spec deliberately does not decide it.
 
 ## Risks
 
-- **Prompt cost.** Two more fields on every extraction response. Small, but it
-  lands on every search path at once.
-- **Enrich spend is real.** One non-search call per row, ~60 rows on first run.
-  The user chose a single bulk button over a dry-run gate; the report must state
-  what was spent, and the button must not be adjacent to anything destructive.
-- **Extraction quality on a fetched page is unverified.** The crawler's fetch tier
-  reads careers *listing* pages; this reads a single posting. The prompt is new
-  and its output is not pinned by a fixture in this design. If quality is poor the
-  fallback is to narrow the ask, not to escalate to search.
+- **Prompt cost.** Two more fields on every extraction response, landing on all three
+  search paths at once.
+- **Enrich spend is real.** One non-search call per row. Bounded per batch now, but the
+  user drives the paging, so the UI must show cumulative spend — `lib/cost-estimate.ts`
+  has no vocabulary for per-row non-search calls today and needs one.
+- **Extraction quality is unverified.** The crawler's fetch tier reads careers *listing*
+  pages; this reads a single posting. If quality is poor the fallback is to narrow the
+  ask, never to escalate to search.
+- **`updateJob` stamps `updated_at` unconditionally** (`app/actions/jobs.ts:76`), so an
+  enrich pass reshuffles the rescore queue's `order by updated_at asc`. Harmless, but
+  surprising if an enrich and a rescore interleave.
+
+## Corrections to the first draft
+
+Recorded rather than deleted, because each one's reasoning constrains the next change.
+
+- **`""` does not render as "unknown".** `buildFitPrompt` has no fallback for
+  `company_description`, `department` or `key_skills`. The fix stands; the justification
+  was wrong.
+- **`department` had no producer**, so part 1 could not have written it. Moved to part 2.
+- **The structural guard was unsatisfiable** against `arr` / `exit_signal` / `backer`,
+  and had no stated mechanism. Now has both.
+- **One `withBudget` over a 60-row pass is unbounded spend** — it reserves once — and
+  would have exceeded Railway's 300s edge timeout. The first draft's remark about the
+  nested-scope guard was reassuring about the wrong thing: the `relink` repair costs no
+  model tokens, so there was never a second reservation to guard against.
+- **`notApplicable` covers aggregator links too**, not just company careers sites, so
+  "proceed" would have enriched from resellers' stale copies.
+- **A page guard is not coverage for a Server Action.** The first draft cited
+  `requireActorPage()`; the action needs its own onboarding check.
+- **The `"."` bug and the drift both affect all three ingest paths**, not just
+  role-search.
