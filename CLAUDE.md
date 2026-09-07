@@ -295,10 +295,13 @@ calls `window.print()` needs the same scoping or it captures the whole app
 shell, not just its own content. The rendered résumé (`ResumeDocument.tsx`'s
 `<doc-page>`) is `contentEditable` — bullet text can be clicked and edited
 directly in the browser, matching the design system's own stated intent — but
-edits are **never persisted**: nothing captures them back into React state or
-the database, so "Regenerate" or a reload discards them by re-setting the
-HTML from the algorithmic selection. That's deliberate, not an oversight;
-Google Docs export is select-all-and-paste, not an API integration.
+edits are **not persisted by typing them**: nothing captures them back into
+React state, so "Regenerate" or a reload discards them by re-setting the HTML
+from the algorithmic selection. That's deliberate, not an oversight; Google
+Docs export is select-all-and-paste, not an API integration. Since the
+saved-résumés work below, **Save** is the one thing that makes an edit
+durable — it reads the live DOM once, at that moment, and writes a frozen row;
+everything in this paragraph still describes the DRAFT screen between saves.
 
 **Saving a résumé is a SEPARATE table from tailoring one, and the distinction is
 the whole feature.** `tailored_resumes` is the working DRAFT — one row per
