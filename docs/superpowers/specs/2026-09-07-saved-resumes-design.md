@@ -606,3 +606,19 @@ previously applied). Verified in the live schema: `relrowsecurity` and
 `relforcerowsecurity` both true, the `tenant_isolation` policy present with both
 USING and WITH CHECK, both tenant-leading indexes created, and both foreign keys
 present — `job_id … ON DELETE SET NULL` and `tenant_id … ON DELETE CASCADE`.
+
+**Hand-verification.** The plan's UI checks could not run before deploy — the
+table did not exist in any database until migration 016 was applied, so Save had
+nothing to write to. Confirmed working by the user against production on
+2026-09-07, immediately after the deploy above. What that confirms is the check
+the suite structurally cannot make: a saved résumé RENDERS STYLED, so the
+capture took `docPageEl.innerHTML` and kept the `.rsm` root that `document.css`
+scopes the design to. A capture one level deeper would have produced unstyled
+body text, and nothing in `npm test` can see it — vitest's include list is
+`lib/**` and `app/**`, and no test in this repo mounts a component.
+
+Not separately walked item by item: the duplicate-save prompt, the downloaded
+file's print fidelity, and the Google Docs copy/paste path. They are implemented
+and unit-tested where they are pure (`resume-download.test.ts` pins the download
+document's shape; `saved-resumes.test.ts` pins the admin gate), but no one has
+stepped through them in the browser, and this record should not imply otherwise.
