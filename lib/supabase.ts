@@ -139,6 +139,12 @@ export const TENANT_TABLES = [
   // not via ALTER TABLE ... ADD COLUMN, so it is invisible to
   // lib/supabase.test.ts's retrofit-pattern regex — added here by hand.
   "tailored_resumes",
+  // Added by migration 016. Same inline-tenant_id pattern as tailored_resumes
+  // above, so likewise invisible to lib/supabase.test.ts's retrofit regex.
+  // NOTE: this registration protects the BUILDER only. The purge, both reads
+  // and the bulk delete use rawQuery, where the tenant id must be passed as the
+  // third argument or the statement runs unscoped and silently matches nothing.
+  "saved_resumes",
 ] as const;
 
 export function isTenantTable(table: string): boolean {
