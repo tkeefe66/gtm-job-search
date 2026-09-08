@@ -785,3 +785,45 @@ describe("a search page is not a role, and a description is not an employer", ()
     expect(res.added).toEqual([ROLE]);
   });
 });
+
+// A role the user pasted the URL for is not search noise. The cutoff exists to
+// keep a search's own output from filling the table; a link someone chose to
+// add is a decision the app must not silently overturn — the first manual add
+// scored 2, filed itself, and vanished from the open list.
+describe("a caller may say these roles were chosen, not found", () => {
+  const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
+
+  beforeEach(() => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: ["SQL"], niceToHaves: [] },
+      department: "",
+      employer: "",
+      summary: "Runs the stack.",
+      empty: false,
+    };
+    h.score = 2;
+  });
+
+  test("a chosen role below the bar keeps its score and stays New", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE], chosenByUser: true });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({ fit_score: 2 });
+    expect(vi.mocked(updateJob).mock.calls[0][1].status).toBeUndefined();
+  });
+
+  // The score is still WRITTEN and still shown — the user should see that the
+  // posting reads weak, they simply get to decide what to do about it.
+  test("it is still scored, so the number is honest", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE], chosenByUser: true });
+
+    expect(vi.mocked(scoreFit)).toHaveBeenCalledTimes(1);
+  });
+
+  test("a role a SEARCH found is filed as before", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({ status: "Not Interested" });
+  });
+});

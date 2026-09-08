@@ -36,7 +36,7 @@ import type { Role } from "@/lib/types";
  */
 export interface AddRoleResult {
   /** The role landed, with the posting's own words. */
-  added?: { company: string; roleTitle: string; read: boolean };
+  added?: { company: string; roleTitle: string; read: boolean; score?: number };
   /**
    * The page could not be read (or named no role), so the UI should offer the
    * paste box. `reason` is shown to the user — a silent empty box is not
@@ -143,6 +143,10 @@ async function addRoleInner(
     source: "Added by URL",
     fitInputs,
     preRead: { [url]: read },
+    // A URL the user pasted is a decision, not a search result. See
+    // IngestOptions.chosenByUser — the fit cutoff would otherwise file a role
+    // they deliberately added, which is what happened to the first one.
+    chosenByUser: true,
   });
 
   if (result.added.length === 0) {
@@ -234,14 +238,10 @@ async function attachToExisting(
   if (scored.score > 0) {
     patch.fit_score = scored.score;
     if (scored.rationale) patch.fit_summary = scored.rationale;
-    const statuses = (await getJobStatuses()).statuses;
-    const fileInto = autoFileStatus(statuses);
-    if (
-      fileInto !== null &&
-      shouldAutoFile({ score: scored.score, wasRead: true, status: row.status })
-    ) {
-      patch.status = fileInto;
-    }
+    // No auto-filing here either: this row is being updated BECAUSE the user
+    // pasted its URL, and a re-score that files it away undoes the decision
+    // they just made. The score is written and shown; what to do about it is
+    // theirs.
   }
 
   const failure = describeWriteFailure(
@@ -249,5 +249,12 @@ async function attachToExisting(
     `attach that posting to ${identity.company} / ${identity.roleTitle}`
   );
   if (failure !== undefined) return { error: failure };
-  return { added: { company: identity.company, roleTitle: identity.roleTitle, read: true } };
+  return {
+    added: {
+      company: identity.company,
+      roleTitle: identity.roleTitle,
+      read: true,
+      score: scored.score > 0 ? scored.score : undefined,
+    },
+  };
 }

@@ -680,7 +680,12 @@ export default function RolesTable({
       // The banner outlives the form, which closes: the confirmation belongs
       // above the table the row just joined, not inside a box the user has
       // finished with.
-      setAddNotice(`Added ${res.added?.company} — ${res.added?.roleTitle}, with its description.`);
+      // Names the score, because a role you added yourself is never filed away
+      // by it — you decide. Silence here would leave a 2 looking like a 4.
+      setAddNotice(
+        `Added ${res.added?.company} — ${res.added?.roleTitle}, with its description` +
+          (res.added?.score ? `, scored ${res.added.score} of 5.` : ".")
+      );
       setAddUrl("");
       setAddPaste("");
       setAddCompany("");

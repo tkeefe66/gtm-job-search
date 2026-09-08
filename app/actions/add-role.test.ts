@@ -277,17 +277,20 @@ describe("attaching a description re-scores the row it belongs to", () => {
     expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({ fit_score: 4 });
   });
 
-  // Same rule as everywhere else a score is written: read, below the bar, and
-  // untouched by the user means filed rather than left in the pipeline.
-  test("a role that reads weak is filed, now that it was actually read", async () => {
+  // REVERSED deliberately, minutes after it was written: this path first filed
+  // a weak role away like every other scoring site, and the first manual add
+  // scored 2, filed itself, and vanished from the open list. The cutoff exists
+  // to keep a SEARCH's output out of the table; a URL the user pasted is a
+  // decision, and the app must not silently overturn it. The score is still
+  // written, so the number stays honest.
+  test("a role that reads weak keeps its score and stays where the user put it", async () => {
     h.score = { score: 1, rationale: "not close" };
 
     await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
 
-    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({
-      fit_score: 1,
-      status: "Not Interested",
-    });
+    const patch = vi.mocked(updateJob).mock.calls[0][1];
+    expect(patch).toMatchObject({ fit_score: 1 });
+    expect(patch).not.toHaveProperty("status");
   });
 
   // A failed score must not overwrite a real one with zero, and must not file
@@ -301,5 +304,30 @@ describe("attaching a description re-scores the row it belongs to", () => {
     expect(patch).not.toHaveProperty("fit_score");
     expect(patch).not.toHaveProperty("status");
     expect(patch).toHaveProperty("posting");
+  });
+});
+
+// The same rule on the attach path: a role you pasted a URL for is a decision,
+// and re-scoring it must not undo that decision.
+describe("a role you added yourself is never filed away by its score", () => {
+  test("the ingest is told these roles were chosen", async () => {
+    h.read = READ;
+
+    await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
+
+    expect(vi.mocked(ingestRoles).mock.calls[0][0].chosenByUser).toBe(true);
+  });
+
+  test("attaching to an existing row scores it but does not file it", async () => {
+    h.read = READ;
+    h.ingest = { added: [], skipped: [{}], seenTitles: [] };
+    h.existing = [{ id: "job-9", source_url: null, status: "New" }];
+    h.score = { score: 1, rationale: "not close" };
+
+    await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
+
+    const patch = vi.mocked(updateJob).mock.calls[0][1];
+    expect(patch).toMatchObject({ fit_score: 1 });
+    expect(patch).not.toHaveProperty("status");
   });
 });

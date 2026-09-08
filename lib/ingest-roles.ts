@@ -59,6 +59,17 @@ export interface IngestOptions {
    * waiting on its own response and can afford more.
    */
   maxReads?: number;
+  /**
+   * These roles were CHOSEN by the user, not found by a search.
+   *
+   * The fit cutoff is switched off for them, and only for them. It exists to
+   * stop a search's own output filling the table; a URL someone pasted is a
+   * decision the app must not silently overturn — the first manually added role
+   * scored 2, filed itself, and disappeared from the open list, which is the
+   * opposite of what adding something means. They are still SCORED, so the
+   * number is honest and the user can act on it.
+   */
+  chosenByUser?: boolean;
 }
 
 /**
@@ -357,6 +368,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           // precondition. Written in the SAME update as the score, so a row can
           // never exist scored-but-unfiled.
           const file =
+            opts.chosenByUser !== true &&
             fileInto !== null &&
             shouldAutoFile({ score: scored.score, wasRead: wasRead !== null, status: "New" });
           await updateJob(jobRes.job.id, {
