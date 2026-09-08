@@ -24,3 +24,28 @@ export function shouldCheckpoint(
   if (newest.content === null || newest.content === undefined) return true;
   return JSON.stringify(draft) !== JSON.stringify(newest.content);
 }
+
+/**
+ * Whether restoring `restoring` over `draft` would change nothing.
+ *
+ * A SECOND suppression, independent of shouldCheckpoint's, because
+ * shouldCheckpoint compares the draft against the newest LIVE saved row and a
+ * restore makes the checkpoint it just wrote that newest row. Restore S once:
+ * the checkpoint C holds the old draft D, and the draft becomes S. Navigate
+ * back and click "Edit this version" on S again — draft (S) still differs from
+ * C (D), so shouldCheckpoint says yes, a worthless C2 holding S is written,
+ * and the demotion moves C — the ONLY copy of D — from 30 days down to 3.
+ * `disabled={isPending}` guards a double-click; it does not guard a back
+ * navigation. A restore that would change nothing has nothing to preserve.
+ *
+ * Same JSON.stringify semantics as shouldCheckpoint, deliberately: the two
+ * comparisons must agree about what "the same content" means.
+ */
+export function restoreWouldChangeNothing(
+  draft: unknown | null,
+  restoring: unknown | null
+): boolean {
+  if (draft === null || draft === undefined) return false;
+  if (restoring === null || restoring === undefined) return false;
+  return JSON.stringify(draft) === JSON.stringify(restoring);
+}

@@ -15,7 +15,6 @@ import type { SavedResume, SavedResumeSummary } from "@/lib/types";
 interface SavedRow extends SavedSummaryRow {
   html?: string;
   design_version?: string;
-  content?: unknown;
 }
 
 /**
@@ -154,7 +153,7 @@ export async function getSavedResume(
 
   const { data, error } = await rawQuery<SavedRow>(
     "select id, job_id, role_title, company, label, created_at, expires_at, html, design_version, " +
-      "page_margin, content, kind, (content is not null) as has_content " +
+      "page_margin, kind, (content is not null) as has_content " +
       "from saved_resumes where tenant_id = $1 and id = $2 and " +
       LIVE_PREDICATE,
     [actor.tenantId, id],
@@ -173,7 +172,6 @@ export async function getSavedResume(
       ...savedRowToSummary(r),
       html: r.html as string,
       designVersion: r.design_version as string,
-      content: r.content ?? null,
     },
   };
 }

@@ -31,6 +31,16 @@ vi.mock("@/lib/require-actor", () => ({
 // (a DELETE that runs before the SELECT) doesn't have to be modeled turn by
 // turn. deleteSavedResume/deleteSavedResumes go through the query builder,
 // not rawQuery, and aren't exercised here.
+/** Keeps only the columns the statement actually names — see the list branch
+ *  of the rawQuery mock below for why. */
+function project(row: Record<string, unknown>, sql: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  Object.keys(row).forEach((k) => {
+    if (sql.indexOf(k) !== -1) out[k] = row[k];
+  });
+  return out;
+}
+
 const h = vi.hoisted(() => {
   const state = {
     insertArgs: null as unknown[] | null,
@@ -73,7 +83,15 @@ vi.mock("@/lib/supabase", () => ({
     if (sql.indexOf("select id") === 0) {
       // listSavedResumes' select, and insertSavedRow's own duplicate-check
       // select, which shares the "select id from saved_resumes" prefix.
-      return { data: h.state.listRow ? [h.state.listRow] : [], error: null };
+      //
+      // PROJECTED through the SQL's own column list rather than returned
+      // whole. Without this, a fixture proves nothing about the SELECT: the
+      // dispatcher matches on a prefix, so dropping `kind` or `has_content`
+      // from the statement leaves the mocked row — and every assertion on it —
+      // untouched. Projecting makes a dropped column actually absent from the
+      // row the action maps, which is what savedRowToSummary's defaults then
+      // silently paper over.
+      return { data: h.state.listRow ? [project(h.state.listRow, sql)] : [], error: null };
     }
     return { data: [], error: null };
   },
@@ -183,6 +201,8 @@ describe("saved-resumes.ts: page_margin", () => {
       created_at: "2026-09-01T00:00:00.000Z",
       expires_at: "2026-10-31T00:00:00.000Z",
       page_margin: "0.5in",
+      kind: "checkpoint",
+      has_content: true,
     };
 
     const res = await listSavedResumes();
@@ -190,6 +210,14 @@ describe("saved-resumes.ts: page_margin", () => {
     expect(res.error).toBeUndefined();
     expect(res.resumes).toHaveLength(1);
     expect(res.resumes[0].pageMargin).toBe("0.5in");
+    // Mutation these catch: dropping `kind` or `(content is not null) as
+    // has_content` from listSavedResumes' SELECT. savedRowToSummary defaults a
+    // missing kind to "save" and a missing has_content to false, so the
+    // archive would silently report every row as a non-restorable deliberate
+    // save — the "Edit this version" affordance disappears — through a green
+    // suite. Non-default values on purpose.
+    expect(res.resumes[0].kind).toBe("checkpoint");
+    expect(res.resumes[0].hasContent).toBe(true);
   });
 
   test("listSavedResumes: a null page_margin column reads back as null, not \"\"", async () => {
@@ -202,6 +230,8 @@ describe("saved-resumes.ts: page_margin", () => {
       created_at: "2026-09-01T00:00:00.000Z",
       expires_at: "2026-10-31T00:00:00.000Z",
       page_margin: null,
+      kind: "checkpoint",
+      has_content: true,
     };
 
     const res = await listSavedResumes();

@@ -1,6 +1,6 @@
 // app/actions/restore-saved-version.test.ts
 import { describe, expect, it } from "vitest";
-import { shouldCheckpoint } from "@/lib/checkpoint-decision";
+import { restoreWouldChangeNothing, shouldCheckpoint } from "@/lib/checkpoint-decision";
 
 const draft = { themes: ["ops"], selection: { positioningId: "gtm", bullets: {} }, overrides: {} };
 
@@ -85,5 +85,48 @@ describe("shouldCheckpoint", () => {
   // is unprotected and a restore would destroy it.
   it("checkpoints a draft when the job has no saved rows yet", () => {
     expect(shouldCheckpoint(draft, null)).toBe(true);
+  });
+});
+
+// The second suppression, and the reason it cannot be folded into
+// shouldCheckpoint: shouldCheckpoint compares the draft against the newest
+// LIVE saved row, and after one restore that row is the checkpoint the restore
+// itself wrote.
+describe("restoreWouldChangeNothing", () => {
+  // Mutation this catches: OMITTING the check entirely at the call site
+  // (restore-saved-version.ts Step 4). Restore S, then back-navigate and click
+  // "Edit this version" on S again: the draft is now S and the newest live row
+  // is the checkpoint holding the OLD draft D, so shouldCheckpoint still says
+  // yes — a worthless second checkpoint holding S is written AND the demotion
+  // moves C1, the only copy of D, from 30 days down to 3. `disabled={isPending}`
+  // guards a double-click, not a back navigation.
+  it("suppresses a restore of the version the draft already is", () => {
+    const newestIsTheCheckpoint = { content: { ...draft, themes: ["old"] } };
+    // shouldCheckpoint alone would write one...
+    expect(shouldCheckpoint(draft, newestIsTheCheckpoint)).toBe(true);
+    // ...and this is what stops it, because restoring S over a draft that is
+    // already S changes nothing, so there is nothing to preserve.
+    expect(restoreWouldChangeNothing(draft, deepCopy(draft))).toBe(true);
+  });
+
+  // Mutation this catches: comparing by reference, which would report a
+  // structurally identical deep copy as different and let the redundant
+  // checkpoint through. Covered above too; asserted here on the negative side
+  // so a by-value comparison is pinned in both directions.
+  it("does not suppress when the restored version differs from the draft", () => {
+    expect(restoreWouldChangeNothing(draft, { ...draft, themes: ["data"] })).toBe(false);
+    expect(
+      restoreWouldChangeNothing(draft, { ...draft, overrides: { pageMargin: "1in" } })
+    ).toBe(false);
+  });
+
+  // Mutation this catches: dropping the null/undefined guards, where
+  // JSON.stringify(undefined) === JSON.stringify(undefined) makes two absent
+  // values compare EQUAL and suppresses the checkpoint of a draft that exists.
+  it("never suppresses when either side is absent", () => {
+    expect(restoreWouldChangeNothing(null, null)).toBe(false);
+    expect(restoreWouldChangeNothing(undefined, undefined)).toBe(false);
+    expect(restoreWouldChangeNothing(draft, null)).toBe(false);
+    expect(restoreWouldChangeNothing(null, draft)).toBe(false);
   });
 });

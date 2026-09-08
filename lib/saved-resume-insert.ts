@@ -43,7 +43,13 @@ export async function insertSavedRow(
 
   if (!input.allowDuplicate) {
     const { data, error } = await rawQuery<{ id: string }>(
-      "select id from saved_resumes where tenant_id = $1 and job_id = $2 and " +
+      // kind = 'save' is load-bearing. The newest live row is now often an
+      // app-written CHECKPOINT (restoreSavedVersion), and deduping against one
+      // makes a deliberate Save report duplicateOf a checkpoint — TailorPanel
+      // then says "This is identical to the version you already saved", and
+      // declining leaves the user with only a 3/30-day auto row instead of the
+      // 60-day save they asked for.
+      "select id from saved_resumes where tenant_id = $1 and job_id = $2 and kind = 'save' and " +
         LIVE_PREDICATE +
         " order by created_at desc limit 1",
       [tenantId, input.jobId],

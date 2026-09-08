@@ -296,10 +296,10 @@ export interface SavedResumeSummary {
 export interface SavedResume extends SavedResumeSummary {
   html: string;
   designVersion: string;
-  /** The {themes, selection, overrides} that produced this row, or null for a
-   *  row saved before migration 021 or with no draft behind it at save time.
-   *  Present alongside `hasContent` on the summary because a single fetched
-   *  row is not the archive list this file's `html` comment warns about. */
-  content: unknown;
+  // Deliberately NO `content`. The row's {themes, selection, overrides} has no
+  // client reader — SavedResumePanel branches on `hasContent` alone — and
+  // returning it serialized the full selection plus arbitrary rewritten bullet
+  // text into the RSC payload of every saved-resume view for nobody.
+  // restoreSavedVersion reads content with its own tenant-scoped query.
 }
 

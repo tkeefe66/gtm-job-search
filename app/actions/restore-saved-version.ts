@@ -14,7 +14,7 @@
 import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { rawQuery, supabase } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { shouldCheckpoint } from "@/lib/checkpoint-decision";
+import { restoreWouldChangeNothing, shouldCheckpoint } from "@/lib/checkpoint-decision";
 import { renderDraftHtml } from "@/lib/draft-render";
 import { insertSavedRow } from "@/lib/saved-resume-insert";
 import { careerOverlayFrom, readAllSettingsResult } from "@/lib/settings-store";
@@ -177,8 +177,10 @@ export async function restoreSavedVersion(
   let checkpointId: string | undefined;
 
   // Step 4: checkpoint the draft first, if restoring would otherwise destroy
-  // its only copy.
-  if (shouldCheckpoint(draft, newest)) {
+  // its only copy. restoreWouldChangeNothing is a second, independent
+  // suppression — see its comment: without it, restoring the SAME version
+  // twice writes a redundant checkpoint holding S and demotes the real one.
+  if (shouldCheckpoint(draft, newest) && !restoreWouldChangeNothing(draft, saved.content)) {
     const rowsResult = await readAllSettingsResult();
     if (rowsResult.error !== undefined) {
       return { error: describeWriteFailure(rowsResult.error, "load your settings") };
@@ -206,6 +208,11 @@ export async function restoreSavedVersion(
       company: saved.company,
       label: "Checkpoint · " + formatDate(new Date()),
       allowDuplicate: true,
+      // page_margin lives OUTSIDE the captured/rendered HTML — migration 020's
+      // entire reason — so without this the checkpoint card, its print and its
+      // download all silently revert to the 0.68in default for a draft the
+      // user had at 0.5in. Carried the way TailorPanel does.
+      pageMargin: draftContent.overrides?.pageMargin ?? null,
       content: draft,
       kind: "checkpoint",
       retentionDays: CHECKPOINT_RETENTION_DAYS,
@@ -223,24 +230,9 @@ export async function restoreSavedVersion(
       return { error: "Could not checkpoint your current draft, so nothing was restored." };
     }
     checkpointId = checkpointResult.id;
-
-    // Step 5: demote older checkpoints for this job. least() is load-bearing —
-    // an unconditional now()+3days would EXTEND a checkpoint already 29 days
-    // old. The kind = 'checkpoint' filter is equally load-bearing — without it
-    // this demotes deliberate Saves.
-    if (checkpointId !== undefined) {
-      await rawQuery(
-        "update saved_resumes set expires_at = least(expires_at, now() + interval '" +
-          SUPERSEDED_CHECKPOINT_DAYS +
-          " days') " +
-          "where tenant_id = $1 and job_id = $2 and kind = 'checkpoint' and id <> $3",
-        [actor.tenantId, jobId, checkpointId],
-        actor.tenantId
-      );
-    }
   }
 
-  // Step 6: overwrite the working draft with S's content.
+  // Step 5: overwrite the working draft with S's content.
   const { error: upsertError } = await supabase
     .forTenant(actor.tenantId)
     .from("tailored_resumes")
@@ -253,6 +245,28 @@ export async function restoreSavedVersion(
     "restore that résumé into your working draft"
   );
   if (describedUpsertError !== undefined) return { error: describedUpsertError, checkpointId };
+
+  // Step 6: demote older checkpoints for this job. AFTER the upsert, never
+  // before: if the upsert fails the draft is correctly untouched, and demoting
+  // first would already have moved C1 — potentially the only copy of an
+  // EARLIER draft — from 30 days to 3 for a restore that never happened.
+  // least() is load-bearing — an unconditional now()+3days would EXTEND a
+  // checkpoint already 29 days old. The kind = 'checkpoint' filter is equally
+  // load-bearing — without it this demotes deliberate Saves. Non-aborting: a
+  // lingering 30-day checkpoint is not worth failing a committed restore over,
+  // but it is LOGGED, the way listSavedResumes' opportunistic purge is.
+  if (checkpointId !== undefined) {
+    const demotion = await rawQuery(
+      "update saved_resumes set expires_at = least(expires_at, now() + interval '" +
+        SUPERSEDED_CHECKPOINT_DAYS +
+        " days') " +
+        "where tenant_id = $1 and job_id = $2 and kind = 'checkpoint' and id <> $3",
+      [actor.tenantId, jobId, checkpointId],
+      actor.tenantId
+    );
+    if (demotion.error)
+      console.error("restoreSavedVersion checkpoint demotion failed:", demotion.error);
+  }
 
   // Step 7: append a marker turn so the chat thread does not describe changes
   // the restored document no longer carries. buildChatPrompt
