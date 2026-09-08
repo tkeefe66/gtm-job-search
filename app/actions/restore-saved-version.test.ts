@@ -1,5 +1,15 @@
 // app/actions/restore-saved-version.test.ts
-import { describe, expect, it } from "vitest";
+//
+// Two halves. The FIRST covers the pure decision helpers in
+// lib/checkpoint-decision.ts. The SECOND executes restoreSavedVersion's own
+// body — nothing did before, so its two suppression conjuncts could each be
+// deleted, and the demotion could be moved above the tailored_resumes upsert,
+// with the whole suite still green. That function can destroy the user's
+// working draft with no undo.
+//
+// The mocks below are module-wide (vi.mock hoists), which the first half is
+// indifferent to: it imports only the pure helpers.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restoreWouldChangeNothing, shouldCheckpoint } from "@/lib/checkpoint-decision";
 
 const draft = { themes: ["ops"], selection: { positioningId: "gtm", bullets: {} }, overrides: {} };
@@ -128,5 +138,194 @@ describe("restoreWouldChangeNothing", () => {
     expect(restoreWouldChangeNothing(undefined, undefined)).toBe(false);
     expect(restoreWouldChangeNothing(draft, null)).toBe(false);
     expect(restoreWouldChangeNothing(null, draft)).toBe(false);
+  });
+});
+
+import { selectBullets } from "@/lib/resume-render/render";
+import career from "@/lib/resume-render/content/resume.json";
+import type { CareerRecord } from "@/lib/resume-render/render";
+
+vi.mock("@/lib/require-actor", () => ({
+  requireActor: async () => ({
+    userId: "admin-1", tenantId: "t1", email: "admin@example.com", isAdmin: true,
+  }),
+}));
+
+vi.mock("@/lib/settings-store", () => ({
+  readAllSettingsResult: async () => ({ rows: [], error: undefined }),
+  careerOverlayFrom: () => [],
+}));
+
+const h = vi.hoisted(() => ({
+  state: {
+    calls: [] as { op: string; sql?: string; args?: unknown[]; row?: Record<string, unknown> }[],
+    savedRow: null as Record<string, unknown> | null,
+    draftContent: undefined as unknown,
+    newestContent: undefined as unknown,
+    insertResult: { data: [{ id: "cp-1" }], error: null } as { data: { id: string }[]; error: unknown },
+    upsertError: null as { message: string } | null,
+    forceDuplicate: false,
+  },
+}));
+
+vi.mock("@/lib/supabase", () => ({
+  rawQuery: async (sql: string, args: unknown[]) => {
+    h.state.calls.push({ op: "rawQuery", sql, args });
+    if (sql.indexOf("select job_id, role_title, company, content, created_at from saved_resumes") === 0)
+      return { data: h.state.savedRow ? [h.state.savedRow] : [], error: null };
+    if (sql.indexOf("select content from tailored_resumes") === 0)
+      return { data: h.state.draftContent !== undefined ? [{ content: h.state.draftContent }] : [], error: null };
+    if (sql.indexOf("select content from saved_resumes") === 0)
+      return { data: h.state.newestContent !== undefined ? [{ content: h.state.newestContent }] : [], error: null };
+    if (sql.indexOf("insert into saved_resumes") === 0) return h.state.insertResult;
+    if (sql.indexOf("update saved_resumes set expires_at") === 0) return { data: [], error: null };
+    throw new Error("unmocked rawQuery: " + sql.slice(0, 60));
+  },
+  supabase: {
+    forTenant: () => ({
+      from: (table: string) => ({
+        // The marker-turn read (resume_chats).
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+        upsert: async (row: Record<string, unknown>) => {
+          h.state.calls.push({ op: "upsert:" + table, row });
+          return { error: table === "tailored_resumes" ? h.state.upsertError : null };
+        },
+      }),
+    }),
+  },
+}));
+
+// insertSavedRow's {duplicateOf} outcome cannot be produced through the rawQuery mock
+// (allowDuplicate: true skips the dedupe select entirely), so it is forced here. The real
+// implementation runs for every other test — the insert-argument assertions below are
+// asserting the real statement, not a stub's bookkeeping.
+vi.mock("@/lib/saved-resume-insert", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/saved-resume-insert")>();
+  return {
+    insertSavedRow: async (...args: Parameters<typeof real.insertSavedRow>) =>
+      h.state.forceDuplicate ? { duplicateOf: "some-other-row" } : real.insertSavedRow(...args),
+  };
+});
+
+import { restoreSavedVersion } from "@/app/actions/restore-saved-version";
+
+const SELECTION = selectBullets(career as CareerRecord, { themes: ["systems", "data"] });
+const draftOf = (over: Record<string, unknown> = {}) => ({
+  themes: ["systems", "data"],
+  selection: SELECTION,
+  overrides: over,
+});
+const RESTORING = { themes: ["ops"], selection: SELECTION, overrides: {} };
+
+const ops = () => h.state.calls.map((c) => (c.op === "rawQuery" ? c.sql!.slice(0, 34) : c.op));
+const insertArgs = () => h.state.calls.find((c) => c.sql?.startsWith("insert into saved_resumes"))?.args;
+
+beforeEach(() => {
+  h.state.calls = [];
+  h.state.savedRow = {
+    job_id: "job-1", role_title: "Head of RevOps", company: "Acme",
+    content: RESTORING, created_at: "2026-09-01T00:00:00Z",
+  };
+  h.state.draftContent = draftOf();
+  h.state.newestContent = undefined;
+  h.state.insertResult = { data: [{ id: "cp-1" }], error: null };
+  h.state.upsertError = null;
+  h.state.forceDuplicate = false;
+});
+
+describe("restoreSavedVersion", () => {
+  it("checkpoints the draft it is about to overwrite", async () => {
+    const res = await restoreSavedVersion("s1");
+    expect(res.error).toBeUndefined();
+    expect(res).toMatchObject({ jobId: "job-1", checkpointId: "cp-1" });
+  });
+
+  // Mutation: writing the checkpoint with kind "save", or with SAVE_RETENTION_DAYS.
+  // Both make the row indistinguishable from a deliberate Save — the demotion's
+  // `kind = 'checkpoint'` filter would then demote real saves, and the 60-day
+  // window would be claimed by an auto row.
+  it("writes the checkpoint as kind 'checkpoint' with the 30-day window", async () => {
+    const before = Date.now();
+    await restoreSavedVersion("s1");
+    const args = insertArgs()!;
+    expect(args[11]).toBe("checkpoint");
+    const days = (Date.parse(args[8] as string) - before) / 86_400_000;
+    expect(days).toBeGreaterThan(29.9);
+    expect(days).toBeLessThan(30.1);
+  });
+
+  // Mutation: dropping `pageMargin` from the insertSavedRow call. page_margin lives
+  // OUTSIDE the captured HTML (migration 020's whole reason), so a checkpoint of a
+  // 0.5in draft silently prints and downloads at the 0.68in default.
+  it("carries the draft's page margin onto the checkpoint row", async () => {
+    h.state.draftContent = draftOf({ pageMargin: "0.5in" });
+    await restoreSavedVersion("s1");
+    expect(insertArgs()![9]).toBe("0.5in");
+  });
+
+  // Mutation: moving the demotion above the tailored_resumes upsert. Demoting first
+  // moves the previous checkpoint — potentially the only copy of an EARLIER draft —
+  // from 30 days to 3 for a restore that then fails and never happened.
+  it("demotes older checkpoints strictly after the draft upsert succeeds", async () => {
+    await restoreSavedVersion("s1");
+    const o = ops();
+    const upsert = o.indexOf("upsert:tailored_resumes");
+    const demote = o.findIndex((s) => s.startsWith("update saved_resumes set expires"));
+    expect(upsert).toBeGreaterThan(-1);
+    expect(demote).toBeGreaterThan(upsert);
+  });
+
+  // Mutation: removing BOTH checkpoint guards (the `error !== undefined` return and the
+  // `id === undefined` return). This is the data-loss path — the upsert then overwrites the
+  // working draft with no copy of it anywhere. Deleting only the first guard does NOT fail
+  // this test, and that is a fact about the code rather than a hole in the test: the second
+  // guard catches the same case, since a failed insert also leaves `id` undefined.
+  it("restores nothing when the checkpoint could not be written", async () => {
+    h.state.insertResult = { data: [], error: { message: "disk full" } };
+    const res = await restoreSavedVersion("s1");
+    expect(res.error).toBeDefined();
+    expect(res.jobId).toBeUndefined();
+    expect(ops()).not.toContain("upsert:tailored_resumes");
+  });
+
+  // Mutation: same path, the OTHER outcome of insertSavedRow — {duplicateOf} rather
+  // than {error}, which leaves `id` undefined. Unreachable only because allowDuplicate
+  // is set today; dropping that flag makes the draft destroyable through this branch.
+  it("restores nothing when the checkpoint insert returns no id", async () => {
+    h.state.forceDuplicate = true;
+    const res = await restoreSavedVersion("s1");
+    expect(res.error).toBeDefined();
+    expect(ops()).not.toContain("upsert:tailored_resumes");
+  });
+
+  // Mutation: deleting the `shouldCheckpoint` conjunct at the callsite. A draft that
+  // already equals the newest live saved row needs no second copy of itself.
+  it("writes no checkpoint when the draft already equals the newest saved row", async () => {
+    h.state.newestContent = h.state.draftContent;
+    const res = await restoreSavedVersion("s1");
+    expect(res.checkpointId).toBeUndefined();
+    expect(ops()).not.toContain("insert into saved_resumes");
+    expect(ops()).toContain("upsert:tailored_resumes");
+  });
+
+  // Mutation: deleting the `restoreWouldChangeNothing` conjunct at the callsite. A
+  // back-navigate and a second click on the same version then writes a junk checkpoint
+  // holding S and demotes the real one — the only copy of the original draft — to 3 days.
+  it("writes no checkpoint when restoring what the draft already holds", async () => {
+    h.state.draftContent = RESTORING;
+    const res = await restoreSavedVersion("s1");
+    expect(res.checkpointId).toBeUndefined();
+    expect(ops()).not.toContain("insert into saved_resumes");
+  });
+
+  // Mutation: moving the demotion above the upsert — it would then run even though the
+  // restore failed. The checkpoint id is returned alongside the error deliberately: the
+  // checkpoint is real and committed, and the caller must not present it as lost.
+  it("returns the checkpoint id and demotes nothing when the upsert fails", async () => {
+    h.state.upsertError = { message: "conflict" };
+    const res = await restoreSavedVersion("s1");
+    expect(res.error).toBeDefined();
+    expect(res.checkpointId).toBe("cp-1");
+    expect(ops().some((s) => s.startsWith("update saved_resumes set expires"))).toBe(false);
   });
 });
