@@ -22,6 +22,10 @@ export interface ResumeBullet {
   tail?: boolean;
   /** May contain a literal <strong>...</strong> span around one figure. */
   text: string;
+  /** Metadata for the coverage panel. renderBody ignores unknown fields. */
+  origin?: "overlay";
+  /** Metadata for the coverage panel. renderBody ignores unknown fields. */
+  edited?: boolean;
 }
 
 export interface ResumeRole {
