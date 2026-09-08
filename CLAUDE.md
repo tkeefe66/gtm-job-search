@@ -114,6 +114,71 @@ audit and a dedicated sweep still missed four.
 
 **Compensation**: `salary_range` is stored verbatim as the posting wrote it and parsed at READ time by `parseSalaryRange` in `lib/salary.ts` — base preferred over OTE, so `$280K–$325K (base); $305K–$365K OTE` is a $280–325K role. The optional floor lives in `app_settings` under `compFloor`. It filters `/roles` on DISPLAY only (`lib/salary-filter.ts`: two independent toggles, both off by default; `ote` is its own bucket and is never hidden as "below") — no job is ever dropped or hidden at ingest because of pay. `scoreFit` receives both the posting's stated range and the floor. **The boundary is strict (`>`, not `>=`): a band whose top only REACHES the floor is below it** — `$150K–$200K` fails a $200K floor, `$177K–$221K` clears it. That rule lives in TWO places and they must not drift: `salaryBucketFor` (the display bucket) and `compScoringClause` + `aiGtmCompCarveOut` in `lib/fit-prompt.ts` (the scoring rule). Changing one alone produces a role the table hides while its fit score still reads 4 — and the carve-out needs it too, because it outranks the compensation clause. Because that changed `scoreFit`'s inputs on deploy rather than on an edit, `/settings` offers a one-time rescore gated on the `comp_scoring_rescored_at` stamp (`compRescoreOffer` in `lib/rescore-progress.ts`); the pass itself is `runRescorePass`, never a hand-rolled loop.
 
+**Posting detail lives in a `posting jsonb` column, and `posting is null` is load-bearing.**
+Ingest used to produce the posting's substance, hand it to `scoreFit`, and throw it away:
+the row stored `""` where the model had seen real text, so every rescore
+(`scoringArgsFor`, `lib/rescore-scope.ts`) was strictly impoverished — and the rescore's
+score is the one that persists. `ingestRoles` now writes `key_skills`,
+`company_description`, `department` and `posting` (requirements + nice-to-haves,
+`lib/posting-detail.ts`, which REPAIRS whatever the model returned rather than rejecting
+it — nothing normalizes a role array, every path casts `parsed as Role[]`). The column is
+NULLABLE WITH NO DEFAULT on purpose: `posting is null` is literally the backfill's "thin"
+predicate, so a `default '{}'` would make every pre-existing row look enriched and the
+backfill would skip the whole table. `db/migrations/017_posting_detail.sql`, applied to
+production 2026-09-07. Read it as `job.posting ?? null` everywhere — `getJobs` and
+`repairJobLinks` both `select *` into `Job`, and the ES5 build does not catch
+`job.posting.requirements` against a null. The structural guard is
+`INGEST_EXEMPT_COLUMNS`: a test captures `addJob`'s real argument and asserts every
+`SCORING_INPUT_COLUMNS` entry outside that set is written, so a column a rescore reads and
+ingest forgets is a failing test rather than a silent drift. Only `arr`, `exit_signal` and
+`backer` are exempt — hand-entered from the discovered-startup context, with no producer
+anywhere.
+
+**The enrich backfill (`app/actions/enrich.ts`, the "Enrich roles" button on `/roles`)
+reads ONE posting per row, and every bound on it is deliberate.** One plain HTTP fetch
+plus one NON-SEARCH model call per row; it must NEVER escalate to the `web_search` tier,
+which would turn a free-tier backfill into a billed search across the whole table — a JS
+shell is skipped and reported instead. Bounded per BATCH, not per pass, because
+`withBudget` reserves and checks the ceiling exactly ONCE per call: N calls inside one
+scope pass a single check at row 0 and then bill regardless, and sixty rows of
+(fetch + call) would not answer inside Railway's 300s no-data edge timeout anyway, losing
+the report of what was spent. Paging is by CURSOR (`enrichBatch`), NOT the rescore's
+`passStartedAt`: an enriched row stops matching `posting is null` on its own but a BLOCKED
+one never does, so re-reading the thin set would hand every later batch the same blocked
+rows and never drain. The guardrail (`enrichGate`, `lib/enrich-scope.ts`) is POSITIVE
+EVIDENCE OF WRONGNESS, and its aggregator branch comes FIRST and ignores the verification:
+`verifyPostingLink` answers `notApplicable` for a reseller link as well as for a company
+careers site, and a reseller answers 200 with plausible content long after the req closed,
+so "proceed" would store fiction. A `relink` is WRITTEN before the corrected URL is read,
+through `relinkPatch` (`lib/relink.ts`) — the one copy of the first-relink-only rule, now
+shared with `repairJobLinks`' two call sites. The action carries its OWN
+`readOnboardedAtFor` check: a page guard is not coverage for a Server Action.
+`emptySearchReason` is deliberately not the gate — it refuses on an empty fit brain, which
+enrichment does not read.
+
+**`readPostingPage`, not `classifyFetchOutcome`, judges a single posting.** The crawler's
+classifier delegates to `isJsShell`, whose second clause requires three job LINKS — the
+right question for a careers LISTING and the wrong one for a posting, which links to one
+job or none. Using it here classified every real posting as a shell and skipped the entire
+table while reporting a clean pass. `readPostingPage` (`lib/page-extract.ts`) keeps only
+the length test, which is the half that actually detects an unrendered SPA. Related:
+`fetchPage` and `fetchAllowed` now live together in `lib/fetch-page.ts` and neither is
+exported without the other, because two copies of the robots rule would be a policy
+regression rather than a bug — silent, and visible only to the site being fetched. Gate
+BEFORE the fetch, never after; a robots.txt that could not be READ is not permission.
+
+**Enrichment offers a rescore, gated on server state at both ends.** A row that just
+gained real `key_skills` and `company_description` carries a `fit_score` computed from
+strictly less than a rescore would now use. `enrichRescoreOffer`
+(`lib/rescore-progress.ts`) shows while any row's `posting.enrichedAt` is STRICTLY newer
+than the `enrich_rescored_at` setting — `>=` would re-offer a rescore already paid for,
+forever, which is the `compFloor` boundary hazard in the same shape and a test bites on
+it. `ENRICH_RESCORED_AT_KEY` is standalone, NOT a member of `SETTING_KEYS`, for the same
+reason the other three stamps are not. A drained pass stamps BOTH markers: one
+`runRescorePass` re-scores every scored row through the same `scoreFit`, so stamping only
+the trigger that raised the prompt would bill a second identical pass for nothing. Design
+and the two places the spec was wrong: `docs/superpowers/specs/2026-09-07-posting-detail-design.md`.
+
 **The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → the URL-verification and fit-scoring block lives in `lib/ingest-roles.ts` (shared with the crawler and role search below), which liveness-checks every `job_url` in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots), saves dead roles with status `"Posting Closed"` and skips fit-scoring for them, and saves live ones as `"New"`, `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
 
 **Role-first discovery**: `app/actions/role-search.ts` searches for roles by title
