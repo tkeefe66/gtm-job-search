@@ -144,10 +144,12 @@ export default function TailorPanel({
     tailor();
   }
 
-  // The one place a chat turn reaches TailorPanel's own state. Only ChatPanel
-  // decides WHEN to call this (a turn whose `applied` is non-empty) — this
-  // just mirrors resume.ts's tailor() success path and marks the document
-  // dirty, since the change has not gone through Save yet.
+  // The one place a chat turn — or an accepted bullet — reaches TailorPanel's
+  // own state. Only ChatPanel decides WHEN to call this: a turn the SERVER
+  // reported as `changedDocument` (lib/resume-ops.ts), never `applied.length`,
+  // which counts operations rather than changes. This just mirrors resume.ts's
+  // tailor() success path and marks the document dirty, since the change has
+  // not gone through Save yet.
   function onChatApplied(next: {
     career: CareerRecord;
     selection: ResumeSelection;

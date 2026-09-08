@@ -15,6 +15,12 @@ import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 const DIRTY_CONFIRM =
   "You have unsaved edits to this document. Apply this change and discard them?";
 
+// Deliberately different wording from DIRTY_CONFIRM: by the time this is
+// asked, the bullet is already accepted and placed, so the only thing at
+// stake is whether the document on screen is redrawn from it.
+const ACCEPT_DIRTY_CONFIRM =
+  "That bullet was added. Showing it means redrawing the document and discarding your unsaved edits. Redraw it now?";
+
 // summary edits are ARCHITECTURALLY forced onto every positioning variant —
 // effectiveCareer runs before selectBullets picks a variant, so a set_text on
 // "summary" cannot help but overwrite what every variant would otherwise show.
@@ -176,7 +182,25 @@ export default function ChatPanel({
       // The accepted bullet is placed on the page, not merely filed in the
       // career record — otherwise Accept removes a button and changes nothing
       // else, on screen or after a reload. The action returns the same shape
-      // a chat turn does, so it lands through the same path.
+      // a chat turn does, so it lands through the same path — INCLUDING the
+      // re-render that discards unsaved hand edits, which is why the same
+      // guard the send path carries applies here too.
+      //
+      // The confirm sits AFTER the action, not before it, and the two
+      // questions genuinely differ: accepting a bullet into the career
+      // overlay is durable, useful on its own, and nothing the user should
+      // have to give up to keep an unsaved edit. So the accept always runs
+      // and always lands; only the RE-RENDER is negotiable. Declining leaves
+      // the hand-edited document exactly as it is and says where the bullet
+      // went, rather than silently diverging from the row that was just
+      // written.
+      if (dirty && !window.confirm(ACCEPT_DIRTY_CONFIRM)) {
+        setTranscriptNote(
+          "That bullet was added to your career record and placed on the résumé, but the " +
+            "document on screen still shows your unsaved edits. Save them, then reload to see it."
+        );
+        return;
+      }
       if (res.career && res.selection && res.overrides && res.coverage) {
         onApplied({
           career: res.career,
