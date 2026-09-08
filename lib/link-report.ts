@@ -46,3 +46,26 @@ export function splitUnclear<T extends { reason: UnclearReason }>(
     unresolved: rows.filter((r) => r.reason === "unresolved"),
   };
 }
+
+/**
+ * Which report rows survive a bulk move.
+ *
+ * The rule is per-ROW, not per-report, and that distinction is the whole
+ * defect this replaced: the component filtered the entire list down to the rows
+ * that FAILED, so a clean move of six rows emptied the report and took three
+ * untouched rows with it. A row is removed only when it was BOTH acted on and
+ * saved — the ones that failed stay so the retry is one click, and the ones
+ * nobody touched were never this button's business.
+ *
+ * Order is preserved: a list that reshuffles under the cursor after a click is
+ * its own bug.
+ */
+export function remainingUnclear<T extends { id: string }>(
+  rows: T[],
+  attemptedIds: string[],
+  failedIds: string[]
+): T[] {
+  const attempted = new Set(attemptedIds);
+  const failed = new Set(failedIds);
+  return rows.filter((r) => !attempted.has(r.id) || failed.has(r.id));
+}

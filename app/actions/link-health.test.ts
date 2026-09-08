@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   /** What updateJob returns. `""` is the unreachable-database shape. */
   updateError: undefined as string | undefined,
   urlStatus: "live" as "live" | "dead" | "unknown",
+  robotsAllows: true,
+  page: null as string | null,
 }));
 
 vi.mock("@/lib/supabase", () => ({
@@ -44,6 +46,10 @@ vi.mock("@/app/actions/jobs", () => ({
   }),
 }));
 vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => h.urlStatus) }));
+vi.mock("@/lib/fetch-page", () => ({
+  fetchAllowed: vi.fn(async () => h.robotsAllows),
+  fetchPage: vi.fn(async () => h.page),
+}));
 vi.mock("@/lib/resolve-job-link", () => ({
   resolveEmployerLink: vi.fn(async () => null),
   verifyPostingLink: vi.fn(async () => h.verified),
@@ -53,6 +59,7 @@ vi.mock("@/lib/resolve-job-link", () => ({
 import { repairJobLinks } from "./link-health";
 import { updateJob } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
+import { fetchPage } from "@/lib/fetch-page";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 const STALE = "https://jobs.ashbyhq.com/baseten/b621b620-85eb-4f73-8d77-e4ebd458b02d";
@@ -77,6 +84,8 @@ beforeEach(() => {
   h.verified = { kind: "notApplicable" };
   h.updateError = undefined;
   h.urlStatus = "live";
+  h.robotsAllows = true;
+  h.page = null;
   vi.clearAllMocks();
 });
 
@@ -305,5 +314,59 @@ describe("a posting its own board no longer carries is closed", () => {
     const report = await repairJobLinks();
 
     expect(report.closedAbsent).toBe(0);
+  });
+});
+
+// The gap two production rows exposed on 2026-09-07: an aggregator answers 200
+// while its own page says the job is gone. checkJobUrl closes only on a
+// definitive 404/410, so those rows sat as New indefinitely — one BuiltIn page
+// read "Sorry, this job was removed at 04:07 a.m. (UTC)" and still counted as
+// live. Costs one GET per row and no Claude tokens.
+describe("a soft 404 — the page says gone, the server says 200", () => {
+  test("the role is closed on the page's own words", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/marketing-operations-director/8040507" })];
+    h.page = "<p>Sorry, this job was removed at 04:07 a.m. (UTC) on Thursday, Jan 08, 2026</p>";
+
+    const report = await repairJobLinks();
+
+    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(report.closedRemoved).toBe(1);
+  });
+
+  test("a page that says nothing of the kind closes nothing", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+    h.page = "<p>Apply now — this job is remote.</p>";
+
+    const report = await repairJobLinks();
+
+    expect(vi.mocked(updateJob)).not.toHaveBeenCalled();
+    expect(report.closedRemoved).toBe(0);
+  });
+
+  // Same rule the crawler follows and the same reason it lives in one module:
+  // a robots.txt that could not be READ is not permission.
+  test("robots is consulted before the page is fetched", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+    h.robotsAllows = false;
+    h.page = "<p>this job was removed</p>";
+
+    const report = await repairJobLinks();
+
+    expect(vi.mocked(fetchPage)).not.toHaveBeenCalled();
+    expect(report.closedRemoved).toBe(0);
+  });
+
+  // A row already closed by the board or by a hard 404 must not be fetched
+  // again and must not be counted twice.
+  test("a row already closed is not fetched at all", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+    h.urlStatus = "dead";
+    h.page = "<p>this job was removed</p>";
+
+    const report = await repairJobLinks();
+
+    expect(vi.mocked(fetchPage)).not.toHaveBeenCalled();
+    expect(report.closed).toBe(1);
+    expect(report.closedRemoved).toBe(0);
   });
 });

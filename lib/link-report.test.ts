@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { splitUnclear, type UnclearReason } from "./link-report";
+import { splitUnclear, type UnclearReason, remainingUnclear } from "./link-report";
 
 const row = (id: string, reason: UnclearReason) => ({ id, reason });
 
@@ -55,3 +55,40 @@ describe("splitUnclear", () => {
     expect(res.ambiguous.map((r) => r.id)).toEqual(["c"]);
   });
 });
+
+// The defect this exists for, seen in production 2026-09-07: clicking "Move all
+// 6 to Out" emptied the whole report, taking three rows the user had not
+// touched with it. The rule was written in the component as
+// `unclear.filter((r) => failedIds.has(r.id))` — keep only what FAILED — which
+// is right for the rows that were acted on and wrong for every other row in the
+// report. Out here it is a rule with a test instead of an expression nothing
+// can see.
+describe("what stays in the report after a bulk move", () => {
+  const rows = [
+    { id: "a", reason: "empty" as const },
+    { id: "b", reason: "empty" as const },
+    { id: "c", reason: "unresolved" as const },
+  ];
+
+  test("rows that were never acted on stay, whatever happened to the others", () => {
+    const left = remainingUnclear(rows, ["a", "b"], []);
+
+    expect(left.map((r) => r.id)).toEqual(["c"]);
+  });
+
+  test("a row that was acted on and saved is gone — a second click would rewrite it", () => {
+    expect(remainingUnclear(rows, ["a"], []).map((r) => r.id)).toEqual(["b", "c"]);
+  });
+
+  test("a row that was acted on and FAILED stays, so the retry is one click", () => {
+    expect(remainingUnclear(rows, ["a", "b"], ["b"]).map((r) => r.id)).toEqual(["b", "c"]);
+  });
+
+  test("acting on nothing changes nothing", () => {
+    expect(remainingUnclear(rows, [], []).map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+
+  test("order is preserved, so the list does not reshuffle under the cursor", () => {
+    expect(remainingUnclear(rows, ["b"], ["b"]).map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+})

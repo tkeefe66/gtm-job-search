@@ -10,6 +10,8 @@ import type { BoardCache } from "@/lib/resolve-job-link";
 import { relinkPatch } from "@/lib/relink";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { bucketFor } from "@/lib/job-statuses";
+import { deadPostingMarker } from "@/lib/dead-posting";
+import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import type { UnclearReason } from "@/lib/link-report";
 import type { Job } from "@/lib/types";
 
@@ -77,6 +79,12 @@ export interface LinkRepairReport {
    */
   closedAbsent: number;
   /**
+   * Rows whose PAGE says the posting is gone while its server answers 200 —
+   * the aggregator soft-404. Its own counter for the same reason closedAbsent
+   * is: the evidence is a different kind, and one number would hide which.
+   */
+  closedRemoved: number;
+  /**
    * Every row this pass could not decide, with the reason on each. Three live
    * here (see UnclearReason): several postings could be this role, the board
    * lists nothing at all, or no employer board was found to check against.
@@ -97,6 +105,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     closed: 0,
     closedUnlisted: 0,
     closedAbsent: 0,
+    closedRemoved: 0,
     unclear: [],
   };
 
@@ -141,6 +150,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       if (r.closed) report.closed++;
       if (r.closedUnlisted) report.closedUnlisted++;
       if (r.closedAbsent) report.closedAbsent++;
+      if (r.closedRemoved) report.closedRemoved++;
       // Not `if (r.unclear)` alone: the 404 check below repairOne's board
       // lookup can close a row that the lookup had already set aside as
       // undecidable. Listing it would offer the user a decision that has
@@ -152,7 +162,8 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
   console.log(
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
       `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted) + ` +
-      `${report.closedAbsent} (gone from its own board), ` +
+      `${report.closedAbsent} (gone from its own board) + ` +
+      `${report.closedRemoved} (page says removed), ` +
       `unclear ${report.unclear.length} ` +
       `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved), ` +
       `${report.closedAbsent} of those found by a slug read from the link`
@@ -171,6 +182,8 @@ interface RepairOutcome {
    * title. The role is CLOSED on this now; see the branch below.
    */
   closedAbsent?: boolean;
+  /** The page itself said the posting is gone, whatever its status code was. */
+  closedRemoved?: boolean;
 }
 
 async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
@@ -312,5 +325,44 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
     else console.error(`repairJobLinks: ${failure}`);
   }
 
+  // The SOFT 404, and the only thing that catches it. An aggregator answers 200
+  // with a page that says the job is gone — a real BuiltIn row read "Sorry,
+  // this job was removed at 04:07 a.m. (UTC)" while every status-code check
+  // called it live. Costs one GET and no Claude tokens, and only runs for a row
+  // nothing above has already closed.
+  //
+  // Not everything is reachable this way: ZipRecruiter answers 403 to this
+  // fetch, so its dead rows stay open and no free signal exists for them.
+  if (!out.closed && !out.closedAbsent && !out.closedUnlisted) {
+    const removed = await removalMarker(liveUrl);
+    if (removed !== null) {
+      const failure = describeWriteFailure(
+        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        `close ${job.company} / ${job.role_title}`
+      );
+      if (failure === undefined) {
+        out.closedRemoved = true;
+        console.log(
+          `repairJobLinks: ${job.company} / ${job.role_title} — page says "${removed}", closed`
+        );
+      } else {
+        console.error(`repairJobLinks: ${failure}`);
+      }
+    }
+  }
+
   return out;
+}
+
+/**
+ * The phrase a posting's page uses to say it is gone, or null.
+ *
+ * Gated on robots BEFORE the fetch, the same rule the crawler follows and the
+ * reason fetchAllowed and fetchPage live in one module: a robots.txt that could
+ * not be read is not permission.
+ */
+async function removalMarker(url: string): Promise<string | null> {
+  if (!(await fetchAllowed(url))) return null;
+  const html = await fetchPage(url);
+  return html === null ? null : deadPostingMarker(html);
 }

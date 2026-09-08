@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
 import { hasLiveSession } from "@/lib/client-session";
-import { splitUnclear } from "@/lib/link-report";
+import { remainingUnclear, splitUnclear } from "@/lib/link-report";
 import { scoreFit } from "@/app/actions/parse-role";
 import { type Job } from "@/lib/types";
 import {
@@ -241,16 +241,22 @@ export default function RolesTable({
   // part of the report and the least urgent — they are why a number is what it
   // is, not something to act on now.
   const [blockedOpen, setBlockedOpen] = useState(false);
+  const [unclearOpen, setUnclearOpen] = useState(false);
 
   /**
    * The report's undecidable rows, split by reason. Computed once per report
    * rather than per group: the banner asks for it twice, and splitUnclear walks
    * the list once for each group it returns.
    */
-  const unclearGroups = useMemo(
-    () => splitUnclear(linkReport?.unclear ?? []),
-    [linkReport]
-  );
+  // Ordered, not grouped. Like reasons still sit together — that is all the
+  // grouping ever bought — but the list is one list with one select-all, so
+  // "deal with all of this" is a single click rather than three.
+  const orderedUnclear = useMemo(() => {
+    const g = splitUnclear(linkReport?.unclear ?? []);
+    return [...g.empty, ...g.ambiguous, ...g.unresolved];
+  }, [linkReport]);
+
+;
 
   /**
    * Refetches the table and reports its own failure. Never throws — a load
@@ -573,6 +579,7 @@ export default function RolesTable({
   async function handleCheckLinks() {
     setCheckingLinks(true);
     setLinkReport(null);
+    setUnclearOpen(false);
     try {
       const report = await repairJobLinks();
       setLinkReport(report);
@@ -587,6 +594,7 @@ export default function RolesTable({
         closed: 0,
         closedUnlisted: 0,
         closedAbsent: 0,
+        closedRemoved: 0,
         unclear: [],
         error: describeWriteFailure(
           err instanceof Error ? err.message : String(err),
@@ -733,14 +741,22 @@ export default function RolesTable({
     const targets = jobs.filter((j) => ids.has(j.id));
     if (targets.length === 0) return;
 
-    const failedIds = new Set(await applyStatusTo(targets, "Posting Closed"));
-    // Only the rows that failed stay in the report. The ones that saved are
-    // decided, and leaving them listed would invite a second click that
-    // re-writes a row already closed.
+    const failedIds = await applyStatusTo(targets, "Posting Closed");
+    // remainingUnclear, not a filter written here: the rule is per-ROW, and the
+    // version that lived in this line filtered the WHOLE report down to the
+    // rows that failed — so a clean move of six emptied the list and took three
+    // untouched rows with it.
     setLinkReport((prev) =>
       prev === null
         ? prev
-        : { ...prev, unclear: prev.unclear.filter((r) => failedIds.has(r.id)) }
+        : {
+            ...prev,
+            unclear: remainingUnclear(
+              prev.unclear,
+              targets.map((t) => t.id),
+              failedIds
+            ),
+          }
     );
   }
 
@@ -823,6 +839,8 @@ export default function RolesTable({
                     ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
                   {linkReport.closedAbsent > 0 &&
                     ` Closed ${linkReport.closedAbsent} whose own board no longer carries the posting.`}
+                  {linkReport.closedRemoved > 0 &&
+                    ` Closed ${linkReport.closedRemoved} whose page says the job was removed.`}
                   {/* "Everything checked out" has to mean EVERYTHING. The
                       unresolved rows used to be counted in a clause here and
                       nowhere else; they are listed below now, with the other
@@ -831,6 +849,7 @@ export default function RolesTable({
                   {linkReport.relinked === 0 &&
                     linkReport.closed === 0 &&
                     linkReport.closedAbsent === 0 &&
+                    linkReport.closedRemoved === 0 &&
                     linkReport.closedUnlisted === 0 &&
                     linkReport.unclear.length === 0 &&
                     " Everything checked out."}
@@ -846,50 +865,63 @@ export default function RolesTable({
           </div>
 
           {linkReport.unclear.length > 0 && (
-            <div className="mt-3 space-y-3 border-t border-slate pt-3">
-              {/* One group per reason, each row saying what is wrong with
-                  itself. This was a single bucket reading "N could be more than
-                  one posting on the employer's board" — a sentence that was
-                  false for the empty-board rows and invisible for the rows we
-                  could not resolve at all, which were only a count.
-
-                  Every row hedges the same way its caveat does. An earlier pass
-                  stated "their board is empty" and then admitted underneath
-                  that the board might not be theirs, so the row asserted what
-                  the caveat withdrew. The hedge lives in one place now: the
-                  link says which board we FOUND, never whose it is.
-
-                  Nothing here is auto-closed. Every board behind these outcomes
-                  was found by guessing a slug from the company name. */}
-              {unclearGroups.empty.length > 0 && (
-                <UnclearGroup
-                  rows={unclearGroups.empty}
-                  clause="seems to no longer be listed"
-                  linkLabel="the board we found"
-                  outLabel={labelFor(statuses, "Posting Closed")}
-                  onMoveOut={moveUnclearOut}
-                  busy={applying}
-                />
-              )}
-              {unclearGroups.ambiguous.length > 0 && (
-                <UnclearGroup
-                  rows={unclearGroups.ambiguous}
-                  clause="could be one of several postings"
-                  linkLabel="the board we found"
-                  outLabel={labelFor(statuses, "Posting Closed")}
-                  onMoveOut={moveUnclearOut}
-                  busy={applying}
-                />
-              )}
-              {unclearGroups.unresolved.length > 0 && (
-                <UnclearGroup
-                  rows={unclearGroups.unresolved}
-                  clause="— only a job-board copy"
-                  linkLabel="where it points"
-                  outLabel={labelFor(statuses, "Posting Closed")}
-                  onMoveOut={moveUnclearOut}
-                  busy={applying}
-                />
+            <div className="mt-3 border-t border-slate pt-3">
+              {/* ONE list and ONE select-all, not a section per reason. The
+                  three-group version asked the reader to understand the
+                  difference between an empty board, an ambiguous match and an
+                  unfindable board before they could clear anything — three
+                  headings, three buttons, and no single action for "deal with
+                  all of this". Each row still says which case it is, in muted
+                  text, because that is what a row needs to be judged; the
+                  GROUPING is what nobody needed. */}
+              <button
+                onClick={() => setUnclearOpen((v) => !v)}
+                className="text-xs text-ink/50 underline transition hover:text-ink"
+              >
+                {unclearOpen ? "Hide" : "Show"} the {linkReport.unclear.length} we could
+                not decide
+              </button>
+              {unclearOpen && (
+                <>
+                  <ul className="mt-2 space-y-1 text-sm text-ink">
+                    {orderedUnclear.map((r) => (
+                      <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span>
+                          <span className="font-medium">{r.company}</span> {r.role_title}{" "}
+                          <span className="text-xs text-ink/50">{UNCLEAR_NOTE[r.reason]}</span>{" "}
+                          <a
+                            href={r.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-ink/50 underline underline-offset-2 hover:text-ink"
+                          >
+                            open
+                          </a>
+                        </span>
+                        <MoveOutButton
+                          label="Move to Out"
+                          title={`Sets this role to ${labelFor(statuses, "Posting Closed")}`}
+                          disabled={applying}
+                          onClick={() => void moveUnclearOut([r])}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                  {/* Never automatic: every board behind these was found by
+                      GUESSING a slug from the company name, so closing without
+                      a human looking would eventually kill a live role against
+                      a stranger's board. */}
+                  {linkReport.unclear.length > 1 && (
+                    <div className="mt-2">
+                      <MoveOutButton
+                        label={`Move all ${linkReport.unclear.length} to Out`}
+                        title={`Sets all ${linkReport.unclear.length} roles to ${labelFor(statuses, "Posting Closed")}`}
+                        disabled={applying}
+                        onClick={() => void moveUnclearOut(linkReport.unclear)}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1450,78 +1482,12 @@ function MoveOutButton({
   );
 }
 
-function UnclearGroup({
-  rows,
-  clause,
-  linkLabel,
-  outLabel,
-  onMoveOut,
-  busy,
-}: {
-  rows: { id: string; company: string; role_title: string; url: string }[];
-  clause: string;
-  linkLabel: string;
-  outLabel: string;
-  onMoveOut: (rows: { id: string }[]) => void;
-  busy: boolean;
-}) {
-  // EVERY row carries its own button, in the same place, whatever the group's
-  // size — a one-row group that put its button underneath instead made the
-  // single most common case the odd one out. The group button is only ever the
-  // select-all, so it appears only when there is more than one thing to select.
-  const many = rows.length > 1;
-  return (
-    <div>
-      {/* The rows lead, and each says what is wrong with ITSELF. The count-led
-          sentence this replaced ("1 point at an employer board that lists no
-          jobs at all…") made the reader work out which row it meant and what to
-          do about it, for a list that is usually one line long. */}
-      <ul className="space-y-1 text-sm text-ink">
-        {rows.map((r) => (
-          <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>
-              <span className="font-medium">{r.company}</span> {r.role_title} {clause} &mdash;{" "}
-              <a
-                href={r.url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-ink/60 underline underline-offset-2 hover:text-ink"
-              >
-                {linkLabel}
-              </a>
-            </span>
-            <MoveOutButton
-              label="Move to Out"
-              title={`Sets this role to ${outLabel}`}
-              disabled={busy}
-              onClick={() => onMoveOut([r])}
-            />
-          </li>
-        ))}
-      </ul>
-      {/* Acts here, on these rows. Never automatic: every board behind these
-          outcomes was found by GUESSING a slug from the company name, so
-          closing without a human looking would eventually kill a live role
-          against a stranger's board.
-
-          The caveat that used to sit beside this button — "we matched that
-          board by company name, so it may not be theirs" — is gone. It said in
-          a sentence what the row already says in its wording: "seems to no
-          longer be listed", against "the board we found". Hedging twice reads
-          as a warning, and a warning next to every button is one nobody sees. */}
-      {many && (
-        <div className="mt-2">
-          <MoveOutButton
-            label={`Move all ${rows.length} to Out`}
-            title={`Sets all ${rows.length} roles to ${outLabel}`}
-            disabled={busy}
-            onClick={() => onMoveOut(rows)}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
+/** What each undecided row's reason means, in the row itself. */
+const UNCLEAR_NOTE: Record<string, string> = {
+  empty: "the board we found lists nothing",
+  ambiguous: "several postings there could be this role",
+  unresolved: "only a job-board copy, no employer posting found",
+};
 
 // When this role was found. Carries BOTH the calendar date and the age: the
 // date is the fact ("was this before or after I talked to them?"), the age is
