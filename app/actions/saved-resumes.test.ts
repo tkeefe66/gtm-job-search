@@ -36,6 +36,11 @@ const h = vi.hoisted(() => {
     insertArgs: null as unknown[] | null,
     listRow: null as Record<string, unknown> | null,
     getRow: null as Record<string, unknown> | null,
+    // undefined means "no draft row found" (mirrors data.length === 0 in the
+    // real driver), distinct from a draft that legitimately stored null
+    // content — see the tailored_resumes branch below.
+    draftContent: undefined as unknown,
+    sourceRow: null as Record<string, unknown> | null,
   };
   return { state };
 });
@@ -50,12 +55,24 @@ vi.mock("@/lib/supabase", () => ({
     if (sql.indexOf("delete from saved_resumes") === 0) {
       return { data: [], error: null }; // opportunistic purge inside listSavedResumes
     }
+    if (sql.indexOf("select content from tailored_resumes") === 0) {
+      // saveResumeFromDraft's server-side read of the draft's BASE selection.
+      return {
+        data: h.state.draftContent !== undefined ? [{ content: h.state.draftContent }] : [],
+        error: null,
+      };
+    }
+    if (sql.indexOf("select job_id, role_title, company, content from saved_resumes") === 0) {
+      // saveResumeAsNewVersion's read of the SOURCE row being versioned.
+      return { data: h.state.sourceRow ? [h.state.sourceRow] : [], error: null };
+    }
     if (sql.indexOf("select id") === 0 && sql.indexOf("html") !== -1) {
       // getSavedResume's select (the only one carrying html/design_version)
       return { data: h.state.getRow ? [h.state.getRow] : [], error: null };
     }
     if (sql.indexOf("select id") === 0) {
-      // listSavedResumes' select
+      // listSavedResumes' select, and insertSavedRow's own duplicate-check
+      // select, which shares the "select id from saved_resumes" prefix.
       return { data: h.state.listRow ? [h.state.listRow] : [], error: null };
     }
     return { data: [], error: null };
@@ -80,6 +97,8 @@ beforeEach(() => {
   h.state.insertArgs = null;
   h.state.listRow = null;
   h.state.getRow = null;
+  h.state.draftContent = undefined;
+  h.state.sourceRow = null;
 });
 
 describe("saved-resumes.ts refuses a non-admin actor", () => {
@@ -235,6 +254,117 @@ describe("saved-resumes.ts: page_margin", () => {
   });
 });
 
+// Fix round 1, I-1: the task's core invariant — content is read SERVER-SIDE
+// from tailored_resumes for a fresh save, and copied forward from the SOURCE
+// saved row (never the draft) for a new version — had no assertion at the
+// action layer. Before this block, insertSavedRow hardcoding content: null,
+// saveResumeFromDraft accepting a client-supplied content, and
+// saveResumeAsNewVersion reading the draft instead of the source row all
+// passed the whole file.
+describe("saved-resumes.ts: content and kind", () => {
+  beforeEach(() => {
+    auth.isAdmin = true;
+  });
+
+  // Index 10/11 of the insert's values list — see PAGE_MARGIN_ARG_INDEX's
+  // comment above for the full column order.
+  const CONTENT_ARG_INDEX = 10;
+  const KIND_ARG_INDEX = 11;
+
+  test("saveResumeFromDraft writes the draft's content, JSON-stringified, and kind \"save\"", async () => {
+    const sentinel = { totem: "draft-sentinel" };
+    h.state.draftContent = sentinel;
+
+    const res = await saveResumeFromDraft({
+      jobId: ID,
+      html: '<div class="rsm"></div>',
+      roleTitle: "VP RevOps",
+      company: "Acme",
+      allowDuplicate: true, // isolates the INSERT from the dup-check SELECT
+    });
+
+    expect(res.error).toBeUndefined();
+    const args = h.state.insertArgs as unknown[];
+    // Kills a hardcoded content: null — the tailored_resumes read must
+    // actually reach the insert.
+    expect(args[CONTENT_ARG_INDEX]).toBe(JSON.stringify(sentinel));
+    // Kills accepting content from the caller: nothing in the input above
+    // carries a `content` field, so a value here can only have come from the
+    // mocked tailored_resumes read.
+    expect(args[KIND_ARG_INDEX]).toBe("save");
+  });
+
+  test(
+    "saveResumeAsNewVersion writes the SOURCE row's job/role/company/content — " +
+      "never the draft's",
+    async () => {
+      const sourceSentinel = { totem: "source-sentinel" };
+      const draftSentinel = { totem: "draft-sentinel-should-not-appear" };
+      h.state.sourceRow = {
+        job_id: "job-src",
+        role_title: "Director of RevOps",
+        company: "Globex",
+        content: sourceSentinel,
+      };
+      // A correct implementation never queries tailored_resumes for this
+      // action at all. Setting a DIFFERENT, recognisable sentinel here is
+      // what makes the absence assertion below meaningful: a wrong
+      // implementation that reads the draft INSTEAD of (or in addition to)
+      // the source row would leak this string into the insert args.
+      h.state.draftContent = draftSentinel;
+
+      const res = await saveResumeAsNewVersion({
+        fromSavedId: "saved-1",
+        html: '<div class="rsm"></div>',
+        allowDuplicate: true,
+      });
+
+      expect(res.error).toBeUndefined();
+      const args = h.state.insertArgs as unknown[];
+      expect(args[1]).toBe("job-src");
+      expect(args[2]).toBe("Director of RevOps");
+      expect(args[3]).toBe("Globex");
+      expect(args[CONTENT_ARG_INDEX]).toBe(JSON.stringify(sourceSentinel));
+      // The one assertion that catches "reads the draft instead of the
+      // source row": a wrong implementation that happens to also satisfy the
+      // value checks above (e.g. by reading both and preferring the source)
+      // would still slip past them without this.
+      expect(args).not.toContain(JSON.stringify(draftSentinel));
+    }
+  );
+
+  test("saveResumeAsNewVersion: no such saved résumé", async () => {
+    h.state.sourceRow = null;
+
+    const res = await saveResumeAsNewVersion({
+      fromSavedId: "missing",
+      html: '<div class="rsm"></div>',
+    });
+
+    expect(res.error).toBe("Could not find that saved résumé.");
+    expect(h.state.insertArgs).toBeNull();
+  });
+
+  test("saveResumeAsNewVersion: refuses when the source row's job was deleted", async () => {
+    h.state.sourceRow = {
+      job_id: null,
+      role_title: "VP RevOps",
+      company: "Acme",
+      content: null,
+    };
+
+    const res = await saveResumeAsNewVersion({
+      fromSavedId: "orphaned",
+      html: '<div class="rsm"></div>',
+    });
+
+    expect(res.error).toBe(
+      "The tracked role this résumé came from was deleted, so it cannot be versioned."
+    );
+    expect(h.state.insertArgs).toBeNull();
+  });
+});
+
 describe("savedRowToSummary", () => {
   const row = {
     id: "s1",
@@ -258,6 +388,15 @@ describe("savedRowToSummary", () => {
     const s = savedRowToSummary(row);
     expect(s.hasContent).toBe(true);
     expect(Object.keys(s)).not.toContain("content");
+  });
+
+  // Fix round 1, M-3: without this, hasContent: true is hardcoded in the
+  // mapper and the test above can never fail. Pins `r.has_content === true`,
+  // which also correctly maps an undefined has_content (a pre-021 read that
+  // never selected the column) to false rather than throwing or defaulting
+  // to true.
+  it("maps has_content: false to hasContent: false", () => {
+    expect(savedRowToSummary({ ...row, has_content: false }).hasContent).toBe(false);
   });
 
   // Mutation this catches: defaulting kind to "save" in the mapper. A checkpoint
