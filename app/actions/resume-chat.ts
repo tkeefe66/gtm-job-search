@@ -31,6 +31,7 @@ import {
   type OverlayBullet,
 } from "@/lib/settings-store";
 import { loadResumeContext, type ResumeOverrides } from "@/app/actions/resume";
+import { effectiveSelection } from "@/lib/effective-selection";
 import type { PostingDetail } from "@/lib/posting-detail";
 import type { ResumeSelection, ThemeVocabulary } from "@/lib/resume-render/render";
 import themeVocabularyJson from "@/lib/resume-render/content/themes.json";
@@ -54,6 +55,7 @@ const TRUNCATED_REPLY =
 const UNREADABLE_REPLY = "Could not read that answer — try rephrasing your request.";
 const MODEL_FAILED_REPLY = "Could not reach the model — try again.";
 const NOT_TAILORED_REPLY = "Tailor this résumé before chatting about it.";
+const SAVE_FAILED_REPLY = "Could not save that change — try again.";
 
 interface TurnResult {
   reply: string;
@@ -64,6 +66,21 @@ interface TurnResult {
   coverage: CoverageReport | null;
   messages: StoredChatMessage[];
   error?: string;
+  /**
+   * Present ONLY when the document itself already saved successfully and the
+   * SEPARATE write that appends this turn to resume_chats then failed. Two
+   * writes with no shared transaction is an accepted limitation (see the
+   * success path below) — but the result must not describe that as `error`:
+   * every existing caller in this repo treats `error !== undefined` as "the
+   * turn failed, offer a retry" (TailorPanel.tsx's own
+   * `if (res.error !== undefined)` is the precedent), and a retried
+   * add_bullet or propose_career_bullet against a change that ALREADY landed
+   * would duplicate it. `selection`/`overrides`/`coverage`/`applied` above
+   * and `messages` below all already reflect the real, saved outcome — this
+   * field is only a signal that the transcript entry may not survive a
+   * reload. Do not collapse this back into `error`.
+   */
+  transcriptSaveError?: string;
 }
 
 function isOverlayBulletShape(b: unknown): b is OverlayBullet {
@@ -211,47 +228,6 @@ interface ParsedTurn {
   operations: Operation[];
 }
 
-/**
- * The base ResumeSelection with a bullet-level/positioning override layered
- * on top — what is actually on the page right now, as opposed to what
- * tailoring alone produced.
- *
- * Needed for two things: `applyOperations`'s `set_text` check asks whether a
- * target bullet is "on the page" against whatever `ResumeSelection` it is
- * handed, and without this merge a bullet ADDED by an earlier turn's
- * `add_bullet` could never be text-edited by a later one, because it would
- * still be absent from the unmerged base. And the `selection` this action
- * returns is what a caller renders directly against `career` — TailorPanel
- * has no separate step that applies `overrides.selection` on its own, so a
- * `set_lead`/`set_positioning`/bullet-level change would otherwise never
- * visibly take effect.
- *
- * `lead`/`taper`/`compressAfter` are NOT folded in: `ResumeSelection` has no
- * fields for them (only `positioningId` and `bullets`), so those overrides
- * stay exactly where `applyOperations` already puts them, in
- * `overrides.selection` — wiring them into rendering is a later task's job,
- * the same way `overrides.design`/`overrides.pageMargin` are consumed
- * outside `ResumeSelection` today.
- *
- * `tailored_resumes.content.selection` always stores the UNMERGED base — this
- * function's result is never what gets persisted, only what gets returned and
- * validated against, so Regenerate's "discard every chat override" contract
- * is unaffected.
- */
-function mergedSelection(base: ResumeSelection, sel?: ResumeOverrides["selection"]): ResumeSelection {
-  if (!sel) return base;
-  const bullets: Record<string, string[]> = { ...base.bullets };
-  if (sel.bullets) {
-    Object.keys(sel.bullets).forEach((roleId) => {
-      bullets[roleId] = sel.bullets![roleId];
-    });
-  }
-  return {
-    positioningId: sel.positioning !== undefined ? sel.positioning : base.positioningId,
-    bullets,
-  };
-}
-
 function parseTurn(raw: string): ParsedTurn | null {
   let parsed: unknown;
   try {
@@ -339,8 +315,9 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
   const selection = context.selection;
   const overrides = context.overrides;
   // What is actually on the page right now, prior overrides included — see
-  // mergedSelection's own doc for why this differs from the base `selection`.
-  const effectiveSelection = mergedSelection(selection, overrides.selection);
+  // lib/effective-selection.ts's own doc for why this differs from the base
+  // `selection`.
+  const currentSelection = effectiveSelection(selection, overrides.selection);
 
   const messagesForPrompt: ChatMessage[] = [...priorMessages, { role: "user", text: message }];
 
@@ -371,7 +348,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
-      selection: effectiveSelection,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
       messages: priorMessages,
@@ -382,7 +359,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
-      selection: effectiveSelection,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
       messages: priorMessages,
@@ -392,14 +369,25 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
 
   const { completion, failed } = budget.result!;
   if (failed !== undefined) {
+    // Unlike the precondition refusals above, the model WAS invoked with the
+    // user's message here — a network or rate-limit failure is exactly the
+    // case the "a failed turn still persists" invariant is for, and it is
+    // also the most retry-worthy of the four rejection shapes.
+    const updated: StoredChatMessage[] = [
+      ...priorMessages,
+      { role: "user", text: message },
+      { role: "assistant", text: failed },
+    ];
+    const persisted = await persistTurn(actor.tenantId, jobId, updated);
     return {
-      reply: "",
+      reply: failed,
       applied: [],
-      selection: effectiveSelection,
+      rejected: failed,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
-      messages: priorMessages,
-      error: failed,
+      messages: persisted.error !== undefined ? priorMessages : updated,
+      error: persisted.error,
     };
   }
 
@@ -419,7 +407,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
       reply: TRUNCATED_REPLY,
       applied: [],
       rejected: TRUNCATED_REPLY,
-      selection: effectiveSelection,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
       messages: persisted.error !== undefined ? priorMessages : updated,
@@ -440,7 +428,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
       reply: UNREADABLE_REPLY,
       applied: [],
       rejected: UNREADABLE_REPLY,
-      selection: effectiveSelection,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
       messages: persisted.error !== undefined ? priorMessages : updated,
@@ -448,7 +436,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     };
   }
 
-  const result = applyOperations(parsed.operations, career, effectiveSelection, overrides, themeVocabulary);
+  const result = applyOperations(parsed.operations, career, currentSelection, overrides, themeVocabulary);
 
   if (result.error !== undefined) {
     const updated: StoredChatMessage[] = [
@@ -461,7 +449,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
       reply: result.error,
       applied: [],
       rejected: result.error,
-      selection: effectiveSelection,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
       messages: persisted.error !== undefined ? priorMessages : updated,
@@ -498,16 +486,32 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
   }
 
   if (saveError !== undefined) {
-    // The document did not durably change, so the chat thread is not written
-    // either — persisting an assistant message that claims changes were made
-    // would describe a state the database does not hold.
+    // The document did not durably change. The turn is still persisted —
+    // omitting it entirely would silently discard the message the user just
+    // typed, and after a reload they would see an empty box for it, which is
+    // exactly the outcome the "a failed turn still persists" invariant
+    // exists to prevent. What must NOT be persisted is `parsed.reply`: the
+    // model's own text may describe a change ("Added it.") that never
+    // landed, so a fixed sentence is used instead. Retrying this turn is
+    // safe — nothing was applied, so a retried add_bullet/propose_career_bullet
+    // cannot duplicate anything.
+    const updated: StoredChatMessage[] = [
+      ...priorMessages,
+      { role: "user", text: message },
+      { role: "assistant", text: SAVE_FAILED_REPLY },
+    ];
+    const persisted = await persistTurn(actor.tenantId, jobId, updated);
+    if (persisted.error !== undefined) {
+      console.error("sendChatTurn: could not persist the save-failure turn either —", persisted.error);
+    }
     return {
-      reply: parsed.reply,
-      applied: result.applied ?? [],
-      selection: effectiveSelection,
+      reply: SAVE_FAILED_REPLY,
+      applied: [],
+      rejected: SAVE_FAILED_REPLY,
+      selection: currentSelection,
       overrides,
       coverage: context.coverage,
-      messages: priorMessages,
+      messages: persisted.error !== undefined ? priorMessages : updated,
       error: saveError,
     };
   }
@@ -516,12 +520,20 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
   // overrides — is what a caller renders and what coverage is recomputed
   // against. Never stored: tailored_resumes.content.selection above kept the
   // unmerged base.
-  const finalSelection = mergedSelection(selection, newOverrides.selection);
+  const finalSelection = effectiveSelection(selection, newOverrides.selection);
 
   // Coverage is recomputed here and never stored — tailored_resumes keeps
   // only what makes the document; the coverage panel is a read-time report.
   const coverage = coverageReport(career, newThemes, finalSelection, themeVocabulary);
 
+  // The document already saved successfully above — a failure of THIS write
+  // (appending the turn to resume_chats) must not be reported as `error`:
+  // every existing caller in this repo treats `error !== undefined` as "the
+  // turn failed, retry it" (TailorPanel.tsx's own `if (res.error !== undefined)`
+  // is the precedent), and retrying an already-applied add_bullet or
+  // propose_career_bullet would duplicate it. `messages` still reflects this
+  // turn — the conversation genuinely happened — `transcriptSaveError` is
+  // only a signal that it may not survive a reload.
   const persisted = await persistTurn(actor.tenantId, jobId, updated);
 
   return {
@@ -530,8 +542,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     selection: finalSelection,
     overrides: newOverrides,
     coverage,
-    messages: persisted.error !== undefined ? priorMessages : updated,
-    error: persisted.error,
+    messages: updated,
+    transcriptSaveError: persisted.error,
   };
 }
 
@@ -563,7 +575,13 @@ export async function acceptProposedBullets(jobId: string, ids: string[]): Promi
   }
 
   const rowsResult = await readAllSettingsResult();
-  if (rowsResult.error !== undefined) return { error: rowsResult.error };
+  // readAllSettingsResult is a TRANSPORT (lib/settings-store.ts:371-384) —
+  // it passes the driver's message through verbatim, empty string included —
+  // so the reader here must describe it, the same as the other two DB reads
+  // in this file (readThread, loadJobFields).
+  if (rowsResult.error !== undefined) {
+    return { error: describeWriteFailure(rowsResult.error, "load your career overlay") };
+  }
   const overlay = careerOverlayFrom(rowsResult.rows);
   const existingIds = new Set(overlay.map((b) => b.id));
 

@@ -78,7 +78,9 @@ vi.mock("@/app/actions/resume", () => ({
 const h = vi.hoisted(() => {
   const state = {
     tailoredResumesUpsertCalled: false,
+    tailoredResumesShouldFail: false,
     chatMessagesWritten: null as unknown,
+    chatWriteShouldFail: false,
     storedThreadMessages: null as unknown,
   };
   function makeBuilder(table: string) {
@@ -99,8 +101,18 @@ const h = vi.hoisted(() => {
       });
     };
     b.upsert = (payload: Record<string, unknown>) => {
-      if (table === "tailored_resumes") state.tailoredResumesUpsertCalled = true;
-      if (table === "resume_chats") state.chatMessagesWritten = payload.messages;
+      if (table === "tailored_resumes") {
+        state.tailoredResumesUpsertCalled = true;
+        if (state.tailoredResumesShouldFail) {
+          return Promise.resolve({ data: null, error: { message: "insert failed" } });
+        }
+      }
+      if (table === "resume_chats") {
+        if (state.chatWriteShouldFail) {
+          return Promise.resolve({ data: null, error: { message: "chat write failed" } });
+        }
+        state.chatMessagesWritten = payload.messages;
+      }
       return Promise.resolve({ data: [], error: null });
     };
     return b;
@@ -121,8 +133,9 @@ vi.mock("@/lib/supabase", () => ({
 // settings-store a second time rather than the id-resolution logic under test
 // here.
 const writeCareerOverlay = vi.fn(async () => ({}) as { error?: string });
+const readAllSettingsResult = vi.fn(async () => ({ rows: [] as unknown[], error: undefined as string | undefined }));
 vi.mock("@/lib/settings-store", () => ({
-  readAllSettingsResult: async () => ({ rows: [] }),
+  readAllSettingsResult: (...args: unknown[]) => readAllSettingsResult(...args),
   careerOverlayFrom: () => [] as unknown[],
   writeCareerOverlay: (overlay: unknown) => writeCareerOverlay(overlay),
 }));
@@ -132,9 +145,12 @@ import { acceptProposedBullets, sendChatTurn } from "./resume-chat";
 beforeEach(() => {
   vi.clearAllMocks();
   h.state.tailoredResumesUpsertCalled = false;
+  h.state.tailoredResumesShouldFail = false;
   h.state.chatMessagesWritten = null;
+  h.state.chatWriteShouldFail = false;
   h.state.storedThreadMessages = null;
   writeCareerOverlay.mockResolvedValue({});
+  readAllSettingsResult.mockResolvedValue({ rows: [], error: undefined });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -232,6 +248,85 @@ describe("sendChatTurn: a valid operation applies and merges into the returned s
   });
 });
 
+describe("sendChatTurn: model unreachable (finding 4)", () => {
+  test("a thrown model error is refused, persisted, and never claims a change", async () => {
+    completeDetailed.mockRejectedValue(new Error("ECONNRESET"));
+
+    const res = await sendChatTurn("job-1", "lead with the systems work");
+
+    expect(res.rejected).toBe("Could not reach the model — try again.");
+    expect(res.applied).toEqual([]);
+    expect(res.selection).toEqual(SELECTION);
+    expect(h.state.tailoredResumesUpsertCalled).toBe(false);
+    // The model WAS invoked with the user's message — unlike a precondition
+    // refusal, this turn is persisted, same as truncation/unreadable/rejection.
+    expect(h.state.chatMessagesWritten).toEqual([
+      { role: "user", text: "lead with the systems work" },
+      { role: "assistant", text: "Could not reach the model — try again." },
+    ]);
+  });
+});
+
+describe("sendChatTurn: a tailored_resumes save failure (finding 1)", () => {
+  test("still persists the user's message, but never the model's own claimed reply", async () => {
+    h.state.tailoredResumesShouldFail = true;
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "Added it.", // must NOT be what gets persisted — the save never landed
+        operations: [{ op: "add_bullet", roleId: "principal", bulletId: "p-b1" }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "add the reporting bullet too");
+
+    expect(res.error).toBeDefined();
+    expect(res.error).not.toBe("");
+    expect(res.rejected).toBe("Could not save that change — try again.");
+    expect(res.applied).toEqual([]);
+    // Nothing was actually applied — the base selection is unchanged.
+    expect(res.selection).toEqual(SELECTION);
+    // The user's message is not silently discarded: it lands in the thread
+    // alongside a fixed refusal, never the model's own ("Added it.") claim.
+    expect(h.state.chatMessagesWritten).toEqual([
+      { role: "user", text: "add the reporting bullet too" },
+      { role: "assistant", text: "Could not save that change — try again." },
+    ]);
+  });
+});
+
+describe("sendChatTurn: the document saves but the transcript write fails (finding 2)", () => {
+  test("reports transcriptSaveError, not error — a caller must not offer a retry that would duplicate the change", async () => {
+    h.state.chatWriteShouldFail = true;
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "Added it.",
+        operations: [{ op: "add_bullet", roleId: "principal", bulletId: "p-b1" }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "add the reporting bullet too");
+
+    // The document DID change — this must never read as a failed turn.
+    expect(res.error).toBeUndefined();
+    expect(res.rejected).toBeUndefined();
+    expect(res.reply).toBe("Added it.");
+    expect(res.applied).toEqual(["added bullet p-b1 to principal"]);
+    expect(res.selection).toEqual({ positioningId: "operator", bullets: { principal: ["p-b0", "p-b1"] } });
+    expect(h.state.tailoredResumesUpsertCalled).toBe(true);
+    // The distinct field carries the (non-empty) reason instead.
+    expect(res.transcriptSaveError).toBeDefined();
+    expect(res.transcriptSaveError).not.toBe("");
+    // messages still reflects the turn that genuinely happened, even though
+    // the resume_chats write itself failed.
+    expect(res.messages).toEqual([
+      { role: "user", text: "add the reporting bullet too" },
+      { role: "assistant", text: "Added it." },
+    ]);
+  });
+});
+
 describe("acceptProposedBullets", () => {
   const PROPOSAL = { id: "ov-abc123", roleId: "principal", text: "Shipped the thing.", themes: ["systems"] };
 
@@ -253,6 +348,25 @@ describe("acceptProposedBullets", () => {
     const res = await acceptProposedBullets("job-1", ["ov-does-not-exist"]);
 
     expect(res.error).toBe("Could not find the proposed bullet(s): ov-does-not-exist.");
+    expect(writeCareerOverlay).not.toHaveBeenCalled();
+  });
+
+  // Finding 3: readAllSettingsResult is a TRANSPORT (lib/settings-store.ts) —
+  // its error can legitimately be the empty string (pg's AggregateError on an
+  // unreachable database). Presence-detection alone (`!== undefined`) passes
+  // whether or not the text is described, so this test bites specifically on
+  // the TEXT: it fails if the fix regresses back to `error: rowsResult.error`.
+  test("an undescribed (empty-string) settings-read failure still returns a real sentence", async () => {
+    h.state.storedThreadMessages = [
+      { role: "assistant", text: "How about this:", proposals: [PROPOSAL] },
+    ];
+    readAllSettingsResult.mockResolvedValueOnce({ rows: [], error: "" });
+
+    const res = await acceptProposedBullets("job-1", ["ov-abc123"]);
+
+    expect(res.error).toBeDefined();
+    expect(res.error).not.toBe("");
+    expect(res.error).toContain("Could not load your career overlay");
     expect(writeCareerOverlay).not.toHaveBeenCalled();
   });
 });

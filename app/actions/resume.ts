@@ -9,6 +9,7 @@ import { hasPostingBeenRead, type PostingDetail } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { buildThemePrompt, type JobSummaryFields } from "@/lib/resume-prompt";
 import { effectiveCareer } from "@/lib/effective-career";
+import { effectiveSelection } from "@/lib/effective-selection";
 import { coverageReport, type CoverageReport } from "@/lib/resume-coverage";
 import { careerOverlayFrom, readAllSettingsResult } from "@/lib/settings-store";
 import type { ResumeOverrides } from "@/lib/resume-overrides";
@@ -322,14 +323,22 @@ export async function loadResumeContext(jobId: string): Promise<{
     overlay,
     overrides.text || {}
   );
-  const coverage = stored.selection
-    ? coverageReport(merged, stored.themes, stored.selection, themeVocabulary as ThemeVocabulary)
+  // Base plus this job's bullet-level/positioning overrides — ONE definition,
+  // shared with app/actions/resume-chat.ts's sendChatTurn, in
+  // lib/effective-selection.ts. Without this, a page reload after a
+  // bullet-level chat edit (add_bullet, drop_bullet, swap_bullet,
+  // set_positioning) would show the STALE unmerged selection and coverage
+  // computed from it — the exact document the chat turn just changed would
+  // revert on refresh until the next turn or a Regenerate.
+  const selection = stored.selection ? effectiveSelection(stored.selection, overrides.selection) : null;
+  const coverage = selection
+    ? coverageReport(merged, stored.themes, selection, themeVocabulary as ThemeVocabulary)
     : null;
 
   return {
     career: merged,
     themes: stored.themes,
-    selection: stored.selection,
+    selection,
     overrides,
     coverage,
     warnings,
