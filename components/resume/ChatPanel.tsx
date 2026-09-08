@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   sendChatTurn,
   loadChatThread,
@@ -61,6 +61,7 @@ export default function ChatPanel({
   jobId,
   dirty,
   onApplied,
+  pendingMessage,
 }: {
   jobId: string;
   /** Mirrors TailorPanel's own `dirty` state. A chat turn re-renders the
@@ -76,6 +77,11 @@ export default function ChatPanel({
    *  changed nothing. `applied.length > 0` is NOT that signal; it counts
    *  operations, not changes. */
   onApplied: (next: AppliedDocument) => void;
+  /** A message typed on the saved-résumé screen and carried across the restore
+   *  navigation. Sent ONCE, on mount. The `sentPending` ref rather than a state
+   *  flag because an effect that re-runs would re-send it — a second billed
+   *  turn that edits the document again. */
+  pendingMessage?: string | null;
 }) {
   const [messages, setMessages] = useState<StoredChatMessage[]>([]);
   const [turnMeta, setTurnMeta] = useState<Record<number, TurnMeta>>({});
@@ -85,6 +91,7 @@ export default function ChatPanel({
   const [transcriptNote, setTranscriptNote] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const sentPending = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,8 +107,21 @@ export default function ChatPanel({
     };
   }, [jobId]);
 
-  function send() {
-    const text = input.trim();
+  // Fire the carried message exactly once. Guarded by a ref, not by state or by
+  // the dependency array: a re-render that re-ran this would send a second
+  // billed turn and apply the same edit twice.
+  useEffect(() => {
+    if (!pendingMessage || sentPending.current) return;
+    sentPending.current = true;
+    send(pendingMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMessage]);
+
+  /** `explicitText` is the message carried across a restore navigation
+   *  (lib/pending-chat-message.ts). It bypasses `input` because the box is
+   *  empty on a fresh mount — the user typed it on the previous screen. */
+  function send(explicitText?: string) {
+    const text = (explicitText ?? input).trim();
     if (!text || isPending) return;
 
     // The guard runs BEFORE we know whether this turn will change anything —
@@ -313,7 +333,10 @@ export default function ChatPanel({
           className="flex-1 rounded border border-slate px-3 py-1.5 text-sm"
         />
         <button
-          onClick={send}
+          // Arrow, not a bare `send`: React would pass the MouseEvent as
+          // `explicitText`, and the turn would be sent with an event object
+          // stringified into it. The build catches this; the runtime would not.
+          onClick={() => send()}
           disabled={isPending || input.trim() === ""}
           className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
         >

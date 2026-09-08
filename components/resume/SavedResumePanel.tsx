@@ -19,6 +19,10 @@ import {
 } from "@/lib/resume-download";
 import { daysUntil } from "@/lib/saved-resume-grouping";
 import { savedEditAffordance } from "@/lib/saved-edit-affordance";
+import { chatSendPlan } from "@/lib/chat-launch";
+import { stashPendingMessage } from "@/lib/pending-chat-message";
+import ChatDock from "@/components/resume/ChatDock";
+import SavedChatLauncher from "@/components/resume/SavedChatLauncher";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import type { SavedResume } from "@/lib/types";
 
@@ -80,6 +84,29 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         setError("That is identical to the version you are viewing — nothing new was saved.");
       } else router.push(`/resume?savedId=${res.id}`);
     });
+  }
+
+  /** The chat dock's send handler. A saved row is frozen HTML with no
+   *  selection, so the first message has to restore it into the working draft
+   *  first — chatSendPlan decides that, and editThisVersion carries the
+   *  message across the navigation. */
+  function sendFromSaved(text: string) {
+    const plan = chatSendPlan({
+      context: "saved",
+      hasContent: resume.hasContent,
+      jobId: resume.jobId,
+    });
+    if (plan.kind === "blocked") {
+      setError(plan.note);
+      return;
+    }
+    if (plan.kind === "restoreThenSend") {
+      // Stashed BEFORE the confirm: if the user cancels, the stash is harmless
+      // (nothing navigates, and the next take clears it), whereas stashing
+      // after an await would race the navigation editThisVersion performs.
+      stashPendingMessage(window.sessionStorage, plan.jobId, text);
+      editThisVersion();
+    }
   }
 
   function editThisVersion() {
@@ -221,6 +248,16 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
           All saved résumés
         </Link>
       </div>
+
+      {/* Collapsed by default here, unlike the tailor screen: the document is
+          what you came to this page to read. */}
+      <ChatDock title="Chat about this résumé">
+        <SavedChatLauncher
+          onSend={sendFromSaved}
+          blockedNote={affordance.kind === "restore" ? undefined : affordance.note}
+          isPending={isPending}
+        />
+      </ChatDock>
 
       <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
       <Script src="/resume-design/rsm-page-guides.js" strategy="afterInteractive" />

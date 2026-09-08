@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import ResumeDocument from "@/components/resume/ResumeDocument";
 import CoveragePanel from "@/components/resume/CoveragePanel";
 import ChatPanel from "@/components/resume/ChatPanel";
+import ChatDock from "@/components/resume/ChatDock";
+import { takePendingMessage } from "@/lib/pending-chat-message";
 import { captureResumeHtml } from "@/components/resume/useResumeCapture";
 import { tailorResumeForJob, type ResumeOverrides } from "@/app/actions/resume";
 import { saveResumeFromDraft } from "@/app/actions/saved-resumes";
@@ -54,6 +56,13 @@ export default function TailorPanel({
 
   const docPageRef = useRef<HTMLElement>(null);
   const [dirty, setDirty] = useState(false);
+  // Read once, on mount, and cleared by the read itself (see
+  // lib/pending-chat-message.ts). useState's initializer rather than an effect:
+  // an effect would run after the first paint, and ChatPanel would already have
+  // mounted with pendingMessage undefined.
+  const [pending] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : takePendingMessage(window.sessionStorage, jobId)
+  );
   const [label, setLabel] = useState("");
   const [saved, setSaved] = useState<{ id: string } | null>(null);
   const canSave = roleTitle !== null && company !== null;
@@ -240,7 +249,17 @@ export default function TailorPanel({
         </span>
       </div>
       {coverage && <CoveragePanel coverage={coverage} warnings={warnings} />}
-      <ChatPanel jobId={jobId} dirty={dirty} onApplied={onChatApplied} />
+      {/* Opens by default: the chat is the point of this screen. The pending
+          message is read ONCE on mount — takePendingMessage clears as it reads,
+          so a reload cannot re-send a turn that already ran. */}
+      <ChatDock title="Chat about this résumé" defaultOpen>
+        <ChatPanel
+          jobId={jobId}
+          dirty={dirty}
+          onApplied={onChatApplied}
+          pendingMessage={pending}
+        />
+      </ChatDock>
       <ResumeDocument
         career={career}
         selection={selection}
