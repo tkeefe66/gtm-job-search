@@ -102,3 +102,20 @@ export function newestStamp(stamps: (string | null | undefined)[]): string | nul
   }
   return newest;
 }
+
+/**
+ * Has anyone read the POSTING ITSELF for this row?
+ *
+ * Not "does it have posting detail": ingest writes `posting` from the SEARCH
+ * extraction even when nobody read the page, so the column's presence answers a
+ * different question. Only the posting-reading paths stamp `enrichedAt`.
+ *
+ * The one definition, used by the enrich queue (which rows still need reading)
+ * and by /roles (which rows carry a score derived from a real posting). Two
+ * copies would drift, and the drift would be invisible: both look like a
+ * boolean about the same column.
+ */
+export function hasPostingBeenRead(job: { posting?: PostingDetail | null }): boolean {
+  const at = (job.posting ?? null)?.enrichedAt;
+  return typeof at === "string" && Number.isFinite(Date.parse(at));
+}

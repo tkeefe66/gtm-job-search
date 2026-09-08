@@ -29,6 +29,7 @@ export default function TailorPanel({
 }) {
   const [selection, setSelection] = useState(initialSelection);
   const [error, setError] = useState<string | null>(null);
+  const [unread, setUnread] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const docPageRef = useRef<HTMLElement>(null);
@@ -60,7 +61,14 @@ export default function TailorPanel({
       // only where it's shown), and "" is falsy — a truthiness check would fall
       // into the else branch and try to render a null selection as success.
       if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
-      else setSelection(res.selection);
+      else {
+        setSelection(res.selection);
+        // A warning, never a refusal. The user can read the posting in a
+        // browser; withholding the document helps nobody. But a résumé tailored
+        // from a job TITLE, with no posting behind it, must not look identical
+        // to one tailored from what the employer actually asked for.
+        setUnread(res.unread === true);
+      }
     });
   }
 
@@ -118,6 +126,17 @@ export default function TailorPanel({
   return (
     <div className="flex flex-col gap-4">
       {error && <p className="text-sm text-[#92400E] print:hidden">{error}</p>}
+      {unread && (
+        /* Says what the document was built from, because a résumé tailored to a
+           job TITLE must not look identical to one tailored to what the
+           employer actually asked for. print:hidden — it is a note to the user,
+           not part of the document. */
+        <p className="text-xs text-ink/60 print:hidden">
+          No job description has been read for this role, so these themes come from the
+          title and this app&apos;s own summary — not from what the posting asks for. Add
+          the posting by URL on Roles, or paste it there, then tailor again.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-3 print:hidden">
         <button
           onClick={() => window.print()}

@@ -10,6 +10,7 @@ import { bucketFor, type JobStatusDef } from "@/lib/job-statuses";
 import type { LinkKind } from "@/lib/job-link";
 import type { PostingVerification } from "@/lib/resolve-job-link";
 import type { UnclearReason } from "@/lib/link-report";
+import { hasPostingBeenRead } from "@/lib/posting-detail";
 import type { Job } from "@/lib/types";
 
 /**
@@ -52,28 +53,10 @@ export function clampEnrichLimit(n?: number | null): number {
  */
 export function thinJobs(jobs: Job[], statuses: JobStatusDef[]): Job[] {
   return jobs.filter(
-    (j) => !hasBeenRead(j) && !!j.job_url && bucketFor(statuses, j.status) !== "terminal"
+    (j) => !hasPostingBeenRead(j) && !!j.job_url && bucketFor(statuses, j.status) !== "terminal"
   );
 }
 
-/**
- * Has anyone read the POSTING ITSELF for this row?
- *
- * Not "does it have posting detail" — ingest always writes some, deliberately,
- * so a row the model had nothing for is not re-billed forever. Reading the
- * column's presence as "done" made every newly ingested role permanently
- * ineligible for enrichment however thin its content, and the row LOOKED
- * enriched while carrying a one-search-covers-ten-roles summary.
- *
- * `enrichedAt` is written by the posting-reading path alone, so it is the
- * honest question. An unparseable stamp counts as unread, the same direction
- * every other stamp check here chooses: the cost is a re-read, not a row
- * excluded forever from the one pass that could fix it.
- */
-function hasBeenRead(job: Job): boolean {
-  const at = (job.posting ?? null)?.enrichedAt;
-  return typeof at === "string" && Number.isFinite(Date.parse(at));
-}
 
 /** Why a row was not enriched. Never a failure — a refusal. */
 export type EnrichBlockReason = UnclearReason | "absent";

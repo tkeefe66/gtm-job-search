@@ -5,7 +5,7 @@ import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { withBudget } from "@/lib/metered";
 import { complete, parseJson } from "@/lib/model-call";
 import { supabase } from "@/lib/supabase";
-import type { PostingDetail } from "@/lib/posting-detail";
+import { hasPostingBeenRead, type PostingDetail } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { buildThemePrompt, type JobSummaryFields } from "@/lib/resume-prompt";
 import {
@@ -120,7 +120,19 @@ async function deriveThemes(job: JobSummaryFields): Promise<{ themes: string[]; 
 
 export async function tailorResumeForJob(
   jobId: string
-): Promise<{ themes: string[]; selection: ResumeSelection | null; error?: string }> {
+): Promise<{
+  themes: string[];
+  selection: ResumeSelection | null;
+  /**
+   * Nobody has read this posting, so the themes came from the title, the
+   * seniority and the app's own fit summary rather than from what the employer
+   * asked for. A WARNING, never a refusal: the user can see the posting in a
+   * browser, and withholding the document helps nobody — but a tailored résumé
+   * that silently guessed is worse than one that says it guessed.
+   */
+  unread?: boolean;
+  error?: string;
+}> {
   const actor = await requireResumeAdmin();
 
   const { job, error: loadError } = await loadJobForTenant(actor.tenantId, jobId);
@@ -151,6 +163,7 @@ export async function tailorResumeForJob(
 
   const themes = budget.result!.themes;
   const selection = selectBullets(career as CareerRecord, { themes });
+  const unread = !hasPostingBeenRead(job);
 
   const { error } = await supabase
     .forTenant(actor.tenantId)
@@ -160,9 +173,9 @@ export async function tailorResumeForJob(
       { onConflict: "tenant_id,job_id" }
     );
   const described = describeWriteFailure(error ? error.message : undefined, "save that tailored resume");
-  if (described !== undefined) return { themes, selection, error: described };
+  if (described !== undefined) return { themes, selection, unread, error: described };
 
-  return { themes, selection };
+  return { themes, selection, unread };
 }
 
 export async function getTailoredResume(

@@ -27,6 +27,7 @@ import { describeWriteFailure } from "@/lib/write-failure";
 import { roleAge, type RoleAge } from "@/lib/role-age";
 import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/lib/bulk-status";
 import { classifyJobLink, hostOf } from "@/lib/job-link";
+import { hasPostingBeenRead } from "@/lib/posting-detail";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { enrichRoles } from "@/app/actions/enrich";
@@ -1432,6 +1433,7 @@ export default function RolesTable({
                     <AgeTag age={roleAge(job.created_at, now)} />
                     <CompTag bucket={bucketOf(job)} />
                     <SourceTag url={job.job_url} />
+                    <UnreadTag job={job} />
                     {job.salary_range && <span>{job.salary_range}</span>}
                     {job.salary_range && job.location && <span>·</span>}
                     {job.location && <span>{job.location}</span>}
@@ -1646,6 +1648,26 @@ function SourceTag({ url }: { url: string | null }) {
       className="inline-flex items-center rounded-full bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-medium text-[#92400E]"
     >
       via {hostOf(url)}
+    </span>
+  );
+}
+
+/**
+ * Marks a row whose posting nobody has read.
+ *
+ * Without it a role scored 4 from the real posting and a role scored 4 from its
+ * job title look identical, and the second is a guess — measured 2026-09-07,
+ * only 3 of 58 rows scored 4-or-better carried a JD. Silence means the score
+ * was computed from what the posting actually says.
+ */
+function UnreadTag({ job }: { job: Job }) {
+  if (hasPostingBeenRead(job)) return null;
+  return (
+    <span
+      title="Nobody has read this posting yet, so the score comes from the title and the search summary. Use Enrich roles, or add it again by URL."
+      className="inline-flex items-center rounded-full border border-slate bg-canvas px-1.5 py-0.5 text-[10px] font-medium text-ink/40"
+    >
+      no JD
     </span>
   );
 }

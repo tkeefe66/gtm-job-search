@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { EMPTY_POSTING_DETAIL, latestEnrichedAt, postingDetailFrom } from "./posting-detail";
+import {
+  EMPTY_POSTING_DETAIL,
+  hasPostingBeenRead,
+  latestEnrichedAt,
+  postingDetailFrom,
+} from "./posting-detail";
 
 // The repair-don't-reject contract resolveProfile and resolveStatuses already
 // establish, applied to the extraction's new fields. Nothing normalizes a
@@ -86,5 +91,35 @@ describe("latestEnrichedAt finds the newest backfill write", () => {
     expect(latestEnrichedAt([at("2026-09-01T00:00:00.000Z"), at("whenever")])).toBe(
       "2026-09-01T00:00:00.000Z"
     );
+  });
+});
+
+// "Readable" as a first-class state. A role scored 4 from a real posting and a
+// role scored 4 from a job title look identical on /roles, and the second is a
+// guess — measured 2026-09-07, only 3 of 58 rows scored 4-or-better had a JD.
+describe("hasPostingBeenRead", () => {
+  test("a row the posting itself was read for", () => {
+    expect(
+      hasPostingBeenRead({
+        posting: { requirements: [], niceToHaves: [], enrichedAt: "2026-09-07T10:00:00.000Z" },
+      })
+    ).toBe(true);
+  });
+
+  // Ingest writes `posting` from the SEARCH extraction even when nobody read
+  // the page, so the column's presence is not the question — the stamp is.
+  test("a row carrying only the extraction's guess has not been read", () => {
+    expect(hasPostingBeenRead({ posting: { requirements: ["SQL"], niceToHaves: [] } })).toBe(false);
+  });
+
+  test("a row predating the column has not been read", () => {
+    expect(hasPostingBeenRead({ posting: null })).toBe(false);
+    expect(hasPostingBeenRead({})).toBe(false);
+  });
+
+  test("an unparseable stamp does not count as read", () => {
+    expect(
+      hasPostingBeenRead({ posting: { requirements: [], niceToHaves: [], enrichedAt: "soon" } })
+    ).toBe(false);
   });
 });
