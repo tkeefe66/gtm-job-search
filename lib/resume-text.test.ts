@@ -44,9 +44,31 @@ describe("sanitizeBulletText", () => {
     expect(sanitizeBulletText("   ").error).toBeDefined();
   });
 
+  it("rewrites an em dash in prose into a comma", () => {
+    expect(sanitizeBulletText("Built the spine \u2014 models, analysis \u2014 and the team").text).toBe(
+      "Built the spine, models, analysis, and the team"
+    );
+  });
+
+  it("rewrites an em dash between numbers into a hyphen, not a comma", () => {
+    expect(sanitizeBulletText("Ran the program 2019\u20142024.").text).toBe("Ran the program 2019-2024.");
+  });
+
+  it("accepts text that is only over the cap before its em dashes are rewritten", () => {
+    // " \u2014 " is three characters and becomes two, so a rewrite that ran
+    // AFTER the length check would reject text that fits.
+    const input = "x".repeat(MAX_BULLET_CHARS - 3) + " \u2014 y"; // 2003 raw, 2000 rewritten
+    const res = sanitizeBulletText(input);
+    expect(res.error).toBeUndefined();
+    expect(res.text).toBeDefined();
+    expect(res.text).not.toContain("\u2014");
+  });
+
   it("rejects input under the raw cap that expands past it after escaping", () => {
-    // 400 raw chars of '<' → escapes to 1600 chars, well over 600 limit
-    const input = "<".repeat(400); // under the 600 raw cap, 1600 once escaped
+    // Each '<' escapes to '&lt;', 4x. Sized off the cap rather than a literal
+    // so raising MAX_BULLET_CHARS cannot turn this into an acceptance test,
+    // which is exactly what the 600-era literal 400 did when the cap moved.
+    const input = "<".repeat(Math.floor(MAX_BULLET_CHARS / 2)); // under the raw cap, 2x over once escaped
     const res = sanitizeBulletText(input);
     expect(res.text).toBeUndefined(); // rejection, not acceptance
     expect(res.error).toBeDefined();
@@ -58,7 +80,7 @@ describe("sanitizeBulletText", () => {
     // length equals its raw length and the cap is the only thing it has to
     // clear. The rejecting twin is the test above, where 400 raw '<'
     // characters escape to 1600.
-    const input = "A valid bullet with some text " + "x".repeat(370); // 400 raw
+    const input = "A valid bullet with some text " + "x".repeat(Math.floor(MAX_BULLET_CHARS / 2) - 30);
     const res = sanitizeBulletText(input);
     expect(res.text).toBeDefined(); // acceptance
     expect(res.error).toBeUndefined();
@@ -74,7 +96,7 @@ describe("sanitizeBulletText", () => {
       "A simple bullet.",
       "Owned a <strong>$100M+</strong> pipeline.",
       "Led <b>growth</b> & <em>marketing</em> efforts.",
-      "x".repeat(590), // near-cap legitimate text
+      "x".repeat(MAX_BULLET_CHARS - 10), // near-cap legitimate text
     ];
     for (const input of validInputs) {
       const res = sanitizeBulletText(input);

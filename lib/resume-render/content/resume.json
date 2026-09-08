@@ -34,8 +34,8 @@
         "presales",
         "systems"
       ],
-      "tagline": "GTM operations leader — strategy, technical pre-sales, and the A.I. systems behind both",
-      "summary": "Senior GTM and marketing operations leader, 13+ years turning strategy, data, and technology into revenue. Builds the expert functions between Product and the field — pre-sales, playbooks, evangelism — and ships the A.I. systems behind them."
+      "tagline": "GTM operations leader: strategy, technical pre-sales, and the A.I. systems behind both",
+      "summary": "Senior GTM and marketing operations leader, 13+ years turning strategy, data, and technology into revenue. Builds the expert functions between Product and the field (pre-sales, playbooks, evangelism) and ships the A.I. systems behind them."
     },
     {
       "id": "gtm",
@@ -44,8 +44,8 @@
         "data",
         "leadership"
       ],
-      "tagline": "GTM and revenue operations leader — pipeline architecture, data, and the teams that run them",
-      "summary": "Senior GTM and marketing operations leader, 13+ years owning the technology, data, and analytics behind enterprise revenue engines. Builds the quantitative spine — waterfall models, ICP analysis, capacity planning, attribution — and the teams that operate it."
+      "tagline": "GTM and revenue operations leader: pipeline architecture, data, and the teams that run them",
+      "summary": "Senior GTM and marketing operations leader, 13+ years owning the technology, data, and analytics behind enterprise revenue engines. Builds the quantitative spine (waterfall models, ICP analysis, capacity planning, attribution) and the teams that operate it."
     },
     {
       "id": "product",
@@ -54,8 +54,8 @@
         "product",
         "evangelism"
       ],
-      "tagline": "Technical pre-sales and product evangelism — the expert function between Product and the field",
-      "summary": "GTM leader, 13+ years and seven inside the ABM/ABX product category. Builds the expert functions that sit between Product and the field — technical pre-sales, playbook libraries, executive evangelism — and carries field insight back into the roadmap."
+      "tagline": "Technical pre-sales and product evangelism: the expert function between Product and the field",
+      "summary": "GTM leader, 13+ years and seven inside the ABM/ABX product category. Builds the expert functions that sit between Product and the field (technical pre-sales, playbook libraries, executive evangelism) and carries field insight back into the roadmap."
     },
     {
       "id": "ai",
@@ -64,8 +64,8 @@
         "product",
         "data"
       ],
-      "tagline": "GTM systems and A.I. operations — a practitioner-builder who ships the systems he specifies",
-      "summary": "GTM systems leader and practitioner-builder, 13+ years architecting B2B revenue engines and seven inside the ABM/ABX category. Designs the quantitative spine of GTM while building the agentic systems that run on it — in Claude Code, deployed and in daily use."
+      "tagline": "GTM systems and A.I. operations: a practitioner-builder who ships the systems he specifies",
+      "summary": "GTM systems leader and practitioner-builder, 13+ years architecting B2B revenue engines and seven inside the ABM/ABX category. Designs the quantitative spine of GTM while building the agentic systems that run on it, in Claude Code, deployed and in daily use."
     }
   ],
   "roles": [
@@ -73,7 +73,7 @@
       "id": "gtm-experts",
       "title": "Director of GTM Experts",
       "org": "Demandbase",
-      "scope": "Remote — San Francisco, CA",
+      "scope": "Remote, San Francisco, CA",
       "dates": "July 2025 – Present",
       "accounts": [
         "BlackRock",
@@ -90,7 +90,7 @@
             "leadership",
             "presales"
           ],
-          "text": "Directs a global team of GTM and Data Solution Experts — digital marketing, B2B advertising, ABX, data — on strategies that shaped <strong>$50M+ in won revenue</strong>."
+          "text": "Directs a global team of GTM and Data Solution Experts (digital marketing, B2B advertising, ABX, data) on strategies that shaped <strong>$50M+ in won revenue</strong>."
         },
         {
           "id": "dse",
@@ -118,7 +118,7 @@
             "evangelism",
             "leadership"
           ],
-          "text": "Owns the GTM Playbook program — a <strong>30+ playbook</strong> library spanning the full product suite, adopted across Sales, Customer Success, and Partners."
+          "text": "Owns the GTM Playbook program, a <strong>30+ playbook</strong> library spanning the full product suite, adopted across Sales, Customer Success, and Partners."
         },
         {
           "id": "ads",
@@ -215,7 +215,7 @@
       "id": "principal",
       "title": "Principal GTM Expert (Strategy &amp; Operations)",
       "org": "Demandbase",
-      "scope": "Remote — San Francisco, CA",
+      "scope": "Remote, San Francisco, CA",
       "dates": "April 2024 – June 2025",
       "accounts": [
         "Palo Alto Networks",
@@ -232,7 +232,7 @@
             "presales",
             "ops"
           ],
-          "text": "Primary GTM operations, technology, and strategy advisor to enterprise prospects — <strong>$13M in influenced won revenue</strong> across Palo Alto Networks, T-Mobile, Verizon, and Comcast."
+          "text": "Primary GTM operations, technology, and strategy advisor to enterprise prospects, <strong>$13M in influenced won revenue</strong> across Palo Alto Networks, T-Mobile, Verizon, and Comcast."
         },
         {
           "id": "playbook",
@@ -284,7 +284,7 @@
       "id": "sr-director",
       "title": "Sr. Director of Marketing Operations",
       "org": "Demandbase",
-      "scope": "Remote — San Francisco, CA",
+      "scope": "Remote, San Francisco, CA",
       "dates": "April 2021 – March 2024",
       "bullets": [
         {
@@ -375,7 +375,7 @@
       "id": "director-db",
       "title": "Director of Marketing Operations",
       "org": "Demandbase",
-      "scope": "Remote — San Francisco, CA",
+      "scope": "Remote, San Francisco, CA",
       "dates": "June 2020 – April 2021",
       "bullets": [
         {
@@ -402,7 +402,7 @@
       "id": "engagio",
       "title": "Director of Marketing Operations",
       "org": "Engagio",
-      "scope": "Onsite — San Mateo, CA",
+      "scope": "Onsite, San Mateo, CA",
       "acquired": "acquired by Demandbase",
       "dates": "August 2019 – June 2020",
       "bullets": [
@@ -481,7 +481,7 @@
       "id": "streamsets",
       "title": "Senior Marketing Technology &amp; Operations Manager",
       "org": "StreamSets",
-      "scope": "Remote — San Francisco, CA",
+      "scope": "Remote, San Francisco, CA",
       "acquired": "acquired by Software AG",
       "dates": "June 2018 – July 2019",
       "bullets": [
@@ -535,7 +535,7 @@
       "id": "ayla-global",
       "title": "Global Technology &amp; Operations Manager",
       "org": "Ayla Networks",
-      "scope": "Remote — Santa Clara, CA",
+      "scope": "Remote, Santa Clara, CA",
       "dates": "December 2017 – June 2018",
       "bullets": [
         {
@@ -569,7 +569,7 @@
       "id": "ayla-martech",
       "title": "MarTech &amp; Operations Manager",
       "org": "Ayla Networks",
-      "scope": "Remote — Santa Clara, CA",
+      "scope": "Remote, Santa Clara, CA",
       "dates": "June 2017 – December 2017",
       "bullets": [
         {
@@ -604,7 +604,7 @@
       "id": "ayla-leadgen",
       "title": "Lead Generation Manager",
       "org": "Ayla Networks",
-      "scope": "Remote — Santa Clara, CA",
+      "scope": "Remote, Santa Clara, CA",
       "dates": "May 2016 – June 2017",
       "bullets": [
         {
@@ -640,7 +640,7 @@
       "id": "goji",
       "title": "Marketing Automation Manager",
       "org": "Goji",
-      "scope": "Onsite — Boston, MA",
+      "scope": "Onsite, Boston, MA",
       "dates": "February 2015 – April 2016",
       "bullets": [
         {
@@ -675,7 +675,7 @@
       "id": "ptc",
       "title": "Marketing Automation Specialist",
       "org": "PTC",
-      "scope": "Onsite — Boston, MA",
+      "scope": "Onsite, Boston, MA",
       "dates": "April 2013 – October 2014",
       "bullets": [
         {
@@ -710,7 +710,7 @@
       "id": "wb-mason",
       "title": "Education Market Analyst; School Bids Analyst",
       "org": "W.B. Mason",
-      "scope": "Onsite — Brockton, MA",
+      "scope": "Onsite, Brockton, MA",
       "dates": "October 2011 – April 2013",
       "bullets": [
         {

@@ -50,6 +50,12 @@ export const HOUSE_RULES: HouseRule[] = [
       "The renderer drops a role entirely when none of its bullets survive, so a role with an empty selection does not appear as an empty heading — the job silently vanishes from the résumé.",
   },
   {
+    id: "no-em-dash",
+    statement: "No text in the document contains an em dash (\u2014). Use a comma, a colon, or a full stop instead.",
+    rationale:
+      "The owner of this r\u00e9sum\u00e9 will not ship a document containing one. sanitizeBulletText rewrites any em dash you write into a comma before it reaches the page, so text authored around one reads as though a clause were missing; write the punctuation you actually want.",
+  },
+  {
     id: "positioning-present",
     statement: "The document keeps its summary paragraph.",
     rationale:

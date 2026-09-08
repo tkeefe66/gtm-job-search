@@ -21,19 +21,40 @@
  */
 import sanitizeHtml from "sanitize-html";
 
-export const MAX_BULLET_CHARS = 600;
+export const MAX_BULLET_CHARS = 2000;
+
+/**
+ * Em dashes are banned from résumé text outright. The user's rule, and it is
+ * absolute: the character never appears in a document this app produces. The
+ * BAN is enforced here rather than left to the prompt, because a rule the
+ * model is merely told about is a rule that holds until the turn it doesn't,
+ * and nothing downstream would catch it — render.js emits bullet text
+ * verbatim.
+ *
+ * It REWRITES rather than refuses: an em dash is punctuation, not an attack,
+ * and rejecting the turn would throw away a good edit over a character the
+ * user does not care to see. Between digits it becomes a hyphen (a range:
+ * "2019—2024"); anywhere else the surrounding spaces collapse into a comma,
+ * which is what an em dash is standing in for in prose.
+ */
+export function stripEmDashes(input: string): string {
+  return input
+    .replace(/(\d)\s*[\u2014\u2015]\s*(\d)/g, "$1-$2")
+    .replace(/\s*[\u2014\u2015]\s*/g, ", ");
+}
 
 export function sanitizeBulletText(input: string): { text?: string; error?: string } {
   if (typeof input !== "string" || input.trim() === "") {
     return { error: "That text is empty." };
   }
-  if (input.length > MAX_BULLET_CHARS) {
+  const dashed = stripEmDashes(input);
+  if (dashed.length > MAX_BULLET_CHARS) {
     return {
       error:
-        "That text is too long (" + input.length + " characters; the limit is " + MAX_BULLET_CHARS + ").",
+        "That text is too long (" + dashed.length + " characters; the limit is " + MAX_BULLET_CHARS + ").",
     };
   }
-  const text = sanitizeHtml(input, {
+  const text = sanitizeHtml(dashed, {
     allowedTags: ["strong", "b", "em", "i"],
     allowedAttributes: {},
     allowedSchemes: [],

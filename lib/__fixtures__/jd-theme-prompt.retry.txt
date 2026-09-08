@@ -11,10 +11,10 @@ THEMES (choose from these ids only, most relevant to this posting first):
 - migration (Migrations and consolidation) — signals: migration, consolidation, M&A, acquisition, integration, replatform, implementation, rollout, Marketo, Pardot, Salesforce, SFDC
 
 POSITIONING (choose exactly one id, or null if none fits better than the others):
-- blended — GTM operations leader — strategy, technical pre-sales, and the A.I. systems behind both
-- gtm — GTM and revenue operations leader — pipeline architecture, data, and the teams that run them
-- product — Technical pre-sales and product evangelism — the expert function between Product and the field
-- ai — GTM systems and A.I. operations — a practitioner-builder who ships the systems he specifies
+- blended — GTM operations leader: strategy, technical pre-sales, and the A.I. systems behind both
+- gtm — GTM and revenue operations leader: pipeline architecture, data, and the teams that run them
+- product — Technical pre-sales and product evangelism: the expert function between Product and the field
+- ai — GTM systems and A.I. operations: a practitioner-builder who ships the systems he specifies
 
 This candidate has NO evidence for the following. If the posting leads on any of them, list it in "unsupported" — never stretch a theme to cover it:
 - partner/channel sales
