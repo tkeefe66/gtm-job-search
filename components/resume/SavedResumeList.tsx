@@ -111,6 +111,13 @@ export default function SavedResumeList({ resumes }: { resumes: SavedResumeSumma
                     aria-label={`Select the résumé saved on ${formatDate(r.createdAt)}`}
                   />
                   <span className="text-sm">{formatDate(r.createdAt)}</span>
+                  {r.kind === "checkpoint" && (
+                    // Written automatically by "Edit this version", not a
+                    // deliberate Save — flagged so its short (3-day, vs. the
+                    // usual 30) retention reads as urgent rather than the row
+                    // just quietly vanishing.
+                    <span className="text-xs font-medium text-[#92400E]">Checkpoint</span>
+                  )}
                   {r.label && <span className="text-sm text-ink/70">{r.label}</span>}
                   <span
                     className={

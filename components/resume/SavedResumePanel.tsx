@@ -10,6 +10,7 @@ import {
   getDownloadAssets,
   saveResumeAsNewVersion,
 } from "@/app/actions/saved-resumes";
+import { restoreSavedVersion } from "@/app/actions/restore-saved-version";
 import {
   DEFAULT_PAGE_MARGIN,
   DESIGN_VERSION,
@@ -17,8 +18,21 @@ import {
   downloadFilename,
 } from "@/lib/resume-download";
 import { daysUntil } from "@/lib/saved-resume-grouping";
+import { savedEditAffordance } from "@/lib/saved-edit-affordance";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import type { SavedResume } from "@/lib/types";
+
+/**
+ * The two warnings the spec requires, in substance, plus the checkpoint
+ * notice — shown before restoreSavedVersion runs. Extended below with a
+ * third sentence when this panel's own contentEditable document carries
+ * uncaptured edits (see `dirty`), since navigating away discards those too.
+ */
+const RESTORE_CONFIRM =
+  "Reopening rebuilds this résumé from the choices that produced it, against your current " +
+  "career record — it may differ from the document you see here. Hand edits in this version " +
+  "stay in the saved copy but do not come back editable. Your current draft for this role " +
+  "will be saved as a checkpoint first.";
 
 /**
  * A frozen saved résumé, mounted as stored.
@@ -32,9 +46,15 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
   const docPageRef = useRef<HTMLElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Mirrors ResumeDocument's onInput contract: set on the first and every
+  // subsequent edit to this row's contentEditable doc-page, never captured
+  // into React state on its own. Only Save (as new version) reads the DOM;
+  // this flag exists solely to warn before a navigation would discard it.
+  const [dirty, setDirty] = useState(false);
 
   const days = daysUntil(resume.expiresAt, Date.now());
   const stale = resume.designVersion !== DESIGN_VERSION;
+  const affordance = savedEditAffordance({ hasContent: resume.hasContent, jobId: resume.jobId });
 
   function saveAsNew() {
     const el = docPageRef.current;
@@ -59,6 +79,31 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
       else if (res.duplicateOf) {
         setError("That is identical to the version you are viewing — nothing new was saved.");
       } else router.push(`/resume?savedId=${res.id}`);
+    });
+  }
+
+  function editThisVersion() {
+    const warning = dirty
+      ? RESTORE_CONFIRM +
+        " You also have edits here that were never saved to this version — navigating away " +
+        "discards them."
+      : RESTORE_CONFIRM;
+    if (!window.confirm(warning)) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await restoreSavedVersion(resume.id);
+      // Presence, not truthiness: res.error can legitimately be "".
+      if (res.error !== undefined) {
+        setError(res.error || UNDESCRIBED_DB_ERROR);
+        return;
+      }
+      // markerSaveError is NOT a failure — the checkpoint and the restore
+      // itself already committed. Only a separate write (a marker turn in
+      // the chat thread) failed, and this panel is about to unmount on
+      // navigation regardless, so there is nowhere durable to show a notice.
+      // Never treated as `error` and never blocks the navigate below — see
+      // RestoreSavedVersionResult.markerSaveError.
+      if (res.jobId) router.push(`/resume?jobId=${res.jobId}`);
     });
   }
 
@@ -137,6 +182,29 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         >
           {isPending ? "Saving…" : "Save as new version"}
         </button>
+        {affordance.kind === "restore" && (
+          <button
+            onClick={editThisVersion}
+            disabled={isPending}
+            className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
+          >
+            {isPending ? "Restoring…" : "Edit this version →"}
+          </button>
+        )}
+        {affordance.kind === "draftOnly" && (
+          <span className="flex items-center gap-2 text-xs text-ink/60">
+            <Link
+              href={`/resume?jobId=${resume.jobId}`}
+              className="text-sm underline underline-offset-2"
+            >
+              Edit this version →
+            </Link>
+            {affordance.note}
+          </span>
+        )}
+        {affordance.kind === "unavailable" && (
+          <span className="text-xs text-ink/50">{affordance.note}</span>
+        )}
         <button
           onClick={remove}
           disabled={isPending}
@@ -160,6 +228,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         margin={resume.pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning
+        onInput={() => setDirty(true)}
         dangerouslySetInnerHTML={{ __html: resume.html }}
       />
     </div>
