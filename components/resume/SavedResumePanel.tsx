@@ -197,7 +197,12 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
               href={`/resume?jobId=${resume.jobId}`}
               className="text-sm underline underline-offset-2"
             >
-              Edit this version →
+              {/* NOT "Edit this version" — this row predates migration 021 and has
+                  no stored selection, so there is nothing of THIS version to
+                  reopen. The link goes to the current draft, which may be a
+                  different document entirely; the note beside it says so, but the
+                  label is what gets read first. */}
+              Open the current draft →
             </Link>
             {affordance.note}
           </span>
