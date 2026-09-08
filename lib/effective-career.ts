@@ -174,14 +174,11 @@ export function effectiveCareer(
     const safe = cleaned(text.name);
     if (safe !== null) career.identity.name = safe;
   }
-  if (text.positioning !== undefined && career.positioning[0]) {
-    if (isClearRequest("positioning", text.positioning)) {
-      career.positioning.forEach((p) => (p.tagline = ""));
-    } else {
-      const safe = cleaned(text.positioning);
-      if (safe !== null) career.positioning.forEach((p) => (p.tagline = safe));
-    }
-  }
+  // No `text.positioning` branch: the 2026-09-08 design sync removed the tagline
+  // from the masthead, so an override on it would edit a field renderBody never
+  // emits. `set_text` no longer accepts that target either — an operation that
+  // writes something nobody can see is worse than one that refuses.
+
 
   return { career, warnings };
 }

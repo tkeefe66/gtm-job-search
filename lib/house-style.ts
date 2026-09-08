@@ -51,9 +51,9 @@ export const HOUSE_RULES: HouseRule[] = [
   },
   {
     id: "positioning-present",
-    statement: "The document keeps either a tagline or a summary.",
+    statement: "The document keeps its summary paragraph.",
     rationale:
-      "One of the two has to state what the candidate is. Losing both leaves the reader to infer a thesis from the bullets, which is work they will not do.",
+      "The summary is the only place the résumé states what the candidate is — the masthead renders the name and contact line and nothing else. Losing it leaves the reader to infer a thesis from the bullets, which is work they will not do.",
   },
 ];
 
@@ -126,13 +126,15 @@ export function evaluateHouseStyle(
     }
   }
 
+  // The tagline is NOT consulted: since the 2026-09-08 design sync the masthead
+  // renders the name and one contact line only, so a tagline reaches no reader
+  // and could not stand in for a missing summary.
   const pos = selectedPositioning(career, selection);
-  const tagline = pos && pos.tagline ? pos.tagline.trim() : "";
   const summary = pos && pos.summary ? pos.summary.trim() : "";
-  if (tagline === "" && summary === "") {
+  if (summary === "") {
     findings.push({
       rule: "positioning-present",
-      detail: "Both the tagline and the summary are empty, so the résumé opens with no statement of what the candidate is.",
+      detail: "The summary is empty, so the résumé opens with the name and contact line and then jumps straight to the roles.",
     });
   }
 

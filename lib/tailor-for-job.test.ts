@@ -212,8 +212,12 @@ describe("tailorForJob", () => {
     const { fn } = scriptedComplete([response({ themes: ["ops", "data"], positioning: "ai" })]);
     const out = await tailorForJob(JD, { complete: fn, career, vocabulary });
     expect(out.positioning).toBe("ai");
+    // The SUMMARY, not the tagline: the design system's masthead renders the name
+    // and one contact line only, and states why — the summary below carries the
+    // positioning, so saying it twice reads as padding. The summary is therefore
+    // the only rendered text that differs between variants.
     const ai = career.positioning.find((p) => p.id === "ai")!;
-    expect(out.html).toContain(ai.tagline);
+    expect(out.html).toContain(ai.summary);
   });
 
   // Mutation this catches: silently dropping the invalid id and returning after

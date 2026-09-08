@@ -12,7 +12,9 @@
 // leaving a blank one — and refused everywhere else. `name` is NOT clearable: a
 // résumé with no name on it is not a document anyone wants.
 
-const CLEARABLE = ["summary", "positioning"];
+// "positioning" was here until the 2026-09-08 design sync removed the tagline
+// from the masthead; it is no longer a set_text target at all.
+const CLEARABLE = ["summary"];
 
 export function isClearableTarget(target: string): boolean {
   return CLEARABLE.indexOf(target) !== -1;

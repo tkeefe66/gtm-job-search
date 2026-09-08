@@ -26,25 +26,30 @@ describe("isClearableTarget", () => {
   // Mutation this catches: treating every text target as clearable. A résumé
   // whose header name is blank has no name on it, and an emptied bullet renders
   // as a stray dash — removing a bullet is drop_bullet's job, not set_text's.
-  it("allows the two optional slots and nothing else", () => {
+  it("allows the summary and nothing else", () => {
     expect(isClearableTarget("summary")).toBe(true);
-    expect(isClearableTarget("positioning")).toBe(true);
     expect(isClearableTarget("name")).toBe(false);
     expect(isClearableTarget("bullet:r1:b1")).toBe(false);
+    // "positioning" was clearable until the 2026-09-08 design sync removed the
+    // tagline from the masthead; it is no longer a set_text target at all, so
+    // clearing it would write to a field nothing renders.
+    expect(isClearableTarget("positioning")).toBe(false);
   });
 });
 
 describe("clearing a text slot", () => {
-  // Mutation this catches: routing an empty override through `cleaned`, which
-  // returns null because sanitizeBulletText refuses empty text — so the clear
-  // is silently ignored and the old tagline stays on the page while the chat
-  // reports success. That is exactly what "remove the text under my name"
-  // did before this existed.
-  it("empties the tagline when asked to clear it", () => {
+  // Mutation this catches: reinstating the tagline override path. Nothing
+  // renders a tagline since the design sync, so an override that "worked" would
+  // be an edit the user is told succeeded and can never see.
+  it("ignores a tagline override entirely", () => {
     const { career } = effectiveCareer(record(), [], { positioning: "" });
-    expect(career.positioning[0].tagline).toBe("");
+    expect(career.positioning[0].tagline).toBe("A tagline.");
   });
 
+  // Mutation this catches: routing an empty override through `cleaned`, which
+  // returns null because sanitizeBulletText refuses empty text — so the clear is
+  // silently ignored and the old summary stays on the page while the chat
+  // reports success. That is what "remove the text under my name" hit.
   it("empties the summary when asked to clear it", () => {
     const { career } = effectiveCareer(record(), [], { summary: "   " });
     expect(career.positioning[0].summary).toBe("");
@@ -57,8 +62,8 @@ describe("clearing a text slot", () => {
   it("clears across every positioning variant", () => {
     const r = record();
     r.positioning.push({ id: "ai", themes: [], tagline: "Another.", summary: "Another." });
-    const { career } = effectiveCareer(r, [], { positioning: "" });
-    expect(career.positioning.map((p) => p.tagline)).toEqual(["", ""]);
+    const { career } = effectiveCareer(r, [], { summary: "" });
+    expect(career.positioning.map((p) => p.summary)).toEqual(["", ""]);
   });
 
   // Mutation this catches: letting a blank NAME through the clear path. The
@@ -79,7 +84,7 @@ describe("clearing a text slot", () => {
   // absent key must not blank the slot.
   it("leaves a slot alone when no override names it", () => {
     const { career } = effectiveCareer(record(), [], {});
-    expect(career.positioning[0].tagline).toBe("A tagline.");
+    expect(career.positioning[0].summary).toBe("A summary.");
   });
 
   // Mutation this catches: isClearRequest ignoring the VALUE and treating any
@@ -87,11 +92,6 @@ describe("clearing a text slot", () => {
   // summary EDIT into a deletion. Every other test here passes a blank value,
   // so none of them can tell "clear on empty" from "clear on anything"; this is
   // the only case that separates them.
-  it("still REPLACES a clearable slot when the override has text", () => {
-    const { career } = effectiveCareer(record(), [], { positioning: "A new tagline." });
-    expect(career.positioning[0].tagline).toBe("A new tagline.");
-  });
-
   it("still replaces the summary when the override has text", () => {
     const { career } = effectiveCareer(record(), [], { summary: "A new summary." });
     expect(career.positioning[0].summary).toBe("A new summary.");

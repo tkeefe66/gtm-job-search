@@ -158,8 +158,8 @@ function isNonNegativeInteger(n: unknown): n is number {
 }
 
 /**
- * `set_text`'s target names either a fixed slot (`summary`, `positioning`,
- * `name`) or `bullet:<roleId>:<bulletId>`. Parsing is shared between validation and
+ * `set_text`'s target names either a fixed slot (`summary`, `name`) or
+ * `bullet:<roleId>:<bulletId>`. Parsing is shared between validation and
  * apply so the two can never read the target differently.
  */
 function parseBulletTarget(target: unknown): { roleId: string; bulletId: string } | undefined {
@@ -253,7 +253,12 @@ function validateOperation(
     }
     case "set_text": {
       const target = op.target;
-      if (target !== "summary" && target !== "positioning" && target !== "name") {
+      // "positioning" was a target until the 2026-09-08 design sync removed the
+      // tagline from the masthead. It edited a field nothing renders, which made
+      // it an operation that validated, billed, reported success and changed no
+      // pixel — the exact failure this repo already records five of. Removed
+      // rather than left inert; set_text "summary" is the positioning statement.
+      if (target !== "summary" && target !== "name") {
         const parsed = parseBulletTarget(target);
         if (!parsed) return '"' + String(target) + '" is not a valid text target.';
         const onPage = bulletsFor(selection.bullets, parsed.roleId).indexOf(parsed.bulletId) !== -1;

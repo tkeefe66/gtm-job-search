@@ -50,7 +50,7 @@ OPERATIONS YOU MAY CALL
 - set_positioning: switch to a different positioning variant from the career record.
 - set_taper: set how many bullets render per role, most senior role first.
 - set_compress_after: compress roles after the n-th into one-line rows.
-- set_text: edit the text of "summary", "positioning", "name" (the header name), or a selected bullet ("bullet:<roleId>:<bulletId>").
+- set_text: edit the text of "summary" (the opening positioning paragraph), "name" (the header name), or a selected bullet ("bullet:<roleId>:<bulletId>"). Clearing is allowed for "summary" only.
 - propose_career_bullet: propose a NEW bullet on a role for the user to accept — the only way a bullet is added; it is never invented straight into the document.
 - set_design_token: set one design token to a value within its allowed range.
 - set_page_margin: set the page margin.
@@ -80,8 +80,8 @@ these before reporting it done, and say so when a request would break one.
   Why: The bullet count is how the page says which job matters most. A flat or rising taper tells the reader a job from a decade ago is as important as the current one, which is never what the candidate means.
 - Every rendered role has at least one bullet.
   Why: The renderer drops a role entirely when none of its bullets survive, so a role with an empty selection does not appear as an empty heading — the job silently vanishes from the résumé.
-- The document keeps either a tagline or a summary.
-  Why: One of the two has to state what the candidate is. Losing both leaves the reader to infer a thesis from the bullets, which is work they will not do.
+- The document keeps its summary paragraph.
+  Why: The summary is the only place the résumé states what the candidate is — the masthead renders the name and contact line and nothing else. Losing it leaves the reader to infer a thesis from the bullets, which is work they will not do.
 
 HOW THE DOCUMENT MEASURES AGAINST THEM RIGHT NOW
 The document currently meets every house-style rule.

@@ -107,19 +107,21 @@ describe("evaluateHouseStyle", () => {
     expect(ids(evaluateHouseStyle(record(), gap))).toContain("no-empty-role");
   });
 
-  // Mutation this catches: requiring BOTH tagline and summary. Either alone is
-  // a positioning statement; only losing both leaves the reader no thesis.
-  it("accepts a tagline with no summary", () => {
+  // Mutation this catches: letting a tagline stand in for the summary, which was
+  // the rule until the 2026-09-08 design sync. The masthead now renders the name
+  // and one contact line only, so a tagline reaches no reader — accepting it
+  // would pass a document that opens with nothing.
+  it("flags a summary-less document even when a tagline is set", () => {
     const r = record();
-    r.positioning[0].summary = "";
-    expect(evaluateHouseStyle(r, healthy())).toEqual([]);
-  });
-
-  it("flags a document with neither tagline nor summary", () => {
-    const r = record();
-    r.positioning[0].tagline = "";
+    r.positioning[0].tagline = "Still here, still unrendered.";
     r.positioning[0].summary = "";
     expect(ids(evaluateHouseStyle(r, healthy()))).toContain("positioning-present");
+  });
+
+  it("accepts a summary with no tagline", () => {
+    const r = record();
+    r.positioning[0].tagline = "";
+    expect(evaluateHouseStyle(r, healthy())).toEqual([]);
   });
 
   // Mutation this catches: reading positioning[0] rather than the SELECTED

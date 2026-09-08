@@ -6,20 +6,17 @@
 .rsm a{color:var(--link);text-decoration:underline;text-decoration-thickness:0.5px;text-underline-offset:2.5px;text-decoration-color:color-mix(in oklch,var(--accent-600) 38%,transparent)}
 .rsm a:hover{color:var(--link-hover);text-decoration-color:var(--link-hover)}
 
-/* Masthead — name and italic tagline left, contact stacked flush-right in mono. */
-.rsm-header{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:var(--space-7);padding-bottom:var(--space-5);border-bottom:var(--border-heavy) solid var(--accent-600);margin-bottom:var(--gap-header)}
-/* DIVERGENCE from the vendored source, 2026-09-08. The header is a two-column
-   grid whose row height is set by whichever column is taller — always the
-   contact block, at six lines. With a tagline the left column fills that space;
-   with the tagline cleared (which the chat can now do) the name is a single
-   line against six, and the header renders with a hole under it. Centring the
-   name against the contacts in that case only reads deliberate instead of
-   orphaned. Scoped with :has() so the default, tagline-present layout is
-   untouched. */
-.rsm-header:not(:has(.rsm-tagline)){align-items:center}
+/* Masthead — name, then one mono line of contact points beneath it. No tagline: the summary
+   paragraph immediately below already carries the positioning, and stating it twice reads as
+   padding. Separators are spans rather than text so they can be tinted without tinting the values. */
+.rsm-header{padding-bottom:var(--space-4);border-bottom:var(--border-heavy) solid var(--accent-600);margin-bottom:var(--gap-header)}
 .rsm-name{font:var(--type-name);font-optical-sizing:auto;letter-spacing:var(--tracking-tight);color:var(--accent-600);margin:0}
-.rsm-tagline{font-family:var(--font-display);font-style:italic;font-size:var(--text-lg);line-height:1.35;font-weight:var(--weight-regular);color:var(--text-secondary);margin:var(--space-3) 0 0;max-width:48ch}
-.rsm-contact{display:flex;flex-direction:column;align-items:flex-end;gap:3px;font:var(--type-meta);letter-spacing:-0.01em;color:var(--text-muted);padding-top:7px;white-space:nowrap}
+.rsm-contact{display:flex;flex-wrap:wrap;gap:0 10px;margin:var(--space-3) 0 0;font:var(--type-meta);letter-spacing:-0.01em;color:var(--text-muted)}
+/* DIVERGENCE: `rsm-sep` rather than the source's bare `sep`. resume-sanitize.ts
+   allows only /^rsm(-[a-z0-9-]+)?$/, so an un-namespaced class is stripped from
+   saved résumés and the separators lose their tint there while looking correct
+   in the draft. Push upstream. */
+.rsm-contact .rsm-sep{color:var(--border-rule)}
 
 /* Summary — the opening paragraph, one step up in size. */
 .rsm-summary{font-size:var(--text-lg);line-height:1.52;color:var(--text-primary);margin:0 0 var(--gap-section)}
@@ -33,16 +30,16 @@
 .rsm-section-title{grid-column:1;grid-row:1/span 99;align-self:start;font:var(--type-section);font-variant-caps:all-small-caps;letter-spacing:var(--tracking-label);color:var(--accent-600);margin:0;padding-top:1px}
 
 /* Role entries */
-/* NOT break-inside:avoid, deliberately, diverging from the ported design system: the header's
-   ~375px-fits-easily assumption only holds when the role starts near the top of a page. Whichever
-   role happens to fall right after the masthead/summary — a different role for every tailored
-   selection, since selectBullets() picks a different theme match per job — can be pushed entirely
-   onto the next page by that rule, stranding 300-400px of blank space at the bottom of page 1
-   (observed: taper-capped "Director of GTM Experts" at 354px, page content ~925px, page-1 remainder
-   too short to hold it whole). break-after:avoid on the head/org, plus break-before:avoid on the
-   first bullet below, keep the header from ever being stranded ALONE — the actual failure this
-   design was guarding against — while letting a role's later bullets flow onto the next page
-   instead of dragging the whole block there. */
+/* DIVERGENCE from the design system, kept through the 2026-09-08 re-sync. The source sets
+   break-inside:avoid here on the grounds that "the tallest role is ~375px against a 925px page,
+   so a role never needs to span pages". That is true of a role in isolation and beside the point:
+   the question is whether it fits in what REMAINS of the current page. Whichever role falls right
+   after the masthead and summary — a different one per tailored selection, since selectBullets
+   picks a different theme match per job — gets pushed whole onto the next page, stranding 300-400px
+   of blank space (observed: taper-capped "Director of GTM Experts" at 354px, page-1 remainder too
+   short). This app also lets the chat set the taper, so roles can be taller than the source's
+   assumption. break-after:avoid on the head and org, plus break-before:avoid on the first bullet,
+   prevent the real failure — a header stranded alone — while letting later bullets flow over. */
 .rsm-role{padding-bottom:var(--gap-role);margin-bottom:var(--gap-role);border-bottom:var(--border-hair) solid var(--border-hairline)}
 .rsm-role:last-of-type{border-bottom:0}
 .rsm-role-head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-6);break-after:avoid}
@@ -53,11 +50,12 @@
 .rsm-role-org em{font-style:italic;color:var(--text-muted)}
 
 /* Bullets — 7px navy hairline markers, never discs. */
-/* Plain block flow, not flex-column: doc-page.js's own usage docs are explicit that flex/grid
-   containers don't fragment across print pages ("only real CSS columns flow and break across
-   pages") — a flex-column bullet list that needs to split between two pages (now that .rsm-role
-   above no longer forces the whole role onto one page) is exactly the case that warning covers.
-   margin-top replaces the flex `gap`. */
+/* DIVERGENCE from the design system, kept through the 2026-09-08 re-sync, and the direct consequence
+   of the role rule above. doc-page.js's own usage docs are explicit that flex/grid containers do not
+   fragment across print pages ("only real CSS columns flow and break across pages"), so a
+   flex-column bullet list that now has to split between two pages is exactly the case that warning
+   covers. margin-top replaces the flex `gap`. Re-syncing the source's flex version without also
+   restoring its break-inside:avoid would silently reintroduce split-but-unfragmentable lists. */
 .rsm-bullets{list-style:none;margin:0;padding:0}
 .rsm-bullets li{position:relative;padding-left:var(--indent-bullet);margin-top:var(--gap-bullet);orphans:3;widows:3}
 .rsm-bullets li:first-child{margin-top:0;break-before:avoid}

@@ -685,19 +685,50 @@ break-inside change above. `spacing.css`'s `--rail` went from `96px` to
 at `--type-section`'s 12px/0.2em tracking, so no single word fit — combined
 with `doc-page.js`'s global `text-wrap:balance` on headings, that forced a
 literal mid-word break ("PROFESSIONA"/"L") instead of a normal word-boundary
-wrap. A FOURTH divergence landed 2026-09-08:
-`.rsm-header:not(:has(.rsm-tagline)){align-items:center}`. The header is a
-two-column grid whose row height is set by whichever column is taller — always
-the six-line contact block — so with the tagline cleared (which the chat can now
-do, see the clearable-slot rule above) the name sat as a single line against six
-and the header rendered with a hole under it. Centring the name in that one case
-reads deliberate rather than orphaned, and `:has()` scopes it so the default
-tagline-present layout is untouched. **If this design system is ever re-synced
-from Claude Design, these four changes will be silently reverted** — check
-`git log` on `public/resume-design/tokens/` before trusting a fresh port over
-what's running in production. Any change under `tokens/` also requires bumping
-`DESIGN_VERSION` (`lib/resume-download.ts`) by hand; this one took it to
-`2026-09-08`.
+wrap.
+
+**The re-sync happened on 2026-09-08, and it is the model for the next one.**
+The design system carries a `_repo-sync/` folder holding exactly the files this
+repo vendors, and `_repo-sync/COMMIT-NOTES.md` states the ownership rule:
+`resume.json` and `themes.json` are edited in the REPO and mirrored up, while
+`render.js`, `styles.css`, `tokens/` and `doc-page.js` are edited in the DESIGN
+SYSTEM and copied down. Editing the vendored copy — which this repo had been
+doing — is writing to the wrong end. Read it through the `claude-design` MCP
+(`DesignSync`, project `999f7fe8-e8bc-449f-9121-0f2d8dc9730c`); if that server
+will not connect, say so rather than porting from a screenshot.
+
+What the sync brought down: the masthead is now the name plus ONE wrapping mono
+line of contact points with tinted `·` separators, and **no tagline at all** —
+the source's own comment gives the reason, that the summary below already
+carries the positioning and saying it twice reads as padding. Also `--ink-500`
+darkened to 0.545 so `--text-muted` clears 4.5:1 on the 10px metadata.
+
+What was KEPT against the source, and why the earlier read of "these are
+obsolete" was wrong: the source sets `break-inside:avoid` on `.rsm-role`
+because "the tallest role is ~375px against a 925px page". True of a role in
+isolation and beside the point — the question is whether it fits in what REMAINS
+of the page, and a role landing after the masthead gets pushed whole onto the
+next one, stranding 300-400px. This app also lets the chat set the taper, so
+roles can exceed the source's assumption. That divergence and its consequence
+(block-flow bullets, because `doc-page.js` documents that flex containers do not
+fragment across print pages) both stay, as does `--rail` at 132px.
+
+One NEW divergence the sync forced: the source's separator class is bare `sep`,
+and `lib/resume-sanitize.ts` allows only `/^rsm(-[a-z0-9-]+)?$/`, so it is
+stripped from every SAVED résumé while looking correct in the draft. Renamed to
+`rsm-sep` here; push that upstream so the next sync does not reintroduce it.
+
+**Removing the tagline made `set_text`'s `positioning` target inert**, so it was
+removed rather than left to validate, bill, report success and change no pixel —
+the failure this file already records five of. `summary` is the positioning
+statement now, it is the only clearable slot, and the house-style rule
+(`lib/house-style.ts`) requires it rather than accepting a tagline in its place.
+
+**If this design system is ever re-synced again, the kept divergences above will
+be silently reverted** — check `git log` on `public/resume-design/tokens/` and
+`lib/resume-render/render.js` before trusting a fresh port. Any change under
+`tokens/` also requires bumping `DESIGN_VERSION` (`lib/resume-download.ts`) by
+hand; the sync took it to `2026-09-08b`.
 
 **`public/resume-design/page-guides.js` (the vendored on-screen page-break
 overlay) is not loaded — `components/resume/ResumeDocument.tsx` loads

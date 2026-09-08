@@ -3,8 +3,9 @@
 :root{
 /* paper — warm off-whites */
 --paper-000:oklch(0.989 0.004 85);--paper-050:oklch(0.978 0.005 85);--paper-100:oklch(0.965 0.006 85);--paper-200:oklch(0.92 0.006 85);
-/* ink — warm near-black through hairline */
---ink-900:oklch(0.215 0.014 40);--ink-700:oklch(0.42 0.012 40);--ink-500:oklch(0.575 0.01 40);--ink-400:oklch(0.735 0.008 40);--ink-300:oklch(0.83 0.007 45);
+/* ink — warm near-black through hairline. --ink-500 sits at 0.545 so --text-muted clears 4.5:1 on
+   the sheet: it carries 10px content (role dates, phone, compressed year spans), not decoration. */
+--ink-900:oklch(0.215 0.014 40);--ink-700:oklch(0.42 0.012 40);--ink-500:oklch(0.545 0.01 40);--ink-400:oklch(0.735 0.008 40);--ink-300:oklch(0.83 0.007 45);
 /* rules */
 --rule-100:oklch(0.885 0.007 45);--rule-200:oklch(0.62 0.012 40);
 /* accent — deep navy, the only colour in the system */
