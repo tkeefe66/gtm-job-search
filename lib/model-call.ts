@@ -160,6 +160,39 @@ export async function complete(opts: {
 }
 
 /**
+ * The same call as `complete`, keeping the stop reason.
+ *
+ * `complete` discards it via `collect()`, which is fine for every caller that
+ * predates the résumé chat agent (app/actions/resume-chat.ts) — but that
+ * caller forces a schema-constrained tool call and MUST tell a response
+ * genuinely truncated at `max_tokens` apart from one that finished cleanly:
+ * the forced-tool path (lib/providers/anthropic.ts:96-104) returns
+ * `JSON.stringify(toolBlock.input)` regardless of how the call stopped, so a
+ * cut-off response still parses into a valid-LOOKING object with fields
+ * silently missing. Split from `complete` rather than widening its return
+ * type, the same way `callWithWebSearchDetailed` sits beside
+ * `callWithWebSearch`: every existing caller only ever wanted the text.
+ */
+export async function completeDetailed(opts: {
+  system: string;
+  prompt: string;
+  maxTokens?: number;
+  jsonSchema?: Record<string, unknown>;
+}): Promise<DetailedResponse> {
+  const { provider, apiKey, model } = routing();
+  return collectDetailed(
+    await provider.complete({
+      apiKey,
+      model,
+      system: opts.system,
+      prompt: opts.prompt,
+      maxTokens: opts.maxTokens ?? 4000,
+      ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
+    })
+  );
+}
+
+/**
  * Strips markdown code fences and extracts the first JSON value (array or
  * object) from a model response, then parses it.
  */
