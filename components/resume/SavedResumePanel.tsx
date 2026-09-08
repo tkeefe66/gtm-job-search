@@ -32,11 +32,16 @@ import type { SavedResume } from "@/lib/types";
  * third sentence when this panel's own contentEditable document carries
  * uncaptured edits (see `dirty`), since navigating away discards those too.
  */
-const RESTORE_CONFIRM =
-  "Reopening rebuilds this résumé from the choices that produced it, against your current " +
-  "career record — it may differ from the document you see here. Hand edits in this version " +
-  "stay in the saved copy but do not come back editable. Your current draft for this role " +
-  "will be saved as a checkpoint first.";
+const UNSAVED_HERE_CONFIRM =
+  "You have edits here that were never saved to this version. Opening the editor discards " +
+  "them — they exist only on this page. Continue?";
+
+/** Shown beside the button rather than in a dialog: it is context for a
+ *  decision, not a warning about a destructive act. The restore checkpoints the
+ *  current draft, so it is undoable. */
+const RESTORE_NOTE =
+  "Rebuilds this résumé from the choices that produced it, against your current career " +
+  "record, so it may differ from what you see here. Your current draft is checkpointed first."
 
 /**
  * A frozen saved résumé, mounted as stored.
@@ -110,12 +115,15 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
   }
 
   function editThisVersion() {
-    const warning = dirty
-      ? RESTORE_CONFIRM +
-        " You also have edits here that were never saved to this version — navigating away " +
-        "discards them."
-      : RESTORE_CONFIRM;
-    if (!window.confirm(warning)) return;
+    // Confirms ONLY when something is genuinely unrecoverable. The restore
+    // itself is not: the current draft is checkpointed into the archive first,
+    // which is the entire reason that mechanism exists — warning about a
+    // reversible action trains the user to click through warnings that matter.
+    // Uncaptured typing in THIS page's contentEditable document is the one
+    // exception: it lives nowhere but the DOM, and no checkpoint preserves it.
+    // What the old blanket confirm explained now sits next to the button and in
+    // the chat dock, where it can be read before the decision instead of during.
+    if (dirty && !window.confirm(UNSAVED_HERE_CONFIRM)) return;
     setError(null);
     startTransition(async () => {
       const res = await restoreSavedVersion(resume.id);
@@ -210,13 +218,16 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
           {isPending ? "Saving…" : "Save as new version"}
         </button>
         {affordance.kind === "restore" && (
-          <button
-            onClick={editThisVersion}
-            disabled={isPending}
-            className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
-          >
-            {isPending ? "Restoring…" : "Edit this version →"}
-          </button>
+          <span className="flex items-center gap-2">
+            <button
+              onClick={editThisVersion}
+              disabled={isPending}
+              className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
+            >
+              {isPending ? "Restoring…" : "Edit this version →"}
+            </button>
+            <span className="max-w-md text-xs text-ink/50">{RESTORE_NOTE}</span>
+          </span>
         )}
         {affordance.kind === "draftOnly" && (
           <span className="flex items-center gap-2 text-xs text-ink/60">

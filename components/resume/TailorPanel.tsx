@@ -56,6 +56,15 @@ export default function TailorPanel({
 
   const docPageRef = useRef<HTMLElement>(null);
   const [dirty, setDirty] = useState(false);
+  // Tracked SEPARATELY from `dirty`, and the distinction is the whole point.
+  // `dirty` means "this draft differs from the last archived Save" — true after
+  // any chat turn, and normal. `handEdits` means "there is typing in the
+  // contentEditable document that exists ONLY in the DOM" — the one thing a
+  // re-render destroys. Conflating them made every chat turn after the first
+  // prompt "you have unsaved edits, discard them?" about edits that did not
+  // exist, because onChatApplied sets dirty even though sendChatTurn already
+  // persisted the change server-side.
+  const [handEdits, setHandEdits] = useState(false);
   // Read once, on mount, and cleared by the read itself (see
   // lib/pending-chat-message.ts). useState's initializer rather than an effect:
   // an effect would run after the first paint, and ChatPanel would already have
@@ -133,6 +142,7 @@ export default function TailorPanel({
         }
       } else {
         setDirty(false);
+        setHandEdits(false);
         setSaved({ id: res.id as string });
       }
     });
@@ -176,6 +186,10 @@ export default function TailorPanel({
     setOverrides(next.overrides);
     setCoverage(next.coverage);
     setDirty(true);
+    // The re-render above just replaced the document's innerHTML, so whatever
+    // was typed into it is gone — the flag must follow, or the NEXT turn warns
+    // about edits this turn already discarded.
+    setHandEdits(false);
   }
 
   if (!selection) {
@@ -255,7 +269,7 @@ export default function TailorPanel({
       <ChatDock title="Chat about this résumé" defaultOpen>
         <ChatPanel
           jobId={jobId}
-          dirty={dirty}
+          dirty={handEdits}
           onApplied={onChatApplied}
           pendingMessage={pending}
         />
@@ -264,7 +278,10 @@ export default function TailorPanel({
         career={career}
         selection={selection}
         docPageRef={docPageRef}
-        onEdit={() => setDirty(true)}
+        onEdit={() => {
+          setDirty(true);
+          setHandEdits(true);
+        }}
         rootStyle={rootStyle}
         pageMargin={overrides.pageMargin}
       />

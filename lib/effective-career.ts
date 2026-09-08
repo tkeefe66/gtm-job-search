@@ -17,6 +17,7 @@
 import { sanitizeBulletText } from "@/lib/resume-text";
 import type { CareerRecord } from "@/lib/resume-render/render";
 import type { OverlayBullet } from "@/lib/settings-store";
+import { isClearRequest } from "@/lib/clearable-text";
 
 export interface TextOverrides {
   [target: string]: string;
@@ -153,8 +154,16 @@ export function effectiveCareer(
   });
 
   if (text.summary !== undefined && career.positioning[0]) {
-    const safe = cleaned(text.summary);
-    if (safe !== null) career.positioning.forEach((p) => (p.summary = safe));
+    // A clear is checked BEFORE `cleaned`, which refuses empty text and would
+    // silently drop the instruction — the chat would report success while the
+    // old summary stayed on the page. render.js emits the summary only
+    // `if (pos.summary)`, so "" removes the element rather than leaving a blank.
+    if (isClearRequest("summary", text.summary)) {
+      career.positioning.forEach((p) => (p.summary = ""));
+    } else {
+      const safe = cleaned(text.summary);
+      if (safe !== null) career.positioning.forEach((p) => (p.summary = safe));
+    }
   }
   if (text.name !== undefined) {
     // No `!== ""` guard, deliberately: sanitizeBulletText REFUSES empty and
@@ -166,8 +175,12 @@ export function effectiveCareer(
     if (safe !== null) career.identity.name = safe;
   }
   if (text.positioning !== undefined && career.positioning[0]) {
-    const safe = cleaned(text.positioning);
-    if (safe !== null) career.positioning.forEach((p) => (p.tagline = safe));
+    if (isClearRequest("positioning", text.positioning)) {
+      career.positioning.forEach((p) => (p.tagline = ""));
+    } else {
+      const safe = cleaned(text.positioning);
+      if (safe !== null) career.positioning.forEach((p) => (p.tagline = safe));
+    }
   }
 
   return { career, warnings };

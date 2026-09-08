@@ -19,6 +19,7 @@
  * then applying is exact, not an approximation of atomicity.
  */
 import { randomBytes } from "node:crypto";
+import { isClearRequest } from "@/lib/clearable-text";
 import { sanitizeBulletText } from "@/lib/resume-text";
 import { parseTokenValue, parsePageMargin } from "@/lib/resume-design-tokens";
 import type { ResumeOverrides } from "@/lib/resume-overrides";
@@ -260,6 +261,11 @@ function validateOperation(
           return '"' + target + '" is not on the page — it is not part of the current selection.';
         }
       }
+      // An empty value on a clearable slot is a REMOVAL, not a malformed edit.
+      // sanitizeBulletText refuses empty text — right for a bullet, where
+      // removal is drop_bullet's job — so "remove the text under my name" was
+      // rejected with "That text is empty." until this branch existed.
+      if (isClearRequest(String(target), String(op.text ?? ""))) return undefined;
       return sanitizeBulletText(String(op.text ?? "")).error;
     }
     case "propose_career_bullet": {
@@ -486,10 +492,16 @@ export function applyOperations(
       }
       case "set_text": {
         const target = op.target as string;
-        const safe = sanitizeBulletText(String(op.text ?? "")).text as string;
+        // A clear stores "" EXPLICITLY. sanitizeBulletText returns no `text`
+        // for empty input, so the obvious `.text as string` writes `undefined`
+        // — and effectiveCareer reads the override with `!== undefined`, so the
+        // clear would vanish between the two and the old line would stay on the
+        // page while the chat reported success.
+        const raw = String(op.text ?? "");
+        const safe = isClearRequest(target, raw) ? "" : (sanitizeBulletText(raw).text as string);
         draft.text = draft.text || {};
         draft.text[target] = safe;
-        applied.push("edited text: " + target);
+        applied.push(isClearRequest(target, raw) ? "cleared text: " + target : "edited text: " + target);
         break;
       }
       case "propose_career_bullet": {
