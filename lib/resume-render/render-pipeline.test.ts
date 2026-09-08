@@ -50,3 +50,45 @@ describe("the tailoring pipeline (selectBullets + renderBody) never crashes", ()
     expect(html.length).toBeGreaterThan(0);
   });
 });
+
+import { describe as describe2, it, expect as expect2 } from "vitest";
+
+const ORDERING_FIXTURE = {
+  identity: { name: "T", contacts: [] },
+  positioning: [{ id: "p", themes: [], tagline: "t", summary: "s" }],
+  roles: [
+    {
+      id: "r1",
+      title: "Role One",
+      org: "Org",
+      dates: "2020 – Present",
+      bullets: [
+        { id: "b1", priority: 1, themes: [], text: "anchor, off-theme" },
+        { id: "b2", priority: 2, themes: ["other"], text: "middle" },
+        { id: "b3", priority: 3, themes: ["systems"], text: "on-theme" },
+        { id: "b6", priority: 6, themes: ["systems"], tail: true, text: "award" },
+      ],
+    },
+  ],
+  advisory: [],
+  education: [],
+  rules: { taper: [4], themes: ["systems", "other"], compressAfter: null },
+} as unknown as CareerRecord;
+
+describe2("selectBullets ordering", () => {
+  it("leads with the on-theme bullet, keeps the anchor, and sinks tail bullets", () => {
+    const sel = selectBullets(ORDERING_FIXTURE, { themes: ["systems"] });
+    expect2(sel.bullets.r1[0]).toBe("b3");
+    expect2(sel.bullets.r1).toContain("b1");
+    expect2(sel.bullets.r1[sel.bullets.r1.length - 1]).toBe("b6");
+  });
+
+  it("orders tail bullets among themselves by priority, after every non-tail bullet", () => {
+    const twoTails = JSON.parse(JSON.stringify(ORDERING_FIXTURE));
+    twoTails.roles[0].bullets.push({ id: "b5", priority: 5, themes: ["systems"], tail: true, text: "award 2" });
+    twoTails.rules.taper = [5];
+    const sel = selectBullets(twoTails, { themes: ["systems"] });
+    const ids = sel.bullets.r1;
+    expect2(ids.slice(-2)).toEqual(["b5", "b6"]);
+  });
+});

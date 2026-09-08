@@ -11,6 +11,13 @@ export interface ResumeBullet {
   id: string;
   priority: number;
   themes: string[];
+  /**
+   * Recognition rather than accomplishment — awards, honours. Always sorts
+   * after every non-tail bullet in its role, whatever its theme weight.
+   * Priority alone used to carry this, which is why a weight-first sort
+   * without it promotes an awards line to the top of a role.
+   */
+  tail?: boolean;
   /** May contain a literal <strong>...</strong> span around one figure. */
   text: string;
 }
