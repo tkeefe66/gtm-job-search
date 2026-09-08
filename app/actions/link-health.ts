@@ -151,11 +151,17 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       if (r.closedUnlisted) report.closedUnlisted++;
       if (r.closedAbsent) report.closedAbsent++;
       if (r.closedRemoved) report.closedRemoved++;
-      // Not `if (r.unclear)` alone: the 404 check below repairOne's board
-      // lookup can close a row that the lookup had already set aside as
+      // Not `if (r.unclear)` alone: a check that runs AFTER repairOne's board
+      // lookup can close a row the lookup had already set aside as
       // undecidable. Listing it would offer the user a decision that has
       // already been made, on a row the table now shows as closed.
-      if (r.unclear && !r.closed) report.unclear.push(r.unclear);
+      //
+      // `wasClosed`, not `!r.closed`: the original guard named the hard-404
+      // flag alone, so every closure reason added after it reopened the hole
+      // silently. It did — a row closed by the soft-404 check was reported as
+      // "closed 2" AND listed under "3 we could not decide", the same rows
+      // counted twice under contradictory headings.
+      if (r.unclear && !wasClosed(r)) report.unclear.push(r.unclear);
     }
   }
 
@@ -169,6 +175,18 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       `${report.closedAbsent} of those found by a slug read from the link`
   );
   return report;
+}
+
+/**
+ * Did this pass close the row, for any reason?
+ *
+ * One definition, because there are now four and the branches that need to ask
+ * are not the branches that set them. Adding a fifth reason means adding it
+ * here, and the test that pins "a closed row is never also listed as
+ * undecided" is what says so.
+ */
+function wasClosed(out: RepairOutcome): boolean {
+  return !!(out.closed || out.closedUnlisted || out.closedAbsent || out.closedRemoved);
 }
 
 interface RepairOutcome {
@@ -316,7 +334,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   // ambiguous signal must never close a live posting. Skipped for a row a board
   // has already closed above, which would otherwise write the same status
   // twice and count one closure under two reasons.
-  if (!out.closedAbsent && !out.closedUnlisted && (await checkJobUrl(liveUrl)) === "dead") {
+  if (!wasClosed(out) && (await checkJobUrl(liveUrl)) === "dead") {
     const failure = describeWriteFailure(
       (await updateJob(job.id, { status: "Posting Closed" })).error,
       `close ${job.company} / ${job.role_title}`
@@ -333,7 +351,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   //
   // Not everything is reachable this way: ZipRecruiter answers 403 to this
   // fetch, so its dead rows stay open and no free signal exists for them.
-  if (!out.closed && !out.closedAbsent && !out.closedUnlisted) {
+  if (!wasClosed(out)) {
     const removed = await removalMarker(liveUrl);
     if (removed !== null) {
       const failure = describeWriteFailure(

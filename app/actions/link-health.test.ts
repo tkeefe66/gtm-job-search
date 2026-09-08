@@ -370,3 +370,40 @@ describe("a soft 404 — the page says gone, the server says 200", () => {
     expect(report.closedRemoved).toBe(0);
   });
 });
+
+// The "says 2, shows 3" defect, seen 2026-09-07: Pricefx was closed by the
+// soft-404 check AND listed under "we could not decide" in the same report.
+// The filter was `if (r.unclear && !r.closed)`, where `closed` is only the hard
+// 404 flag — so every closure reason added after it reopened the hole. A row
+// can be set aside as undecidable by the board lookup and then closed by a
+// later check in the same pass; when that happens the report must not offer a
+// decision that has already been made.
+describe("a row that ends up closed is never also listed as undecided", () => {
+  test("closed by the page's own words", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+    h.page = "<p>this job was removed</p>";
+
+    const report = await repairJobLinks();
+
+    expect(report.closedRemoved).toBe(1);
+    expect(report.unclear).toEqual([]);
+  });
+
+  test("closed by a hard 404, the case the original guard covered", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+    h.urlStatus = "dead";
+
+    const report = await repairJobLinks();
+
+    expect(report.closed).toBe(1);
+    expect(report.unclear).toEqual([]);
+  });
+
+  test("a row nothing closed is still listed", async () => {
+    h.jobs = [job({ job_url: "https://builtin.com/job/x/1" })];
+
+    const report = await repairJobLinks();
+
+    expect(report.unclear).toHaveLength(1);
+  });
+});

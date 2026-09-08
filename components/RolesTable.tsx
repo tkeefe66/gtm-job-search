@@ -841,6 +841,13 @@ export default function RolesTable({
                     ` Closed ${linkReport.closedAbsent} whose own board no longer carries the posting.`}
                   {linkReport.closedRemoved > 0 &&
                     ` Closed ${linkReport.closedRemoved} whose page says the job was removed.`}
+                  {/* Stated in the SAME sentence as the closures. Left to the
+                      disclosure below on its own, "Closed 2" and "Show the 3"
+                      read as a contradiction — which is exactly how it was
+                      read, on a report where the same rows really were counted
+                      under both. */}
+                  {linkReport.unclear.length > 0 &&
+                    ` ${linkReport.unclear.length} need your call.`}
                   {/* "Everything checked out" has to mean EVERYTHING. The
                       unresolved rows used to be counted in a clause here and
                       nowhere else; they are listed below now, with the other
