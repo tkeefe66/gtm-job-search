@@ -79,6 +79,17 @@
     const rel = (y) => y - rsmTop;
     const fragments = [];
     for (const child of rsm.children) {
+      // The guides this file draws are appended as children of .rsm, so they come
+      // back through rsm.children on the next walk. draw() strips them before
+      // measuring; measure() does not, and its LAST fragment was therefore the
+      // absolutely-positioned guide div rather than the document's real end.
+      // Measured live on a 1809px document Chrome prints on 3 pages: measure()
+      // reported "1 page, 99.5% full", and 2 pages the moment the guides were
+      // removed from the DOM. That number is what the chat is told about the page,
+      // so the model was reasoning about a one-page résumé that does not exist.
+      // The guard lives in the shared walk, not in measure(), so no future caller
+      // can reintroduce it.
+      if (child.classList.contains('rsm-page-guide')) continue;
       const roles = child.classList.contains('rsm-section')
         ? [...child.querySelectorAll(':scope > .rsm-role')]
         : [];
