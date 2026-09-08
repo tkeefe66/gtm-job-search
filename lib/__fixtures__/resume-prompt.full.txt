@@ -7,3 +7,5 @@ Key skills: Salesforce, Marketo, Workato
 Salary range: $180K–$220K
 Company description: Series C industrial robotics company.
 Fit summary: Strong ops leader with hands-on automation experience.
+Requirements: 10+ years leading a systems team; Deep CPQ ownership
+Nice to have (not required): Experience with dbt

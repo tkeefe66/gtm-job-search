@@ -5,6 +5,7 @@ import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { withBudget } from "@/lib/metered";
 import { complete, parseJson } from "@/lib/model-call";
 import { supabase } from "@/lib/supabase";
+import type { PostingDetail } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { buildThemePrompt, type JobSummaryFields } from "@/lib/resume-prompt";
 import {
@@ -25,6 +26,7 @@ interface JobRow {
   department: string | null;
   salary_range: string | null;
   company_description: string | null;
+  posting: PostingDetail | null;
 }
 
 /**
@@ -42,7 +44,12 @@ async function loadJobForTenant(
   const { data, error } = await supabase
     .forTenant(tenantId)
     .from("jobs")
-    .select("role_title, company, key_skills, fit_summary, seniority, department, salary_range, company_description")
+        // `posting` is why this list changed: the JD was stored by migration 017 and
+    // read by ingest and the backfill, and this select is where it stopped —
+    // every tailored résumé to date was themed without it.
+    .select(
+      "role_title, company, key_skills, fit_summary, seniority, department, salary_range, company_description, posting"
+    )
     .eq("id", jobId)
     .maybeSingle();
   if (error) {
@@ -62,6 +69,10 @@ function toSummaryFields(job: JobRow): JobSummaryFields {
     department: job.department,
     salaryRange: job.salary_range,
     companyDescription: job.company_description,
+    // `?? null` then default: a row stored before the column exists arrives
+    // without the key at all, the same defensive read never_live carries.
+    requirements: (job.posting ?? null)?.requirements ?? [],
+    niceToHaves: (job.posting ?? null)?.niceToHaves ?? [],
   };
 }
 

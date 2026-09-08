@@ -29,6 +29,10 @@ export const FIXTURE_VOCABULARY: ThemeVocabulary = {
 };
 
 export const FIXTURE_JOB_FULL: JobSummaryFields = {
+  // Deliberately free of the shipped profile's own phrases: the neutrality
+  // guard scans this file, and a fixture echoing querySubject would mask a leak.
+  requirements: ["10+ years leading a systems team", "Deep CPQ ownership"],
+  niceToHaves: ["Experience with dbt"],
   roleTitle: "Director of Revenue Operations",
   company: "Northwind Robotics",
   keySkills: "Salesforce, Marketo, Workato",
@@ -40,6 +44,8 @@ export const FIXTURE_JOB_FULL: JobSummaryFields = {
 };
 
 export const FIXTURE_JOB_SPARSE: JobSummaryFields = {
+  requirements: [],
+  niceToHaves: [],
   roleTitle: "Director of Revenue Operations",
   company: "Northwind Robotics",
   keySkills: null,

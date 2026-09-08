@@ -16,6 +16,23 @@ export interface JobSummaryFields {
   department: string | null;
   salaryRange: string | null;
   companyDescription: string | null;
+  /**
+   * What the posting itself says it requires, from the `posting` jsonb
+   * (lib/posting-detail.ts). Empty when nobody has read the posting — which was
+   * the state of EVERY row until this was wired: the column existed, ingest and
+   * the backfill filled it, and this prompt could not see it.
+   */
+  requirements: string[];
+  /** Stated preferences. Kept separate because they do not disqualify. */
+  niceToHaves: string[];
+}
+
+/** A list renders as one labelled line, or nothing at all — the same rule
+ *  optionalLine follows, for the same reason: an empty "Requirements:" reads to
+ *  the model as a posting that requires nothing. */
+function optionalList(label: string, values: string[]): string {
+  if (values.length === 0) return "";
+  return `\n${label}: ${values.join("; ")}`;
 }
 
 /** A missing field OMITS its whole line rather than rendering an empty or
@@ -44,7 +61,7 @@ Respond with strict JSON: {"themes": ["<id>", "<id>", ...]}. Include only themes
 
   const prompt = `JOB POSTING
 Title: ${job.roleTitle}
-Company: ${job.company}${optionalLine("Seniority", job.seniority)}${optionalLine("Department", job.department)}${optionalLine("Key skills", job.keySkills)}${optionalLine("Salary range", job.salaryRange)}${optionalLine("Company description", job.companyDescription)}${optionalLine("Fit summary", job.fitSummary)}
+Company: ${job.company}${optionalLine("Seniority", job.seniority)}${optionalLine("Department", job.department)}${optionalLine("Key skills", job.keySkills)}${optionalLine("Salary range", job.salaryRange)}${optionalLine("Company description", job.companyDescription)}${optionalLine("Fit summary", job.fitSummary)}${optionalList("Requirements", job.requirements)}${optionalList("Nice to have (not required)", job.niceToHaves)}
 `;
 
   return { system, prompt };
