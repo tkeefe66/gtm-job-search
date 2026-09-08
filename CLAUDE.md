@@ -380,13 +380,33 @@ before the change: the write is a status and nothing else, `never_live` is
 ingest-time provenance, and `partitionNeverLive` hides on `never_live` rather
 than on status, so a role closed here stays visible under Out. A row closed this
 way also skips the trailing 404 check, which would otherwise write the same
-status twice. Only a definitive 404/410 closes anything on the URL itself,
-unchanged.
+status twice.
+
+**`checkJobUrl` itself closes on TWO definitive answers, not one, since
+2026-09-07.** A 404/410 is the obvious one. The other is a redirect that LANDED
+ON A LISTING: a closed req is commonly 30x'd to the careers page it came from,
+which answers 200, and `checkJobUrl` set `redirect: "follow"` and then read only
+`res.status` — so it called those live. Measured: Samsara's
+`/company/careers/roles/7974118` lands on `/company/careers/roles` while a live
+sibling id redirects nowhere, and the same company's dead
+`job-boards.greenhouse.io` link hops CROSS-HOST to that same listing. That hop
+is why `redirectVerdict` (`lib/redirect-verdict.ts`) compares the posting
+IDENTIFIER rather than asking whether the landing page is an ancestor of the
+link — an ancestor test cannot see across hosts. It answers `landed-on-listing`
+only when the identifier is gone AND the landing page names no posting at all;
+a CHANGED identifier is `moved` and closes nothing, because that is evidence of
+neither life nor death. A posting slug carrying no digit (`/careers/director-gtm-business-operations`)
+is invisible to the rule rather than at risk from it — deliberate, since the
+predicate that decides "this segment names a posting" also decides whether a
+role gets closed AND hidden. The rule runs only for a status that would
+otherwise have read live; an ambiguous status stays ambiguous however it
+redirected.
 
 **A role that was already dead when we found it is hidden, not deleted.**
-`ingestRoles` closes a role on two signals — a definitive 404/410 from
-`checkJobUrl`, or `unlisted` (the employer's guessed board does not list the
-title) — but only the FIRST sets `jobs.never_live`. `partitionNeverLive`
+`ingestRoles` closes a role on two signals — `dead` from `checkJobUrl` (a
+definitive 404/410, or a redirect that landed on a listing; see the paragraph
+above), or `unlisted` (the employer's guessed board does not list the title) —
+but only the FIRST sets `jobs.never_live`. `partitionNeverLive`
 (`lib/never-live.ts`) drops those rows in `getJobs`, which removes them from the
 `/roles` table and from BOTH tiles at once, since `tileCounts` derives from the
 same array; the count comes back as `hiddenCount` and renders as one muted line
