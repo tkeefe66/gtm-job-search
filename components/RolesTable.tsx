@@ -29,6 +29,8 @@ import { selectionInView, summarizeBulkStatus, type BulkWriteResult } from "@/li
 import { classifyJobLink, hostOf } from "@/lib/job-link";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
+import { enrichRoles } from "@/app/actions/enrich";
+import { runEnrichPass, summarizeEnrich, type EnrichPassResult } from "@/lib/enrich-pass";
 import { sourceOptions } from "@/lib/job-sources";
 import { Spinner } from "./ui";
 
@@ -228,6 +230,8 @@ export default function RolesTable({
   const [applying, setApplying] = useState(false);
   const [checkingLinks, setCheckingLinks] = useState(false);
   const [linkReport, setLinkReport] = useState<LinkRepairReport | null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichReport, setEnrichReport] = useState<EnrichPassResult | null>(null);
 
   /**
    * The report's undecidable rows, split by reason. Computed once per report
@@ -584,6 +588,34 @@ export default function RolesTable({
     }
   }
 
+  /**
+   * Reads the posting behind every role that has none stored, in bounded
+   * batches.
+   *
+   * The loop is runEnrichPass, not a `for` here: it decides when to stop
+   * paying, and a loop in this component is reachable from no test in this
+   * repo. Progress lands on screen after every batch — a pass over a whole
+   * table is minutes of fetching, and a silent button for that long reads as
+   * broken.
+   */
+  async function handleEnrich() {
+    setEnriching(true);
+    setEnrichReport(null);
+    try {
+      const pass = await runEnrichPass({
+        runBatch: ({ cursor }) => enrichRoles({ cursor }),
+        onProgress: (totals) => setEnrichReport({ ...totals, batches: 0 }),
+      });
+      setEnrichReport(pass);
+      // Reload whatever the pass did or did not write: rows may have been
+      // relinked as well as enriched, and the table would keep showing the
+      // links it just replaced.
+      if (pass.error === undefined) await load();
+    } finally {
+      setEnriching(false);
+    }
+  }
+
   function toggleSelected(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -746,6 +778,14 @@ export default function RolesTable({
           >
             {checkingLinks ? "Checking links…" : "Check links"}
           </button>
+          <button
+            onClick={() => void handleEnrich()}
+            disabled={enriching}
+            title="Read the posting behind every role that has none stored, and save what it says"
+            className="rounded-md border border-slate px-4 py-2 text-sm font-medium text-ink/70 transition hover:border-ink hover:text-ink disabled:opacity-50"
+          >
+            {enriching ? "Reading postings…" : "Enrich roles"}
+          </button>
         </div>
       </div>
 
@@ -837,6 +877,62 @@ export default function RolesTable({
                   busy={applying}
                 />
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {enrichReport && (
+        <div className="mb-6 rounded-lg border border-slate bg-canvas p-4 text-sm text-ink/70">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              {enrichReport.error !== undefined
+                ? describeWriteFailure(enrichReport.error, "read your postings")
+                : summarizeEnrich(enrichReport)}
+            </div>
+            <button
+              onClick={() => setEnrichReport(null)}
+              className="shrink-0 rounded px-2 py-0.5 text-xs text-ink/40 transition hover:bg-slate hover:text-ink"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {enrichReport.blocked.length > 0 && (
+            <div className="mt-3 border-t border-slate pt-3">
+              {/* Nothing here was changed or closed. Every board behind these
+                  outcomes was found by guessing a slug from the company name,
+                  so the row says what we could not confirm and links to what we
+                  found — it never asserts whose board it is. */}
+              <p className="mb-2 text-xs text-ink/50">
+                Left alone — reading these could have stored another posting&apos;s words:
+              </p>
+              <ul className="space-y-1">
+                {enrichReport.blocked.map((b) => (
+                  <li key={b.id} className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="text-ink">
+                      {b.company} — {b.role_title}
+                    </span>
+                    <span className="text-xs text-ink/50">
+                      {b.reason === "unresolved"
+                        ? "only a job-board copy, and no employer posting was found"
+                        : b.reason === "absent"
+                          ? "not on the board we found for them"
+                          : b.reason === "empty"
+                            ? "the board we found lists nothing"
+                            : "several postings there could be this role"}
+                    </span>
+                    <a
+                      href={b.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-ink/50 underline hover:text-ink"
+                    >
+                      open
+                    </a>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

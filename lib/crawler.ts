@@ -8,7 +8,7 @@ import { resolveTenantId } from "@/lib/tenant";
 import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
-import { isDisallowed, robotsUrlFor } from "@/lib/robots";
+import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import { parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_FIELDS } from "@/lib/types";
 import { normalizeTitle } from "@/lib/role-key";
@@ -199,30 +199,6 @@ export function runsEligibleForClosure(
   });
 }
 
-async function fetchPage(url: string): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT },
-    });
-    if (!res.ok) {
-      console.warn(`crawler: fetch of ${url} returned ${res.status}`);
-      return null;
-    }
-    return await res.text();
-  } catch (err) {
-    console.warn(
-      `crawler: fetch of ${url} failed — ${err instanceof Error ? err.message : String(err)}`
-    );
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function resolveCareersUrl(company: string): Promise<string | null> {
   const raw = await callWithWebSearch({
     system:
@@ -276,51 +252,6 @@ export function rolesFromRaw(raw: string): Role[] {
     return parsed.roles ?? [];
   }
   return [];
-}
-
-// Three-way outcome of fetching robots.txt itself, kept distinct from what
-// fetchPage returns (which flattens "absent" and "errored" to the same
-// null). A 404/410 means the site simply doesn't publish one — that's a
-// normal, well-formed "allowed" signal. A network error, timeout, or 5xx
-// means we could not read the rules at all, which is not the same thing and
-// must not be treated as permission.
-type RobotsFetch =
-  | { kind: "ok"; body: string }
-  | { kind: "absent" }
-  | { kind: "error" };
-
-async function fetchRobotsTxt(url: string): Promise<RobotsFetch> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT },
-    });
-    if (res.status === 404 || res.status === 410) {
-      return { kind: "absent" };
-    }
-    if (!res.ok) {
-      console.warn(`crawler: robots.txt fetch of ${url} returned ${res.status}`);
-      return { kind: "error" };
-    }
-    return { kind: "ok", body: await res.text() };
-  } catch (err) {
-    console.warn(
-      `crawler: robots.txt fetch of ${url} failed — ${err instanceof Error ? err.message : String(err)}`
-    );
-    return { kind: "error" };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchAllowed(careersUrl: string): Promise<boolean> {
-  const result = await fetchRobotsTxt(robotsUrlFor(careersUrl));
-  if (result.kind === "absent") return true; // no robots.txt served — allowed
-  if (result.kind === "error") return false; // could not read the rules — don't guess
-  return !isDisallowed(result.body, new URL(careersUrl).pathname);
 }
 
 /**

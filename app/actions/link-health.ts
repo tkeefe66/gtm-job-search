@@ -7,6 +7,7 @@ import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { BoardCache } from "@/lib/resolve-job-link";
+import { relinkPatch } from "@/lib/relink";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { bucketFor } from "@/lib/job-statuses";
 import type { UnclearReason } from "@/lib/link-report";
@@ -186,7 +187,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
         // source_url keeps the link being overwritten, exactly as the
         // aggregator branch does, and for the same non-lossy reason — even
         // though the slug here was read rather than guessed.
-        (await updateJob(job.id, { job_url: verified.url, source_url: job.source_url ?? url }))
+        (await updateJob(job.id, relinkPatch(job, url, verified.url)))
           .error,
         `relink ${job.company} / ${job.role_title}`
       );
@@ -221,7 +222,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
         // destroy the only URL this role ever had. Written only on the first
         // relink; a re-run must not overwrite the original with the previous
         // resolution.
-        (await updateJob(job.id, { job_url: resolved.url, source_url: job.source_url ?? url }))
+        (await updateJob(job.id, relinkPatch(job, url, resolved.url)))
           .error,
         `relink ${job.company} / ${job.role_title}`
       );

@@ -71,3 +71,23 @@ export function isJsShell(page: ExtractedPage): boolean {
   const jobLinks = page.links.filter((l) => JOB_LINK_PATTERN.test(l.href));
   return jobLinks.length < MIN_JOB_LINKS;
 }
+
+/**
+ * Reads a SINGLE POSTING page, the backfill's equivalent of the crawler's
+ * classifyFetchOutcome.
+ *
+ * Separate from isJsShell, and it must stay separate: isJsShell's second clause
+ * requires three job LINKS, which is the right question for a careers listing
+ * and the wrong one for a posting — a posting page links to one job, its own,
+ * and often to none. Judging postings with it classified every real one as a
+ * shell and skipped the whole table.
+ *
+ * What remains is the length test, which is the part that actually detects an
+ * unrendered SPA: a client-rendered shell serves almost no text at all.
+ */
+export function readPostingPage(
+  html: string
+): { kind: "shell" } | { kind: "content"; page: ExtractedPage } {
+  const page = stripHtml(html);
+  return page.text.length < MIN_CONTENT_CHARS ? { kind: "shell" } : { kind: "content", page };
+}

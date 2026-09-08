@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { isJsShell, MAX_PAGE_CHARS, stripHtml } from "./page-extract";
+import { isJsShell, MAX_PAGE_CHARS, readPostingPage, stripHtml } from "./page-extract";
 
 const REAL_PAGE = `
 <html><head><style>.a{color:red}</style><script>var x=1;</script></head>
@@ -139,5 +139,30 @@ describe("isJsShell threshold boundaries", () => {
     expect(page.text.length).toBe(target);
     expect(page.links.length).toBe(3);
     expect(isJsShell(page)).toBe(false);
+  });
+});
+
+// A POSTING page is not a listing page, and isJsShell cannot judge one:
+// its second clause requires three job links, which a single posting has no
+// reason to carry. Running the backfill through classifyFetchOutcome (as the
+// posting-detail spec first said to) classified every real posting as a shell
+// and skipped the entire table.
+describe("readPostingPage judges a single posting, not a listing", () => {
+  const long = "The role requires five years of experience. ".repeat(20);
+
+  test("a posting with plenty of text and no job links is readable", () => {
+    const res = readPostingPage(`<html><body><p>${long}</p></body></html>`);
+
+    expect(res.kind).toBe("content");
+  });
+
+  test("a JS shell with nothing rendered is still a shell", () => {
+    expect(readPostingPage("<html><body><div id='root'></div></body></html>").kind).toBe("shell");
+  });
+
+  test("what it read is what the prompt gets", () => {
+    const res = readPostingPage(`<html><body><p>${long}</p></body></html>`);
+
+    expect(res.kind === "content" && res.page.text).toContain("five years of experience");
   });
 });

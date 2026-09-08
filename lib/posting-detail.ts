@@ -13,6 +13,13 @@ export interface PostingDetail {
    * question is "am I disqualified", and these do not disqualify.
    */
   niceToHaves: string[];
+  /**
+   * When the backfill last wrote this row, ISO-8601. Absent on a row ingest
+   * wrote, which is the point: the enrich rescore offer compares this against
+   * the `enrich_rescored_at` stamp, and an ingested row already scored on
+   * these words needs no re-score.
+   */
+  enrichedAt?: string;
 }
 
 /**
