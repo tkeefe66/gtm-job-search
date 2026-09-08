@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
   RETENTION_DAYS,
   EXPIRED_PREDICATE,
@@ -6,6 +6,10 @@ import {
   expiresAtFrom,
   isExpired,
 } from "./resume-retention";
+import {
+  CHECKPOINT_RETENTION_DAYS,
+  SUPERSEDED_CHECKPOINT_DAYS,
+} from "@/lib/resume-retention";
 
 describe("retention window", () => {
   test("expiry is exactly RETENTION_DAYS after now", () => {
@@ -68,5 +72,32 @@ describe("the two SQL predicates are exact complements", () => {
     const now = new Date("2026-09-07T12:00:00.000Z");
     const boundaryIsExpired = isExpired(new Date(now), now);
     expect(boundaryIsExpired).toBe(operatorOf(EXPIRED_PREDICATE) === "<=");
+  });
+});
+
+describe("tiered retention", () => {
+  const now = new Date("2026-09-08T00:00:00.000Z");
+  const days = (d: Date) => Math.round((d.getTime() - now.getTime()) / 86400000);
+
+  // Mutation this catches: expiresAtFrom ignoring its new argument and always
+  // stamping RETENTION_DAYS. Every existing call site passes no argument, so a
+  // test that only exercises the default cannot see it.
+  it("stamps the day count it is given", () => {
+    expect(days(expiresAtFrom(now, CHECKPOINT_RETENTION_DAYS))).toBe(30);
+    expect(days(expiresAtFrom(now, SUPERSEDED_CHECKPOINT_DAYS))).toBe(3);
+  });
+
+  // Mutation this catches: changing the default, which would silently reprice
+  // every deliberate Save in the app.
+  it("defaults to the 60-day window", () => {
+    expect(days(expiresAtFrom(now))).toBe(RETENTION_DAYS);
+    expect(RETENTION_DAYS).toBe(60);
+  });
+
+  // Mutation this catches: tiers that are not strictly ordered. A superseded
+  // checkpoint outliving the newest one would make demotion an extension.
+  it("orders the three tiers", () => {
+    expect(SUPERSEDED_CHECKPOINT_DAYS).toBeLessThan(CHECKPOINT_RETENTION_DAYS);
+    expect(CHECKPOINT_RETENTION_DAYS).toBeLessThan(RETENTION_DAYS);
   });
 });
