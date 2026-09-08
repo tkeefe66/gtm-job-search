@@ -90,6 +90,13 @@ export const AGGREGATOR_HOSTS = [
   "otta.com",
   "snagajob.com",
   "careerbuilder.com",
+  // Added 2026-09-07 after sweeping every distinct job_url host in production
+  // against this list and ATS_HOSTS. All three were falling through to
+  // `other`, so link health read them as the employer's own careers site and
+  // never tried to find a real posting behind them.
+  "jobleads.com",
+  "themuse.com",
+  "remotive.com",
 ] as const;
 
 /** null when there is no usable URL at all — not the same as `other`. */

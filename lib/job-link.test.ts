@@ -20,10 +20,34 @@ describe("classifyJobLink", () => {
     expect(classifyJobLink("https://www.builtincolorado.com/job/456")).toBe("aggregator");
   });
 
+  // Found by sweeping every distinct job_url host in production against these
+  // two lists on 2026-09-07. All three were classifying as `other` — which
+  // this file defines as the EMPLOYER speaking for itself — so link health
+  // believed jobleads.com was DataRobot's own careers site and never looked
+  // for a better link. That row answers 403 to every fetch, so nothing else
+  // in the pass had anything to say about it either, and it sat as New.
+  test("the resellers the host sweep found", () => {
+    expect(
+      classifyJobLink("https://www.jobleads.com/us/job/vp-revenue-operations--boston--e14d3")
+    ).toBe("aggregator");
+    expect(classifyJobLink("https://www.themuse.com/jobs/acme/vp-revenue-operations")).toBe(
+      "aggregator"
+    );
+    expect(classifyJobLink("https://remotive.com/remote-jobs/sales/vp-revops-1234567")).toBe(
+      "aggregator"
+    );
+  });
+
   test("a company's own domain is 'other', not a problem to fix", () => {
     // The employer speaking for itself, just not through a vendor we know.
     expect(classifyJobLink("https://elevenlabs.io/careers/123")).toBe("other");
     expect(classifyJobLink("https://www.workato.com/careers/abc")).toBe("other");
+    // The same sweep's negative half. These read like job boards and are not:
+    // a careers subdomain is still the employer, and adding one here would
+    // send the pass hunting for a "better" link than the real one.
+    expect(classifyJobLink("https://corningjobs.corning.com/job/1")).toBe("other");
+    expect(classifyJobLink("https://jobs.appliedmaterials.com/job/2")).toBe("other");
+    expect(classifyJobLink("https://careers.te.com/job/3")).toBe("other");
   });
 
   test("remote.com is the employer Remote, not a job aggregator", () => {
