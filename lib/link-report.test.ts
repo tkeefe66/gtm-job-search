@@ -41,7 +41,12 @@ describe("splitUnclear", () => {
   });
 
   test("no rows at all still returns every group", () => {
-    expect(splitUnclear([])).toEqual({ ambiguous: [], empty: [], unresolved: [] });
+    expect(splitUnclear([])).toEqual({
+      ambiguous: [],
+      empty: [],
+      unresolved: [],
+      likelyClosed: [],
+    });
   });
 
   // Mutation caught: `unresolved` rows falling into either closable group.
@@ -92,3 +97,30 @@ describe("what stays in the report after a bulk move", () => {
     expect(remainingUnclear(rows, ["b"], ["b"]).map((r) => r.id)).toEqual(["a", "b", "c"]);
   });
 })
+
+// A fourth reason, from a real case on 2026-09-07: eleven openai.com rows whose
+// employer site answers 403 to any automated reader, and whose board — found by
+// GUESSING a slug — no longer lists the titles. The user checked ten by hand
+// and every one redirected to the general careers page. The app had both
+// signals and said nothing.
+describe("likely-closed rows are grouped like every other reason", () => {
+  test("the new reason gets its own group", () => {
+    const rows = [
+      { id: "a", reason: "likely-closed" as const },
+      { id: "b", reason: "unresolved" as const },
+    ];
+
+    expect(splitUnclear(rows).likelyClosed.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  // The banner renders `group.length > 0`, so a reason resolving to undefined
+  // throws rather than rendering nothing.
+  test("every reason still gets an array, always", () => {
+    const groups = splitUnclear([]);
+
+    expect(groups.ambiguous).toEqual([]);
+    expect(groups.empty).toEqual([]);
+    expect(groups.unresolved).toEqual([]);
+    expect(groups.likelyClosed).toEqual([]);
+  });
+});

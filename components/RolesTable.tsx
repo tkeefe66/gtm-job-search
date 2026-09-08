@@ -265,7 +265,9 @@ export default function RolesTable({
   // "deal with all of this" is a single click rather than three.
   const orderedUnclear = useMemo(() => {
     const g = splitUnclear(linkReport?.unclear ?? []);
-    return [...g.empty, ...g.ambiguous, ...g.unresolved];
+    // likely-closed leads: it is the only reason carrying two independent
+    // signals, so it is the group most worth acting on.
+    return [...g.likelyClosed, ...g.empty, ...g.ambiguous, ...g.unresolved];
   }, [linkReport]);
 
 ;
@@ -1622,6 +1624,9 @@ const UNCLEAR_NOTE: Record<string, string> = {
   empty: "the board we found lists nothing",
   ambiguous: "several postings there could be this role",
   unresolved: "only a job-board copy, no employer posting found",
+  // Two signals at once, which is why this one leads the list: nothing about
+  // the posting is knowable AND the board no longer carries the title.
+  "likely-closed": "their site blocks us and their board no longer lists it — likely closed",
 };
 
 // When this role was found. Carries BOTH the calendar date and the age: the

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   /** What updateJob returns. `""` is the unreachable-database shape. */
   updateError: undefined as string | undefined,
   urlStatus: "live" as "live" | "dead" | "unknown",
+  resolved: null as { precision: string; url: string } | null,
   robotsAllows: true,
   page: null as string | null,
 }));
@@ -51,7 +52,7 @@ vi.mock("@/lib/fetch-page", () => ({
   fetchPage: vi.fn(async () => h.page),
 }));
 vi.mock("@/lib/resolve-job-link", () => ({
-  resolveEmployerLink: vi.fn(async () => null),
+  resolveEmployerLink: vi.fn(async () => h.resolved),
   verifyPostingLink: vi.fn(async () => h.verified),
   newBoardCache: () => new Map(),
 }));
@@ -59,6 +60,7 @@ vi.mock("@/lib/resolve-job-link", () => ({
 import { repairJobLinks } from "./link-health";
 import { updateJob } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
+import { resolveEmployerLink } from "@/lib/resolve-job-link";
 import { fetchPage } from "@/lib/fetch-page";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
@@ -86,6 +88,7 @@ beforeEach(() => {
   h.urlStatus = "live";
   h.robotsAllows = true;
   h.page = null;
+  h.resolved = null;
   vi.clearAllMocks();
 });
 
@@ -447,5 +450,69 @@ describe("rows that were never postings are closed", () => {
     const report = await repairJobLinks();
 
     expect(report.closedNotAPosting).toBe(0);
+  });
+});
+
+// Eleven openai.com rows, 2026-09-07. Their employer site answers 403 to any
+// automated reader, so the app saw a "live" link; their board — found by
+// guessing the slug — no longer listed a single one of the titles. The user
+// checked ten by hand and every one redirected to the general careers page. The
+// app held both signals and said nothing.
+describe("a site that blocks us AND a board that does not list the role", () => {
+  const OWN_SITE = "https://openai.com/careers/senior-manager-gtm-operations/";
+
+  beforeEach(() => {
+    h.jobs = [job({ job_url: OWN_SITE, company: "openai" })];
+    h.page = null; // 403 to our reader — indistinguishable from any other block
+  });
+
+  test("the two signals together are reported as likely closed", async () => {
+    h.resolved = { precision: "absent", url: "https://jobs.ashbyhq.com/openai" };
+
+    const report = await repairJobLinks();
+
+    expect(report.unclear).toEqual([
+      expect.objectContaining({ reason: "likely-closed", url: "https://jobs.ashbyhq.com/openai" }),
+    ]);
+  });
+
+  // Never closed automatically: the board was found by GUESSING a slug from the
+  // company name, and a human confirming is exactly the case this defers to.
+  test("nothing is written — a guessed board may not close a role", async () => {
+    h.resolved = { precision: "absent", url: "https://jobs.ashbyhq.com/openai" };
+
+    await repairJobLinks();
+
+    expect(vi.mocked(updateJob)).not.toHaveBeenCalled();
+  });
+
+  // One signal is not two. A 403 is routine, and a board that lists the role
+  // says the role is fine.
+  test("a page we could read is not reported, whatever the board says", async () => {
+    h.page = "<p>Apply now for this role.</p>";
+    h.resolved = { precision: "absent", url: "https://jobs.ashbyhq.com/openai" };
+
+    const report = await repairJobLinks();
+
+    expect(report.unclear).toEqual([]);
+  });
+
+  test("a board that cannot be resolved at all is not this reason", async () => {
+    h.resolved = null;
+
+    const report = await repairJobLinks();
+
+    expect(report.unclear.map((u) => u.reason)).not.toContain("likely-closed");
+  });
+
+  // The board lookup costs a request, so it must not run for rows that already
+  // have an answer.
+  test("a row already closed by a 404 never consults a board", async () => {
+    h.urlStatus = "dead";
+    h.resolved = { precision: "absent", url: "https://jobs.ashbyhq.com/openai" };
+
+    await repairJobLinks();
+
+    expect(vi.mocked(resolveEmployerLink)).not.toHaveBeenCalled();
   });
 });

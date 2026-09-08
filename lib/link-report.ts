@@ -23,8 +23,17 @@
  * them was found by GUESSING a slug from the company name. `unresolved` is not
  * closable at all — nothing about it suggests the role is gone. It means the
  * link could not be checked past, which is a different sentence.
+ *
+ * `likely-closed` is TWO weak signals together: the employer's own site refused
+ * to be read at all, AND the board found for that company does not list the
+ * title. Neither alone is worth showing — a 403 is routine and a guessed board
+ * proves nothing — but together they were right eleven times out of eleven on
+ * 2026-09-07, when a user checked openai.com rows by hand and found every one
+ * redirecting to the general careers page. Still never auto-closed: the board
+ * was a guess, and a human confirming is exactly the case the guardrail defers
+ * to.
  */
-export type UnclearReason = "ambiguous" | "empty" | "unresolved";
+export type UnclearReason = "ambiguous" | "empty" | "unresolved" | "likely-closed";
 
 /**
  * Splits report rows by reason, preserving each group's original order.
@@ -39,11 +48,12 @@ export type UnclearReason = "ambiguous" | "empty" | "unresolved";
  */
 export function splitUnclear<T extends { reason: UnclearReason }>(
   rows: T[]
-): { ambiguous: T[]; empty: T[]; unresolved: T[] } {
+): { ambiguous: T[]; empty: T[]; unresolved: T[]; likelyClosed: T[] } {
   return {
     ambiguous: rows.filter((r) => r.reason === "ambiguous"),
     empty: rows.filter((r) => r.reason === "empty"),
     unresolved: rows.filter((r) => r.reason === "unresolved"),
+    likelyClosed: rows.filter((r) => r.reason === "likely-closed"),
   };
 }
 

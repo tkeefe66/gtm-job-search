@@ -389,8 +389,8 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   // Not everything is reachable this way: ZipRecruiter answers 403 to this
   // fetch, so its dead rows stay open and no free signal exists for them.
   if (!wasClosed(out)) {
-    const removed = await removalMarker(liveUrl);
-    if (removed !== null) {
+    const page = await removalMarker(liveUrl);
+    if (page.kind === "removed") {
       const failure = describeWriteFailure(
         (await updateJob(job.id, { status: "Posting Closed" })).error,
         `close ${job.company} / ${job.role_title}`
@@ -398,10 +398,31 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
       if (failure === undefined) {
         out.closedRemoved = true;
         console.log(
-          `repairJobLinks: ${job.company} / ${job.role_title} — page says "${removed}", closed`
+          `repairJobLinks: ${job.company} / ${job.role_title} — page says "${page.phrase}", closed`
         );
       } else {
         console.error(`repairJobLinks: ${failure}`);
+      }
+    } else if (page.kind === "unreadable" && !out.unclear) {
+      // TWO weak signals, and only together. The employer's site refused to be
+      // read at all, so nothing about the posting itself is knowable — and the
+      // board found for this company does not list the title. Either alone is
+      // worth nothing: a 403 is routine, and a board found by GUESSING a slug
+      // proves nothing about a role. Together they were right eleven times out
+      // of eleven on 2026-09-07, when a user checked openai.com rows by hand
+      // and found every one redirecting to the general careers page.
+      //
+      // Reported, NEVER closed. The slug is still a guess, and a human
+      // confirming is exactly the case this defers to.
+      const resolved = await resolveEmployerLink(job.company, job.role_title);
+      if (resolved?.precision === "absent") {
+        out.unclear = {
+          id: job.id,
+          company: job.company,
+          role_title: job.role_title,
+          url: resolved.url,
+          reason: "likely-closed",
+        };
       }
     }
   }
@@ -416,8 +437,14 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
  * reason fetchAllowed and fetchPage live in one module: a robots.txt that could
  * not be read is not permission.
  */
-async function removalMarker(url: string): Promise<string | null> {
-  if (!(await fetchAllowed(url))) return null;
+async function removalMarker(
+  url: string
+): Promise<{ kind: "removed"; phrase: string } | { kind: "alive" } | { kind: "unreadable" }> {
+  if (!(await fetchAllowed(url))) return { kind: "unreadable" };
   const html = await fetchPage(url);
-  return html === null ? null : deadPostingMarker(html);
+  if (html === null) return { kind: "unreadable" };
+  const phrase = deadPostingMarker(html);
+  // "unreadable" is a SIGNAL here, not just an absence: an employer site that
+  // refuses every automated reader is one half of the likely-closed pair below.
+  return phrase === null ? { kind: "alive" } : { kind: "removed", phrase };
 }
