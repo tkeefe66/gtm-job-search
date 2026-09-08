@@ -462,7 +462,19 @@ export function applyOperations(
         const taper = (op.taper as number[]).slice();
         draft.selection = draft.selection || {};
         draft.selection.taper = taper;
-        applied.push("set taper to " + taper.join(", "));
+        // A taper re-derives the selection, but a role with an explicit
+        // per-role bullet list keeps that list (lib/effective-document.ts's
+        // rule 2, deliberate — truncating would delete a bullet the user
+        // named). Silence about that reads as a taper that half worked, so
+        // the line says which roles it does not reach.
+        const exempt = Object.keys(draft.selection.bullets || {});
+        applied.push(
+          "set taper to " +
+            taper.join(", ") +
+            (exempt.length
+              ? " — these roles keep the bullets you picked by hand: " + exempt.join(", ")
+              : "")
+        );
         break;
       }
       case "set_compress_after": {
