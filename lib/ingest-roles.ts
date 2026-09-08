@@ -134,7 +134,15 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
     return { added: fresh, skipped, seenTitles };
   }
 
-  const companyDescription = `${ctx.tagline ?? ""}. ${ctx.traction ?? ""}`.trim();
+  // Joined only over the parts that exist. `${tagline}. ${traction}` yielded
+  // the literal "." when both were absent — the common case on Discover and
+  // Crawl, whose context fields are frequently null — and buildFitPrompt
+  // renders company_description raw, with no "unknown" fallback, so "." went
+  // to the model as the company's description.
+  const companyDescription = [ctx.tagline, ctx.traction]
+    .map((part) => (part ?? "").trim())
+    .filter((part) => part !== "")
+    .join(". ");
 
   await Promise.all(
     fresh.map(async (role, i) => {
@@ -173,6 +181,12 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         traction: ctx.traction || null,
         salary_range: role.salary_range || null,
         fit_summary: role.fit_signal || null,
+        // Stored, not merely scored on. These two are exactly what scoreFit is
+        // given below, and a rescore reads them back off the row
+        // (lib/rescore-scope.ts). Omitting them made every rescore run on ""
+        // where the first score saw the posting's own words.
+        key_skills: role.description_summary || null,
+        company_description: companyDescription,
         ic_flag: role.ic_flag ?? false,
         source,
       });

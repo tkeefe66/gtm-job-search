@@ -60,6 +60,7 @@ import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { addJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
+import { INGEST_EXEMPT_COLUMNS, SCORING_INPUT_COLUMNS } from "@/lib/rescore-scope";
 import type { Role } from "@/lib/types";
 
 const ROLE: Role = {
@@ -315,5 +316,113 @@ describe("an ATS deep link is verified against its own vendor's board", () => {
 
     expect(vi.mocked(resolveEmployerLink)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(verifyPostingLink)).not.toHaveBeenCalled();
+  });
+});
+
+// Defects 1 and 3 of docs/superpowers/specs/2026-09-07-posting-detail-design.md:
+// ingest produced the posting's substance, passed it to scoreFit, and threw it
+// away. The row then had "" where the model had seen real text, so every
+// rescore was strictly impoverished — and the rescore's score is the one that
+// persists.
+describe("ingest persists the posting detail it already scored on", () => {
+  test("the extraction's description summary is stored as key_skills", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().key_skills).toBe(ROLE.description_summary);
+  });
+
+  test("the company context is stored as company_description", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({
+      ...OPTS,
+      companyContext: { tagline: "Data enrichment", traction: "Series B" },
+    });
+
+    expect(insertedRow().company_description).toBe("Data enrichment. Series B");
+  });
+
+  // The stored row and the scored inputs must agree, or the first score and
+  // every rescore are computed from different text.
+  test("the stored columns are the ones scoreFit was given", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({
+      ...OPTS,
+      companyContext: { tagline: "Data enrichment", traction: "Series B" },
+    });
+
+    const scored = vi.mocked(scoreFit).mock.calls[0][0];
+    expect(insertedRow().key_skills).toBe(scored.key_skills);
+    expect(insertedRow().company_description).toBe(scored.company_description);
+  });
+});
+
+// The fourth defect, cosmetic but on every path: `${tagline}. ${traction}`
+// yields the literal "." when both are absent, and Discover, Crawl and role
+// search all pass frequently-null fields. buildFitPrompt renders
+// company_description raw, so "." reached the model as the company's
+// description.
+describe("an absent company context composes an empty description, not a period", () => {
+  test("no context at all", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().company_description).toBe("");
+    expect(vi.mocked(scoreFit).mock.calls[0][0].company_description).toBe("");
+  });
+
+  test("both fields present but null", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, companyContext: { tagline: null, traction: null } });
+
+    expect(insertedRow().company_description).toBe("");
+  });
+
+  test("a tagline with no traction carries no trailing separator", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, companyContext: { tagline: "Data enrichment" } });
+
+    expect(insertedRow().company_description).toBe("Data enrichment");
+  });
+
+  test("traction with no tagline carries no leading separator", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, companyContext: { traction: "Series B" } });
+
+    expect(insertedRow().company_description).toBe("Series B");
+  });
+});
+
+// The structural guard. Two hand-maintained lists compared against each other
+// would be the "copies of themselves" failure lib/rescore-scope.ts:29-35 warns
+// about, so this captures addJob's actual argument and checks the rescore's
+// own column list against it.
+describe("every column a rescore reads is written at ingest", () => {
+  test("the exempt columns are all real scoring inputs", () => {
+    for (const column of INGEST_EXEMPT_COLUMNS) {
+      expect(SCORING_INPUT_COLUMNS).toContain(column);
+    }
+  });
+
+  test("ingest writes every non-exempt scoring input", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({
+      ...OPTS,
+      companyContext: { tagline: "Data enrichment", traction: "Series B" },
+    });
+
+    const written = Object.keys(insertedRow());
+    const required = SCORING_INPUT_COLUMNS.filter(
+      (c) => !(INGEST_EXEMPT_COLUMNS as readonly string[]).includes(c)
+    );
+    expect(required.filter((c) => !written.includes(c))).toEqual([]);
   });
 });
