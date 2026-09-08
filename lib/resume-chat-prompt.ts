@@ -205,7 +205,7 @@ const OPERATION_DESCRIPTIONS: Record<string, string> = {
   set_taper: "set how many bullets render per role, most senior role first.",
   set_compress_after: "compress roles after the n-th into one-line rows.",
   set_text:
-    'edit the text of "summary", "positioning", or a selected bullet ("bullet:<roleId>:<bulletId>").',
+    'edit the text of "summary", "positioning", "name" (the header name), or a selected bullet ("bullet:<roleId>:<bulletId>").',
   propose_career_bullet:
     "propose a NEW bullet on a role for the user to accept — the only way a bullet is added; it is never invented straight into the document.",
   set_design_token: "set one design token to a value within its allowed range.",

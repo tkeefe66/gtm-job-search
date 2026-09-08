@@ -15,6 +15,7 @@ import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { rawQuery, supabase } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { restoreWouldChangeNothing, shouldCheckpoint } from "@/lib/checkpoint-decision";
+import { withoutRepeatedMarker } from "@/lib/restore-marker";
 import { renderDraftHtml } from "@/lib/draft-render";
 import { insertSavedRow } from "@/lib/saved-resume-insert";
 import { careerOverlayFrom, readAllSettingsResult } from "@/lib/settings-store";
@@ -72,7 +73,11 @@ async function appendRestoreMarker(
   }
   const prior = data ? (data as { messages: unknown }).messages : [];
   const messages = Array.isArray(prior) ? prior : [];
-  const updated = [...messages, { role: "assistant", text }];
+  // A trailing IDENTICAL marker is replaced, not stacked: three restores in a
+  // row produced three copies in a real thread and pushed the conversation off
+  // screen. Only an exact trailing match — two different versions are two facts
+  // the model needs. See lib/restore-marker.ts.
+  const updated = [...withoutRepeatedMarker(messages, text), { role: "assistant", text }];
 
   const { error: writeError } = await supabase
     .forTenant(tenantId)

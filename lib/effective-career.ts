@@ -48,6 +48,17 @@ export function effectiveCareer(
 
   const career: CareerRecord = {
     ...shipped,
+    // `identity` is cloned for the same reason `rules` is, and the reason is
+    // not hypothetical: `...shipped` is a SHALLOW spread, so without this the
+    // record's identity IS the module-level content/resume.json import, and a
+    // `set_text` on "name" would rename the candidate in every later request
+    // for the life of the process. The contacts array is copied too — nothing
+    // edits it today, which is exactly what would make a future edit find a
+    // shared reference and no test looking for one.
+    identity: {
+      ...shipped.identity,
+      contacts: shipped.identity.contacts ? shipped.identity.contacts.map((c) => ({ ...c })) : [],
+    },
     // `rules` is cloned one level DEEPER than a spread: taper and themes are
     // arrays, and `taper` is now user-settable through the chat, so an edit
     // reaching for `.push()` on what looks like a fresh record would corrupt
@@ -144,6 +155,15 @@ export function effectiveCareer(
   if (text.summary !== undefined && career.positioning[0]) {
     const safe = cleaned(text.summary);
     if (safe !== null) career.positioning.forEach((p) => (p.summary = safe));
+  }
+  if (text.name !== undefined) {
+    // No `!== ""` guard, deliberately: sanitizeBulletText REFUSES empty and
+    // whitespace-only text outright ("That text is empty."), so `cleaned`
+    // returns null for it and the shipped name stands. An extra emptiness check
+    // here would be unreachable — and an unreachable branch is one no test can
+    // hold honest, which is how it was found.
+    const safe = cleaned(text.name);
+    if (safe !== null) career.identity.name = safe;
   }
   if (text.positioning !== undefined && career.positioning[0]) {
     const safe = cleaned(text.positioning);
