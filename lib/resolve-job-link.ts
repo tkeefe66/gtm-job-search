@@ -138,6 +138,20 @@ async function fetchBoard(vendor: BoardVendor, slug: string) {
     // 404 is the honest answer for a missing board on Greenhouse and Ashby.
     // Lever answers 200 with an error object instead, which is why the body is
     // parsed rather than trusted — parseBoard returns null for that shape.
+    //
+    // A 429 or a 5xx is NOT an absent board, and flattening them to the same
+    // null hides a real failure mode: every tenant probes these endpoints from
+    // one Railway IP, so one tenant's sweep can rate-limit another's into
+    // silently falling back to the page tiers. The return is still null — a
+    // board we could not read says nothing either way — but it no longer
+    // happens quietly.
+    if (res.status === 429 || res.status >= 500) {
+      console.warn(
+        `resolve-job-link: ${vendor}:${slug} answered ${res.status} — rate limited or ` +
+          `unavailable, NOT an absent board`
+      );
+      return null;
+    }
     if (!res.ok) return null;
     return parseBoard(vendor, await res.json());
   } catch {
@@ -402,4 +416,18 @@ export async function fetchBoardIdentity(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * A board's postings, for a vendor and slug already known.
+ *
+ * Exported so the crawl can use a REMEMBERED board without re-running
+ * resolution — which is the whole saving, since resolution is a sequential
+ * sweep and this is one request.
+ */
+export async function fetchBoardPostings(
+  vendor: BoardVendor,
+  slug: string
+): Promise<Posting[] | null> {
+  return fetchBoard(vendor, slug);
 }

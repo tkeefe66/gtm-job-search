@@ -10,7 +10,14 @@ import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import { boardTrust, rolesFromBoard, type BoardResolution } from "@/lib/board-source";
-import { fetchBoardIdentity, resolveBoardForCompany } from "@/lib/resolve-job-link";
+import { boardRecall, type StoredBoard } from "@/lib/board-store";
+import type { BoardVendor, Posting } from "@/lib/ats-boards";
+import { companyIdentityKey } from "@/lib/role-key";
+import {
+  fetchBoardIdentity,
+  fetchBoardPostings,
+  resolveBoardForCompany,
+} from "@/lib/resolve-job-link";
 import { parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_FIELDS } from "@/lib/types";
 import { NORMALIZED_COMPANY_SQL, normalizeCompanyName, normalizeTitle } from "@/lib/role-key";
@@ -302,6 +309,74 @@ type FetchTierResult =
  * that: a guessed slug with no corroborating employer name never enumerates.
  */
 /**
+ * The board we last resolved for this company, or null.
+ *
+ * Keyed on companyIdentityKey, not the raw string — "RTX (Raytheon)" and
+ * "Raytheon (RTX)" are one employer, and keying on the spelling would resolve
+ * and store them separately. A failed read returns null, which resolves again:
+ * the cost is seconds, and the alternative is a company silently pinned to
+ * whatever a broken read implied.
+ */
+async function readStoredBoard(company: string): Promise<StoredBoard | null> {
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<StoredBoard>(
+    `select vendor, slug, source, checked_at as "checkedAt"
+       from company_boards where tenant_id = $2 and company_key = $1`,
+    [companyIdentityKey(company), tenantId],
+    tenantId
+  );
+  if (error) {
+    console.warn(`crawler: could not read the stored board for ${company} — ${error.message}`);
+    return null;
+  }
+  return (data ?? [])[0] ?? null;
+}
+
+/** Records what resolution found, INCLUDING that it found nothing. */
+async function writeStoredBoard(
+  company: string,
+  resolution: BoardResolution | null
+): Promise<void> {
+  const tenantId = await resolveTenantId();
+  const { error } = await rawQuery(
+    `insert into company_boards (tenant_id, company_key, company, vendor, slug, source, checked_at)
+     values ($1, $2, $3, $4, $5, $6, now())
+     on conflict (tenant_id, company_key) do update
+       set company = excluded.company, vendor = excluded.vendor, slug = excluded.slug,
+           source = excluded.source, checked_at = now()`,
+    [
+      tenantId,
+      companyIdentityKey(company),
+      company,
+      resolution?.vendor ?? null,
+      resolution?.slug ?? null,
+      resolution?.source ?? null,
+    ],
+    tenantId
+  );
+  if (error) {
+    // Never fatal: the crawl works without the memory, it just re-resolves.
+    console.warn(`crawler: could not remember the board for ${company} — ${error.message}`);
+  }
+}
+
+/** The postings for a board we already know about, without re-resolving it. */
+async function postingsForRemembered(
+  board: { vendor: BoardVendor; slug: string; source: string | null }
+): Promise<{ resolution: BoardResolution; postings: Posting[] } | null> {
+  const postings = await fetchBoardPostings(board.vendor, board.slug);
+  if (postings === null || postings.length === 0) return null;
+  return {
+    resolution: {
+      vendor: board.vendor,
+      slug: board.slug,
+      source: board.source === "read" ? "read" : "guessed",
+    },
+    postings,
+  };
+}
+
+/**
  * ATS deep links this company already has rows for, newest first.
  *
  * rawQuery rather than the builder for the same reason ingestRoles uses it: the
@@ -331,8 +406,31 @@ async function extractViaBoard(
   criteria: Criteria,
   storedUrls: (string | null)[]
 ): Promise<{ roles: Role[]; resolution: BoardResolution } | null> {
-  const found = await resolveBoardForCompany(company, storedUrls);
-  if (!found) return null;
+  // What we already know about this company's board, including that it has
+  // none. Resolution costs no tokens but real time — see lib/board-store.ts.
+  const remembered = boardRecall(await readStoredBoard(company));
+  if (remembered.kind === "skip") return null;
+
+  const found =
+    remembered.kind === "use"
+      ? await postingsForRemembered(remembered.board)
+      : await resolveBoardForCompany(company, storedUrls);
+
+  if (!found) {
+    // A company that HAD a board and now resolves none is the failure this
+    // design goes quiet on otherwise: it falls back to the HTML path, which
+    // succeeds, so dead-tracking never fires and crawl health reports the
+    // tenant healthy. The only other symptom is spend going back up, noticed
+    // on a bill weeks later.
+    if (remembered.kind === "use") {
+      console.error(
+        `crawler: ${company} — board ${remembered.board.vendor}:${remembered.board.slug} ` +
+          `no longer resolves; falling back to the page tiers`
+      );
+    }
+    await writeStoredBoard(company, null);
+    return null;
+  }
 
   // The corroborator a guessed slug needs. Asked of the BOARD, not of a
   // posting: a company on a custom careers domain publishes posting URLs no
@@ -343,6 +441,8 @@ async function extractViaBoard(
     const name = await fetchBoardIdentity(found.resolution.vendor, found.resolution.slug);
     if (name) declared = [name];
   }
+
+  await writeStoredBoard(company, found.resolution);
 
   if (boardTrust(found.resolution, company, declared) !== "source") {
     console.log(

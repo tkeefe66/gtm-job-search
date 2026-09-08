@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { estimateRunCost, formatEstimate, type EstimateInput } from "./cost-estimate";
+import { estimateRunCost, formatEstimate, type EstimateInput, formatReadingCost, readingCostDollars } from "./cost-estimate";
 
 describe("estimateRunCost", () => {
   test("counts the title and stack grids separately", () => {
@@ -123,3 +123,30 @@ describe("formatEstimate", () => {
     expect(s).toContain("~$0.29 per By Role run");
   });
 });
+
+// Reading a posting is a NON-SEARCH call, and this file had no vocabulary for
+// one — so the enrich banner reported counts while the spend stayed invisible,
+// and reads now happen inside every search too. Measured 2026-09-07: 12 enrich
+// batches over ~50 rows cost 19¢, and 5 batches cost 5¢ — roughly half a cent
+// per posting actually read.
+describe("what reading postings costs", () => {
+  test("nothing read is nothing spent", () => {
+    expect(readingCostDollars(0)).toBe(0);
+  });
+
+  test("a batch is priced from the provider's own table, not a copy", () => {
+    // Sanity, not precision: an order of magnitude wrong here shows the user a
+    // number the meter disagrees with.
+    const ten = readingCostDollars(10);
+    expect(ten).toBeGreaterThan(0.01);
+    expect(ten).toBeLessThan(0.5);
+  });
+
+  test("it scales with the rows actually read", () => {
+    expect(readingCostDollars(20)).toBeCloseTo(readingCostDollars(10) * 2, 5);
+  });
+
+  test("the rendered figure always names dollars and cents", () => {
+    expect(formatReadingCost(10)).toMatch(/^~\$\d+\.\d{2}$/);
+  });
+})

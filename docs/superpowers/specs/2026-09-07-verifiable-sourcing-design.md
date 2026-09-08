@@ -415,12 +415,34 @@ about it — which is the argument for probing before shipping, not after.
   AND a board that no longer lists the title is worth showing; `removalMarker` had
   been flattening "could not read" into the same null as "read it, nothing said".
 
+## Closed after implementation (2026-09-07, migration 018)
+
+Every operational-signal item the second review raised:
+
+- **Board resolutions are remembered** (`company_boards`, keyed on
+  `companyIdentityKey`, not on `watchlist.company` — two of ingestRoles' three callers
+  never touch the watchlist, and "RTX (Raytheon)" and "Raytheon (RTX)" are one
+  employer). The remembered FAILURE matters as much as the remembered board: without
+  it every crawl re-pays a sequential vendor sweep for a company that has none, which
+  is the real cost, since resolution is free in tokens and expensive in the 300s
+  request. `boardRecall` re-resolves after 30 days, and on any uncertain value — an
+  unparseable timestamp, or a row with no recorded `source`, because read-versus-guessed
+  is the whole safety story and a row that cannot state it may not be acted on.
+- **A company that stops resolving a board is now loud.** It falls back to the page
+  tiers, which succeed, so dead-tracking never fires and crawl health reports the
+  tenant healthy — the only other symptom was spend rising, noticed weeks later.
+- **429 and 5xx are distinguished from an absent board.** Every tenant probes these
+  endpoints from one Railway IP, so one tenant's sweep could rate-limit another into
+  silently falling back. The return is still null — a board we could not read says
+  nothing — but it no longer happens quietly.
+- **Reading a posting has a price** (`readingCostDollars`), reproduced from the
+  provider's own rate table rather than a hardcoded cent, and shown on the enrich
+  banner for the rows that actually reached a model call. Blocked and unreadable rows
+  are not priced: they never reached one.
+
 ## Still open
 
-- Board resolutions are not persisted, so every crawl re-resolves (free fetches, but
-  wasteful) — and `crawl_method` has no `board` value.
-- No alarm when a company that used to resolve a board stops resolving one. It falls
-  back to the HTML path, which succeeds, so nothing looks wrong except spend.
-- `fetchBoard` maps 429 and 5xx to the same null as 404, so one tenant's probe storm
-  silently degrades another's resolution.
-- `lib/cost-estimate.ts` still has no vocabulary for per-row non-search calls.
+- `crawl_method` still has no `board` value. The board tier deliberately learns
+  nothing — `learnedMethod` stays null — because `crawl_method` is the PAGE tier's
+  state machine, and a third value needs its own unlearning rule before it earns a
+  column.

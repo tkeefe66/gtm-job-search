@@ -80,3 +80,35 @@ export function formatEstimate(input: EstimateInput): string {
     `~$${e.dollars.toFixed(2)} per By Role run`
   );
 }
+
+// Reading ONE posting: the fetched page or board body in, a short structured
+// answer out, no web search. Measured from usage_events on 2026-09-07 — 12
+// enrich batches over ~50 rows billed 19¢, and an earlier 5-batch pass billed
+// 5¢, which is roughly half a cent per posting actually read. The token figures
+// below reproduce that order of magnitude from the provider's own rates rather
+// than hardcoding the cent, so a model or price change moves this with it.
+const TOKENS_PER_POSTING_READ = 1_400; // stripped page or board body, observed
+const TOKENS_PER_POSTING_ANSWER = 200; // the structured requirements list
+const DOLLARS_PER_OUTPUT_TOKEN = anthropicPrice(ANTHROPIC_DEFAULT_MODEL).output / 1_000_000;
+
+/**
+ * What reading `rows` postings costs, in dollars.
+ *
+ * The vocabulary this file was missing: every estimate here assumed a SEARCH,
+ * so the enrich banner could report how many rows it read and never what that
+ * cost — and since reads now happen inside ingest, that blind spot covers every
+ * search and crawl too.
+ */
+export function readingCostDollars(rows: number): number {
+  if (rows <= 0) return 0;
+  return (
+    rows *
+    (TOKENS_PER_POSTING_READ * DOLLARS_PER_INPUT_TOKEN +
+      TOKENS_PER_POSTING_ANSWER * DOLLARS_PER_OUTPUT_TOKEN)
+  );
+}
+
+/** The same figure as the UI shows it — approximate, and never a bare number. */
+export function formatReadingCost(rows: number): string {
+  return `~$${readingCostDollars(rows).toFixed(2)}`;
+}

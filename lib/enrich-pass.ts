@@ -6,6 +6,7 @@
 // what to keep when a batch fails — are the ones that cost money when they are
 // wrong, and a loop inside a React component is reachable from no test here.
 
+import { formatReadingCost } from "@/lib/cost-estimate";
 import type { EnrichBlockedRow, EnrichReport } from "@/lib/enrich-scope";
 
 /**
@@ -134,6 +135,13 @@ export function enrichStatRows(pass: EnrichTotals): EnrichStatRow[] {
     "reading these could have stored another posting's words"
   );
   add("Still to do", pass.remaining);
+  // What the pass cost, from the rows that actually reached a model call. The
+  // banner reported counts and never spend, which was the one number a user
+  // driving the paging themselves had no way to see.
+  const billed = pass.enriched + pass.empty;
+  if (billed > 0) {
+    rows.push({ label: "Cost", value: billed, note: `about ${formatReadingCost(billed)}` });
+  }
   return rows;
 }
 

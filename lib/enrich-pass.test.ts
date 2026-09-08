@@ -154,7 +154,9 @@ describe("the results table", () => {
   test("a count of zero is otherwise left out rather than padding the table", () => {
     const labels = rows({ enriched: 3 }).map(([label]) => label);
 
-    expect(labels).toEqual(["Stored"]);
+    // Cost joins Stored because three rows reached a model call; the outcomes
+    // that did not happen still contribute nothing.
+    expect(labels).toEqual(["Stored", "Cost"]);
   });
 
   test("every outcome that happened gets its own row", () => {
@@ -176,6 +178,7 @@ describe("the results table", () => {
       "Failed",
       "Left alone",
       "Still to do",
+      "Cost",
     ]);
   });
 
@@ -211,3 +214,24 @@ describe("the progress line while a pass is running", () => {
     expect(enrichProgressLine(pass({}))).toContain("Starting");
   });
 });
+
+// The one number a user driving the paging themselves could not see.
+describe("the banner says what the pass cost", () => {
+  test("rows that reached a model call are priced", () => {
+    const table = enrichStatRows(pass({ enriched: 8, empty: 2 }));
+    const cost = table.find((r) => r.label === "Cost");
+
+    expect(cost?.value).toBe(10);
+    expect(cost?.note).toMatch(/\$\d+\.\d{2}/);
+  });
+
+  // Blocked and unreadable rows never reached a model, so pricing them would
+  // overstate what the user actually spent.
+  test("rows that never reached a model are not priced", () => {
+    const table = enrichStatRows(
+      pass({ unreadable: 12, blocked: [{ id: "j", company: "C", role_title: "R", url: "u", reason: "absent" }] })
+    );
+
+    expect(table.find((r) => r.label === "Cost")).toBeUndefined();
+  });
+})
