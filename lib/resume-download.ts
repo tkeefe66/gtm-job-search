@@ -34,6 +34,32 @@ export const DESIGN_VERSION = "2026-09-08c";
  */
 export const DEFAULT_PAGE_MARGIN = "0.68in";
 
+/**
+ * Pins the printed page box to portrait, on every surface that renders a <doc-page>.
+ *
+ * doc-page.js builds `@page` with a `size` descriptor ONLY for true-size, scaled-fit,
+ * explicitly-paginated, or orientation="landscape" documents. A plain FLOWING document —
+ * which every résumé here is — gets `@page { margin: 0 }` and no size at all, deliberately,
+ * so the same component can print a flowing document on whatever paper the user picks.
+ * The consequence for this app is that the print dialog's Layout dropdown owns the page
+ * box, while rsm-page-guides.js hardcodes PAPER.letter portrait and subtracts two margins.
+ *
+ * Measured on the deployed app 2026-09-08: with Layout set to Landscape the usable band is
+ * 612pt = 816px rather than 1056 - 2*65.28 = 925.44px, so Chrome broke two bullets earlier
+ * than the on-screen marker predicted. Both numbers land exactly on an observed break; the
+ * guide was never wrong about the document, only about the paper.
+ *
+ * SIZE ONLY, never margin: doc-page.js owns the margin descriptor and resolves it from the
+ * <doc-page margin> attribute, so a second margin here would race it per source order and
+ * silently override a saved row's own page_margin. Nothing else in these documents sets a
+ * `size` descriptor, so this rule is unopposed rather than fighting the component.
+ *
+ * This is app-side on purpose. Teaching doc-page.js to pin portrait for flowing documents
+ * would take A4 away from every other consumer of the design system to fix one portrait-only
+ * résumé — the wrong end, and the ownership rule in CLAUDE.md says so.
+ */
+export const PORTRAIT_PAGE_CSS = "@page { size: portrait; }";
+
 /** Must equal styles.css's @import order. A test asserts it. */
 export const TOKEN_CSS_FILES = [
   "fonts.css",
@@ -69,6 +95,8 @@ export function buildDownloadHtml(args: {
     "<title>" +
     escapeHtml(args.title) +
     "</title>\n<style>\n" +
+    PORTRAIT_PAGE_CSS +
+    "\n" +
     args.css +
     "\n</style>\n</head>\n<body>\n" +
     '<doc-page margin="' +

@@ -14,6 +14,7 @@ import { restoreSavedVersion } from "@/app/actions/restore-saved-version";
 import {
   DEFAULT_PAGE_MARGIN,
   DESIGN_VERSION,
+  PORTRAIT_PAGE_CSS,
   buildDownloadHtml,
   downloadFilename,
 } from "@/lib/resume-download";
@@ -273,6 +274,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
       <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
       <Script src="/resume-design/rsm-page-guides.js" strategy="afterInteractive" />
       <style>{`
+        ${PORTRAIT_PAGE_CSS}
         doc-page:not(:defined) { visibility: hidden; }
         doc-page[contenteditable] { outline: none; cursor: text; }
       `}</style>

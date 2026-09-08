@@ -3,7 +3,7 @@
 import Script from "next/script";
 import { renderBody } from "@/lib/resume-render/render";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
-import { DEFAULT_PAGE_MARGIN } from "@/lib/resume-download";
+import { DEFAULT_PAGE_MARGIN, PORTRAIT_PAGE_CSS } from "@/lib/resume-download";
 
 // `<doc-page>` is a custom element defined by /public/resume-design/doc-page.js
 // at runtime — not a React component. This augments JSX so TypeScript accepts
@@ -68,6 +68,7 @@ export default function ResumeDocument({
       <Script src="/resume-design/doc-page.js" strategy="afterInteractive" />
       <Script src="/resume-design/rsm-page-guides.js" strategy="afterInteractive" />
       <style>{`
+        ${PORTRAIT_PAGE_CSS}
         doc-page:not(:defined) { visibility: hidden; }
         /* Chrome/Firefox draw a focus outline on whichever element literally
            carries contenteditable, even though the caret sits in a nested

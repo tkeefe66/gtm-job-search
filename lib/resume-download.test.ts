@@ -5,6 +5,7 @@ import {
   DEFAULT_PAGE_MARGIN,
   TOKEN_CSS_FILES,
   buildDownloadHtml,
+  PORTRAIT_PAGE_CSS,
   downloadFilename,
 } from "./resume-download";
 
@@ -78,6 +79,46 @@ describe("buildDownloadHtml", () => {
   test("an omitted pageMargin also falls back to the default", () => {
     const out = buildDownloadHtml(args);
     expect(out).toContain('<doc-page margin="' + DEFAULT_PAGE_MARGIN + '">');
+  });
+});
+
+describe("the printed page box is pinned to portrait", () => {
+  const args = {
+    markup: '<div class="rsm"><p>hello</p></div>',
+    css: ".rsm{color:red}",
+    docPageJs: "/* doc-page */",
+    title: "Résumé",
+  };
+
+  // Mutation: dropping PORTRAIT_PAGE_CSS from buildDownloadHtml. doc-page.js emits
+  // `@page { margin: 0 }` with NO size descriptor for a flowing document — deliberately,
+  // so it can be printed on any paper — which leaves the page box to the print dialog's
+  // Layout setting. Measured on the deployed app: with Layout on Landscape the usable
+  // band is 816px (612pt) instead of 925.44px, so Chrome broke two bullets earlier than
+  // rsm-page-guides.js predicted, and the on-screen marker read as wrong for a day.
+  // Nothing else in the document sets a `size` descriptor, so this rule is unopposed.
+  test("emits a portrait @page size in the standalone export", () => {
+    expect(buildDownloadHtml(args)).toContain(PORTRAIT_PAGE_CSS);
+    expect(PORTRAIT_PAGE_CSS).toMatch(/@page\s*\{[^}]*size:\s*portrait/);
+  });
+
+  // Mutation: setting the margin here too. doc-page.js owns the margin descriptor and
+  // resolves it from the <doc-page margin> attribute; a second one racing it per
+  // source order would silently override a saved row's own page_margin.
+  test("sets only the size descriptor, never the margin", () => {
+    expect(PORTRAIT_PAGE_CSS).not.toMatch(/margin/);
+  });
+
+  // Mutation: one screen keeping a copy of the literal instead of importing the
+  // constant. Four surfaces render a <doc-page> and all four have to agree — the same
+  // drift DEFAULT_PAGE_MARGIN exists to prevent, reached through a different attribute.
+  test("is imported by every surface that renders a doc-page, never re-typed", () => {
+    const dir = process.cwd();
+    for (const f of ["components/resume/ResumeDocument.tsx", "components/resume/SavedResumePanel.tsx"]) {
+      const src = readFileSync(join(dir, f), "utf8");
+      expect(src, f + " must import the shared rule").toContain("PORTRAIT_PAGE_CSS");
+      expect(src, f + " must not re-type the @page rule").not.toMatch(/@page\s*\{/);
+    }
   });
 });
 
