@@ -586,6 +586,7 @@ export default function RolesTable({
         relinked: 0,
         closed: 0,
         closedUnlisted: 0,
+        closedAbsent: 0,
         unclear: [],
         error: describeWriteFailure(
           err instanceof Error ? err.message : String(err),
@@ -820,6 +821,8 @@ export default function RolesTable({
                     ` Closed ${linkReport.closed} whose posting returned a 404.`}
                   {linkReport.closedUnlisted > 0 &&
                     ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
+                  {linkReport.closedAbsent > 0 &&
+                    ` Closed ${linkReport.closedAbsent} whose own board no longer carries the posting.`}
                   {/* "Everything checked out" has to mean EVERYTHING. The
                       unresolved rows used to be counted in a clause here and
                       nowhere else; they are listed below now, with the other
@@ -827,6 +830,7 @@ export default function RolesTable({
                       reader can already see. */}
                   {linkReport.relinked === 0 &&
                     linkReport.closed === 0 &&
+                    linkReport.closedAbsent === 0 &&
                     linkReport.closedUnlisted === 0 &&
                     linkReport.unclear.length === 0 &&
                     " Everything checked out."}

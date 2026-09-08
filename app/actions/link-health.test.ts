@@ -151,13 +151,15 @@ describe("an ATS deep link whose posting id is stale", () => {
     expect(vi.mocked(checkJobUrl)).toHaveBeenCalledWith(LIVE);
   });
 
-  // Mutation this catches: closing the role on `absent`. It IS strong evidence —
-  // the slug was read, not guessed — but closing also marks a role never-live and
-  // hides it, and ingestRoles' dedupe means a hidden role never comes back.
-  // Widening what closes roles is a separate decision from repairing a link.
-  test("absent, unreachable, listed and notApplicable write nothing", async () => {
+  // `absent` USED to be listed here, on the stated grounds that "closing also
+  // marks a role never-live and hides it". That reason was false and was
+  // checked before this changed: repairOne writes `{ status: "Posting Closed" }`
+  // and nothing else, `never_live` is set only by ingest, and partitionNeverLive
+  // hides on never_live rather than on status — so a role closed here stays
+  // visible under the Out filter and can be moved back. See the describe below
+  // for what replaced it, and why the evidence justifies acting.
+  test("unreachable, listed and notApplicable write nothing", async () => {
     for (const verified of [
-      { kind: "absent", vendor: "ashby", slug: "baseten", url: "https://jobs.ashbyhq.com/baseten" },
       { kind: "unreachable", vendor: "ashby", slug: "baseten" },
       { kind: "listed", vendor: "ashby", slug: "baseten" },
       { kind: "notApplicable" },
@@ -171,6 +173,7 @@ describe("an ATS deep link whose posting id is stale", () => {
       expect(report.relinked).toBe(0);
       expect(report.closed).toBe(0);
       expect(report.closedUnlisted).toBe(0);
+      expect(report.closedAbsent).toBe(0);
       expect(report.unclear).toEqual([]);
     }
   });
@@ -227,5 +230,80 @@ describe("the ATS branch does not disturb the paths around it", () => {
 
     expect(written()).toEqual({ status: "Posting Closed" });
     expect(report.closed).toBe(1);
+  });
+});
+
+// The evidence that changed this, gathered 2026-09-07 against production rows:
+// four Greenhouse postings sampled, all four answering 404 from the board API
+// for their own posting id while the posting PAGE answered 302 to the board
+// root. ~18 rows were in that state, sitting as New indefinitely, because
+// checkJobUrl follows the redirect, gets a 200, and calls the link live.
+//
+// The distinction that makes this safe is one this codebase already draws: the
+// slug here is READ out of the stored URL, so the board being asked is
+// certainly the employer's. resolveEmployerLink GUESSES a slug from a company
+// name, and a wrong guess there could close a live role against a stranger's
+// board — which is why that path's absent has always been treated separately.
+describe("a posting its own board no longer carries is closed", () => {
+  const ABSENT = {
+    kind: "absent",
+    vendor: "ashby",
+    slug: "baseten",
+    url: "https://jobs.ashbyhq.com/baseten",
+  };
+
+  test("the role is closed and counted under its own reason", async () => {
+    h.verified = ABSENT;
+
+    const report = await repairJobLinks();
+
+    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(report.closedAbsent).toBe(1);
+  });
+
+  // never_live is ingest-time PROVENANCE — "this was already dead the first
+  // time we saw it" — and it HIDES the row from /roles and both tiles. A role
+  // that was live when found and has since closed is a different fact, and
+  // hiding it would also make it unreachable: ingestRoles' dedupe reads every
+  // row regardless of status, so a hidden row never comes back.
+  test("it is never marked never_live, so it stays visible under Out", async () => {
+    h.verified = ABSENT;
+
+    await repairJobLinks();
+
+    expect(written()).not.toHaveProperty("never_live");
+  });
+
+  test("a failed write leaves the row open rather than reporting a close", async () => {
+    h.verified = ABSENT;
+    h.updateError = ""; // the unreachable-database shape: presence, not truthiness
+
+    const report = await repairJobLinks();
+
+    expect(report.closedAbsent).toBe(0);
+  });
+
+  // One close, not two. The 404 check at the end of repairOne would otherwise
+  // write the same status again for a row this branch already closed.
+  test("a row closed here is not written a second time by the 404 check", async () => {
+    h.verified = ABSENT;
+    h.urlStatus = "dead";
+
+    const report = await repairJobLinks();
+
+    expect(vi.mocked(updateJob)).toHaveBeenCalledTimes(1);
+    expect(report.closed).toBe(0);
+    expect(report.closedAbsent).toBe(1);
+  });
+
+  // The guessed-slug path keeps its own counter. Two boards found two different
+  // ways are two different strengths of evidence, and folding them into one
+  // number would hide that.
+  test("the guessed-slug close still reports separately", async () => {
+    h.verified = { kind: "notApplicable" };
+
+    const report = await repairJobLinks();
+
+    expect(report.closedAbsent).toBe(0);
   });
 });

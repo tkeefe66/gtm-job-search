@@ -361,9 +361,27 @@ because one sentence for all three was false for two of them: `empty` (a board
 matched the company's name but lists nothing), `ambiguous` (several postings
 could be this role), and `unresolved` (no employer board found at all —
 previously a bare COUNT in the summary line, so those rows could be counted but
-never seen or acted on). None is ever auto-closed; every board behind them was
+never seen or acted on). None of those three is ever auto-closed; every board behind them was
 found by guessing a slug, so the row wording hedges once and the buttons carry
-no second warning. Only a definitive 404/410 closes anything, unchanged.
+no second warning.
+
+**What DOES auto-close, since 2026-09-07: a read-slug `absent`.** When the
+vendor and slug were READ out of the stored URL (`verifyPostingLink`, not the
+guessing `resolveEmployerLink`), the board being asked is certainly the
+employer's, and its answer that the posting id is gone AND that nothing on it
+resembles the title is evidence, not a guess. It reports as `closedAbsent`,
+separate from `closedUnlisted`, because two boards found two different ways are
+two different strengths of evidence. Nothing else catches these: Greenhouse
+302s a removed posting to its board root, so `checkJobUrl` follows the redirect,
+sees 200 and calls the link live — four sampled production rows were all in that
+state and ~18 sat as New indefinitely. The argument that previously blocked this
+("closing also marks a role never-live and hides it") was FALSE and was checked
+before the change: the write is a status and nothing else, `never_live` is
+ingest-time provenance, and `partitionNeverLive` hides on `never_live` rather
+than on status, so a role closed here stays visible under Out. A row closed this
+way also skips the trailing 404 check, which would otherwise write the same
+status twice. Only a definitive 404/410 closes anything on the URL itself,
+unchanged.
 
 **A role that was already dead when we found it is hidden, not deleted.**
 `ingestRoles` closes a role on two signals — a definitive 404/410 from

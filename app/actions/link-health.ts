@@ -68,6 +68,15 @@ export interface LinkRepairReport {
   /** Rows the employer's own board no longer lists, and are now closed. */
   closedUnlisted: number;
   /**
+   * Rows whose own board — vendor and slug READ out of the stored link, not
+   * guessed — no longer carries the posting id, and are now closed.
+   *
+   * Its own counter rather than folded into closedUnlisted: two boards found
+   * two different ways are two different strengths of evidence, and one number
+   * would hide which was which.
+   */
+  closedAbsent: number;
+  /**
    * Every row this pass could not decide, with the reason on each. Three live
    * here (see UnclearReason): several postings could be this role, the board
    * lists nothing at all, or no employer board was found to check against.
@@ -87,6 +96,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     relinked: 0,
     closed: 0,
     closedUnlisted: 0,
+    closedAbsent: 0,
     unclear: [],
   };
 
@@ -120,20 +130,17 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
   // and re-fetching it per role only risks a rate limit — which answers
   // `unreachable`, which is inert, which would silently disable the check.
   const boards = newBoardCache();
-  // Counted but NOT part of LinkRepairReport: `absent` is acted on by nobody,
-  // so surfacing it in the UI would offer a decision this pass will not honour.
-  // It is logged because the next change needs real-world frequency data before
-  // anyone decides whether a read-slug `absent` should become closable, and
-  // right now that information does not exist anywhere.
-  let absent = 0;
+  // The frequency data this comment used to ask for was gathered on 2026-09-07
+  // and the answer was yes: a read-slug `absent` now closes the role, and is
+  // reported as closedAbsent.
   for (let i = 0; i < jobs.length; i += BATCH) {
     const results = await Promise.all(jobs.slice(i, i + BATCH).map((j) => repairOne(j, boards)));
     for (const r of results) {
       report.checked++;
-      if (r.absent) absent++;
       if (r.relinked) report.relinked++;
       if (r.closed) report.closed++;
       if (r.closedUnlisted) report.closedUnlisted++;
+      if (r.closedAbsent) report.closedAbsent++;
       // Not `if (r.unclear)` alone: the 404 check below repairOne's board
       // lookup can close a row that the lookup had already set aside as
       // undecidable. Listing it would offer the user a decision that has
@@ -144,10 +151,11 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
 
   console.log(
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
-      `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted), ` +
+      `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted) + ` +
+      `${report.closedAbsent} (gone from its own board), ` +
       `unclear ${report.unclear.length} ` +
       `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved), ` +
-      `${absent} absent from the employer's own board (reported nowhere, closed never)`
+      `${report.closedAbsent} of those found by a slug read from the link`
   );
   return report;
 }
@@ -160,9 +168,9 @@ interface RepairOutcome {
   /**
    * The employer's OWN board — vendor and slug read out of the stored link, not
    * guessed — does not carry this posting id and lists nothing resembling the
-   * title. Nothing acts on it; it exists to be counted in the summary log.
+   * title. The role is CLOSED on this now; see the branch below.
    */
-  absent?: boolean;
+  closedAbsent?: boolean;
 }
 
 async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
@@ -206,7 +214,26 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
         reason: verified.reason,
       };
     } else if (verified.kind === "absent") {
-      out.absent = true;
+      // Closed on evidence, since 2026-09-07. The board being asked is
+      // certainly the employer's — vendor and slug were READ out of the stored
+      // URL, not guessed from the company name — and it answers that this
+      // posting id is gone and that nothing on it resembles the title.
+      //
+      // Nothing else catches these. Greenhouse 302s a removed posting to its
+      // board root, so checkJobUrl follows the redirect, sees 200, and calls
+      // the link live; four sampled rows were all in that state and ~18 sat as
+      // New indefinitely. The counter-argument this branch used to carry — that
+      // closing "marks a role never-live and hides it" — was simply false: the
+      // write below is a status and nothing else, never_live is ingest-time
+      // provenance, and partitionNeverLive hides on never_live rather than on
+      // status. A role closed here stays visible under Out and can be moved
+      // back by hand.
+      const failure = describeWriteFailure(
+        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        `close ${job.company} / ${job.role_title}`
+      );
+      if (failure === undefined) out.closedAbsent = true;
+      else console.error(`repairJobLinks: ${failure}`);
     }
     // `listed` (the link is fine), `unreachable` (a board we could not read
     // says nothing), `notApplicable` (a bare board page, or an ATS with no
@@ -271,10 +298,12 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
     }
   }
 
-  // Only a definitive 404/410 closes a role — checkJobUrl's existing rule, kept
-  // because job boards answer 403 to anything that looks like a bot and an
-  // ambiguous signal must never close a live posting.
-  if ((await checkJobUrl(liveUrl)) === "dead") {
+  // Only a definitive 404/410 closes a role here — checkJobUrl's existing rule,
+  // kept because job boards answer 403 to anything that looks like a bot and an
+  // ambiguous signal must never close a live posting. Skipped for a row a board
+  // has already closed above, which would otherwise write the same status
+  // twice and count one closure under two reasons.
+  if (!out.closedAbsent && !out.closedUnlisted && (await checkJobUrl(liveUrl)) === "dead") {
     const failure = describeWriteFailure(
       (await updateJob(job.id, { status: "Posting Closed" })).error,
       `close ${job.company} / ${job.role_title}`
