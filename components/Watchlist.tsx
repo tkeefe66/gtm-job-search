@@ -60,11 +60,16 @@ const STATE_STYLE: Record<
 // Legend order is reading order, not the enum's: healthy first, the ones that
 // want you last. `failing` and `needs_url` share a colour, so they share one
 // entry rather than printing the same swatch twice.
+//
+// SHORT labels, because the legend sits inline with the filter chips rather
+// than under the table — four sentences on that row would push the filter box
+// onto a second line at any normal width. The sentence each dot means survives
+// as the row dot's `title`, which is where someone hovering actually asks.
 const LEGEND: { dot: string; text: string }[] = [
-  { dot: STATE_STYLE.ok.dot, text: STATE_STYLE.ok.legend },
-  { dot: STATE_STYLE.due.dot, text: STATE_STYLE.due.legend },
-  { dot: STATE_STYLE.empty.dot, text: STATE_STYLE.empty.legend },
-  { dot: STATE_STYLE.failing.dot, text: "Needs you — failing, or no careers page" },
+  { dot: STATE_STYLE.ok.dot, text: "On schedule" },
+  { dot: STATE_STYLE.due.dot, text: STATE_STYLE.due.label },
+  { dot: STATE_STYLE.empty.dot, text: STATE_STYLE.empty.label },
+  { dot: STATE_STYLE.failing.dot, text: "Needs you" },
 ];
 
 type Filter = "all" | "attention" | "due";
@@ -776,6 +781,19 @@ export default function Watchlist() {
                 Due now {dueCount}
               </button>
             )}
+            {/* The price of a colour-only status, paid where the colours are
+                first seen rather than under the table. Rendered from the same
+                STATE_STYLE map the rows use, so it cannot describe a colour
+                they do not have. */}
+            <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 pl-1 text-[11px] text-ink/45">
+              {LEGEND.map((l) => (
+                <span key={l.text} className="flex items-center gap-1.5">
+                  <span className={`h-[7px] w-[7px] rounded-full ${l.dot}`} />
+                  {l.text}
+                </span>
+              ))}
+            </div>
+
             <input
               type="text"
               value={query}
@@ -801,16 +819,6 @@ export default function Watchlist() {
             )}
           </div>
 
-          {/* The legend is the price of a colour-only status. Rendered from the
-              same STATE_STYLE map the rows use, so it cannot drift from them. */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 px-1 text-[11px] text-ink/45">
-            {LEGEND.map((l) => (
-              <span key={l.text} className="flex items-center gap-1.5">
-                <span className={`h-[7px] w-[7px] rounded-full ${l.dot}`} />
-                {l.text}
-              </span>
-            ))}
-          </div>
         </>
       )}
 
