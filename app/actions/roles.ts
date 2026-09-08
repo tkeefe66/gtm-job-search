@@ -11,7 +11,7 @@ import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { supabase } from "@/lib/supabase";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
-import { ingestRoles } from "@/lib/ingest-roles";
+import { MAX_SEARCH_READS, ingestRoles } from "@/lib/ingest-roles";
 import type { Role, RolesResult, Startup } from "@/lib/types";
 import {
   loadCriteriaAndScoringInputs,
@@ -179,6 +179,9 @@ async function findAndSaveRolesInner(
       },
       source: "Discover",
       fitInputs,
+      // Same reasoning as role search: a user is waiting on this click, not a
+      // cron request holding an edge timeout open for a queue of companies.
+      maxReads: MAX_SEARCH_READS,
     });
 
     return { roles, message, cacheWarning };

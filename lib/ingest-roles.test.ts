@@ -689,3 +689,53 @@ describe("the employer's own spelling of its name wins", () => {
     expect(insertedRow().company).toBe("Fireworks AI");
   });
 });
+
+// Step 3 of the verifiable-sourcing spec. Measured 2026-09-07: Role Search made
+// 133 of 195 rows and owns 46 of the 59 unread-and-open ones, against the
+// crawl's 12. The read budget that exists to keep ONE cron request inside
+// Railway's 300s edge timeout was silently rationing the path that produces
+// four fifths of the table — and that path is a user waiting on their own
+// response, with no cron timeout to respect.
+describe("a caller may raise or lower how many postings one ingest reads", () => {
+  const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ ...LIVE, role_title: `RevOps Manager ${i}` }));
+
+  beforeEach(() => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: ["SQL"], niceToHaves: [] },
+      department: "",
+      employer: "",
+      summary: "Runs the stack.",
+      empty: false,
+    };
+  });
+
+  test("a higher budget reads more of one run's roles", async () => {
+    await ingestRoles({ ...OPTS, roles: many(12), maxReads: 12 });
+
+    expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(12);
+  });
+
+  // The default is unchanged, which is what keeps the crawler inside its
+  // request: a caller that says nothing gets the cron-safe number.
+  test("saying nothing keeps the crawler's bound", async () => {
+    await ingestRoles({ ...OPTS, roles: many(12) });
+
+    expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(MAX_INGEST_READS);
+  });
+
+  // A posting the caller already read costs NOTHING from the budget — it is
+  // already held, and re-reading it would spend a second fetch and a second
+  // billed call to learn the same thing.
+  test("a pre-read posting is used and does not consume the budget", async () => {
+    const preRead = { [LIVE.job_url]: h.read } as Record<string, typeof h.read>;
+
+    await ingestRoles({ ...OPTS, roles: [LIVE], preRead, maxReads: 0 });
+
+    expect(vi.mocked(readPosting)).not.toHaveBeenCalled();
+    expect((insertedRow().posting as { enrichedAt?: string }).enrichedAt).toBeTruthy();
+  });
+});

@@ -77,7 +77,10 @@ vi.mock("@/lib/model-call", () => ({
   complete: vi.fn(),
   parseJson: (raw: string) => JSON.parse(raw),
 }));
-vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn() }));
+vi.mock("@/lib/ingest-roles", () => ({
+  ingestRoles: vi.fn(),
+  MAX_SEARCH_READS: 20,
+}));
 // This mock replaces the whole module, so nothing here asserts what
 // lib/search-criteria.ts or lib/profile.ts actually hold. The profile fields
 // on the resolved object are ARBITRARY FIXTURES, not a pin on the real

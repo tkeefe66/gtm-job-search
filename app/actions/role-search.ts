@@ -9,7 +9,7 @@ import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_MATCH_FIELDS } from "@/lib/types";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { groupRolesByCompany } from "@/lib/group-by-company";
-import { ingestRoles } from "@/lib/ingest-roles";
+import { MAX_SEARCH_READS, ingestRoles } from "@/lib/ingest-roles";
 import { buildRoleSearchPrompt } from "@/lib/role-search-prompt";
 import { shouldUseCachedRoleSearch } from "@/lib/role-search-cache";
 import type { Profile } from "@/lib/profile";
@@ -268,6 +268,11 @@ async function findRolesByCriteriaInner(
           roles,
           source: "Role Search",
           fitInputs,
+          // A user is waiting on this click, not a cron request holding a 300s
+          // edge timeout open for a queue of companies — so this path reads far
+          // more of what it finds. See MAX_SEARCH_READS: measured, role search
+          // owns four fifths of the table and most of its unread rows.
+          maxReads: MAX_SEARCH_READS,
         });
       } catch (err) {
         console.error(

@@ -73,6 +73,20 @@ export interface IngestOptions {
  */
 export const MAX_INGEST_READS = 6;
 
+/**
+ * The read budget for a USER-INITIATED search, which is a different kind of
+ * request from a cron crawl: nobody is holding a 300s edge timeout open for a
+ * batch of companies, one person is waiting on their own click and would rather
+ * wait longer for rows they can act on.
+ *
+ * Measured 2026-09-07, this is the bound that matters most: Role Search made
+ * 133 of 195 rows and owns 46 of the 59 unread-and-open ones, so the cron-safe
+ * six was rationing exactly the path that produces four fifths of the table.
+ * Twenty covers a normal run whole; beyond that the Enrich button on /roles
+ * picks up the remainder at the user's pace.
+ */
+export const MAX_SEARCH_READS = 20;
+
 export interface IngestResult {
   added: Role[];
   skipped: Role[];
@@ -199,7 +213,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   const reads = new Map<number, PostingRead>();
   if (!dryRun) {
     let budget = opts.maxReads ?? MAX_INGEST_READS;
-    for (let i = 0; i < fresh.length && budget > 0; i++) {
+    // The loop runs over EVERY fresh role, not only while budget remains: a
+    // posting the caller already read costs nothing, and gating it behind the
+    // budget dropped every pre-read past the sixth — silently, for the one
+    // caller that hands over reads in bulk.
+    for (let i = 0; i < fresh.length; i++) {
       const deadUrl = urlStatuses[i] === "dead";
       if (deadUrl || links[i].unlisted || !links[i].url) continue;
       const already = opts.preRead?.[links[i].url];
@@ -207,6 +225,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         reads.set(i, already);
         continue;
       }
+      if (budget <= 0) continue;
       budget--;
       reads.set(
         i,

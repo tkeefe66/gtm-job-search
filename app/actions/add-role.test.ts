@@ -19,7 +19,10 @@ vi.mock("@/lib/posting-read", () => ({
   readPosting: vi.fn(async () => h.read),
   readPostingText: vi.fn(async () => h.read),
 }));
-vi.mock("@/lib/ingest-roles", () => ({ ingestRoles: vi.fn(async () => h.ingest) }));
+vi.mock("@/lib/ingest-roles", () => ({
+  ingestRoles: vi.fn(async () => h.ingest),
+  MAX_SEARCH_READS: 20,
+}));
 vi.mock("@/lib/search-criteria", () => ({
   loadCriteriaAndScoringInputs: async () => ({ fitInputs: {} }),
 }));
