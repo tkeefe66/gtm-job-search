@@ -1,23 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import ResumeDocument from "@/components/resume/ResumeDocument";
+import CoveragePanel from "@/components/resume/CoveragePanel";
 import { captureResumeHtml } from "@/components/resume/useResumeCapture";
-import { tailorResumeForJob } from "@/app/actions/resume";
+import { tailorResumeForJob, type ResumeOverrides } from "@/app/actions/resume";
 import { saveResume } from "@/app/actions/saved-resumes";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import type { CoverageReport } from "@/lib/resume-coverage";
+import { styleAttributeFor } from "@/lib/resume-design-tokens";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 export default function TailorPanel({
-  career,
+  career: initialCareer,
   jobId,
   initialSelection,
+  initialOverrides,
+  initialCoverage,
+  initialWarnings,
   roleTitle,
   company,
 }: {
   career: CareerRecord;
   jobId: string;
   initialSelection: ResumeSelection | null;
+  initialOverrides: ResumeOverrides;
+  initialCoverage: CoverageReport | null;
+  initialWarnings: string[];
   /**
    * Snapshotted onto the saved row so the archive card survives the job being
    * deleted. null when the page could not read the job — Save is withheld
@@ -27,10 +36,20 @@ export default function TailorPanel({
   roleTitle: string | null;
   company: string | null;
 }) {
+  const [career, setCareer] = useState(initialCareer);
   const [selection, setSelection] = useState(initialSelection);
+  const [overrides, setOverrides] = useState(initialOverrides);
+  const [coverage, setCoverage] = useState(initialCoverage);
+  const [warnings, setWarnings] = useState(initialWarnings);
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // Validated once here, never hand-assembled: TOKEN_STYLE_RULES matching is
+  // case-sensitive and untrimmed, so a hand-built declaration string fails
+  // CLOSED with no error anywhere. styleAttributeFor is the one place that
+  // normalises and validates a design override into a style string.
+  const rootStyle = useMemo(() => styleAttributeFor(overrides.design || {}), [overrides.design]);
 
   const docPageRef = useRef<HTMLElement>(null);
   const [dirty, setDirty] = useState(false);
@@ -63,6 +82,12 @@ export default function TailorPanel({
       if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       else {
         setSelection(res.selection);
+        if (res.career) setCareer(res.career);
+        // Regenerate discards overrides — reflect that reset rather than
+        // keeping a design/text override the just-saved row no longer carries.
+        setOverrides(res.overrides);
+        setCoverage(res.coverage);
+        setWarnings(res.warnings);
         // A warning, never a refusal. The user can read the posting in a
         // browser; withholding the document helps nobody. But a résumé tailored
         // from a job TITLE, with no posting behind it, must not look identical
@@ -178,11 +203,14 @@ export default function TailorPanel({
           Click any text below to edit it directly — for Google Docs, select all and copy/paste after editing.
         </span>
       </div>
+      {coverage && <CoveragePanel coverage={coverage} warnings={warnings} />}
       <ResumeDocument
         career={career}
         selection={selection}
         docPageRef={docPageRef}
         onEdit={() => setDirty(true)}
+        rootStyle={rootStyle}
+        pageMargin={overrides.pageMargin}
       />
     </div>
   );

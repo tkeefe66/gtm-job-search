@@ -69,6 +69,11 @@ vi.mock("@/lib/supabase", () => ({
   supabase: {
     forTenant: () => ({ from: (table: string) => h.makeBuilder(table) }),
   },
+  // tailorResumeForJob now reads app_settings (for the career overlay) through
+  // lib/settings-store.ts's readAllSettingsResult, which goes through
+  // rawQuery rather than the query builder above. No rows — no overlay bullets
+  // — is exactly what an empty settings table means for this suite.
+  rawQuery: async () => ({ data: [], error: null }),
 }));
 
 import { tailorResumeForJob } from "./resume";

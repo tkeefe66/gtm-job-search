@@ -8,6 +8,10 @@ import { supabase } from "@/lib/supabase";
 import { hasPostingBeenRead, type PostingDetail } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { buildThemePrompt, type JobSummaryFields } from "@/lib/resume-prompt";
+import { effectiveCareer } from "@/lib/effective-career";
+import { coverageReport, type CoverageReport } from "@/lib/resume-coverage";
+import { careerOverlayFrom, readAllSettingsResult } from "@/lib/settings-store";
+import type { ResumeOverrides } from "@/lib/resume-overrides";
 import {
   selectBullets,
   type CareerRecord,
@@ -16,6 +20,13 @@ import {
 } from "@/lib/resume-render/render";
 import career from "@/lib/resume-render/content/resume.json";
 import themeVocabulary from "@/lib/resume-render/content/themes.json";
+
+// Re-exported for existing consumers — the type itself lives in
+// lib/resume-overrides.ts. See that file's header for why: lib/resume-ops.ts
+// (Task 10) must import it too, and a lib module importing a type from a
+// "use server" file is fragile — the directive forbids non-async exports, and
+// the import direction becomes load-bearing for a type erased at compile time.
+export type { ResumeOverrides } from "@/lib/resume-overrides";
 
 interface JobRow {
   role_title: string;
@@ -121,8 +132,18 @@ async function deriveThemes(job: JobSummaryFields): Promise<{ themes: string[]; 
 export async function tailorResumeForJob(
   jobId: string
 ): Promise<{
+  career?: CareerRecord;
   themes: string[];
   selection: ResumeSelection | null;
+  /**
+   * Always `{}`: Regenerate replaces `tailored_resumes.content` with no
+   * `overrides` key, discarding whatever design/text/selection retuning the
+   * chat agent (Task 10) had written for the previous version. Returned (not
+   * omitted) so the caller can reset its own state to match what was saved.
+   */
+  overrides: ResumeOverrides;
+  coverage: CoverageReport | null;
+  warnings: string[];
   /**
    * Nobody has read this posting, so the themes came from the title, the
    * seniority and the app's own fit summary rather than from what the employer
@@ -136,10 +157,35 @@ export async function tailorResumeForJob(
   const actor = await requireResumeAdmin();
 
   const { job, error: loadError } = await loadJobForTenant(actor.tenantId, jobId);
-  if (loadError) return { themes: [], selection: null, error: loadError };
-  if (!job) {
-    return { themes: [], selection: null, error: "Could not find that job" };
+  if (loadError) {
+    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: loadError };
   }
+  if (!job) {
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      coverage: null,
+      warnings: [],
+      error: "Could not find that job",
+    };
+  }
+
+  // Read before billing: a settings-read failure is a reason to stop, not a
+  // reason to spend on a call whose result would render against the wrong
+  // record anyway.
+  const rowsResult = await readAllSettingsResult();
+  if (rowsResult.error !== undefined) {
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      coverage: null,
+      warnings: [],
+      error: rowsResult.error,
+    };
+  }
+  const overlay = careerOverlayFrom(rowsResult.rows);
 
   const budget = await withBudget({
     action: "tailor-resume",
@@ -147,8 +193,12 @@ export async function tailorResumeForJob(
     isAdmin: actor.isAdmin,
     fn: () => deriveThemes(toSummaryFields(job)),
   });
-  if (budget.capped) return { themes: [], selection: null, error: budget.capped };
-  if (budget.error !== undefined) return { themes: [], selection: null, error: budget.error };
+  if (budget.capped) {
+    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: budget.capped };
+  }
+  if (budget.error !== undefined) {
+    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: budget.error };
+  }
 
   // The model call itself failed (auth, network, rate limit, unparseable
   // response) — distinct from a successful call that legitimately found no
@@ -158,11 +208,22 @@ export async function tailorResumeForJob(
   // and the "Tailor" button would simply not reappear with no signal to the
   // user that anything went wrong.
   if (budget.result!.failed !== undefined) {
-    return { themes: [], selection: null, error: budget.result!.failed };
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      coverage: null,
+      warnings: [],
+      error: budget.result!.failed,
+    };
   }
 
   const themes = budget.result!.themes;
-  const selection = selectBullets(career as CareerRecord, { themes });
+  // Regenerate is a fresh start: no text overrides (those live only in the
+  // per-job overrides this call discards), just the standing overlay bullets.
+  const { career: merged, warnings } = effectiveCareer(career as CareerRecord, overlay, {});
+  const selection = selectBullets(merged, { themes });
+  const coverage = coverageReport(merged, themes, selection, themeVocabulary as ThemeVocabulary);
   const unread = !hasPostingBeenRead(job);
 
   const { error } = await supabase
@@ -173,14 +234,28 @@ export async function tailorResumeForJob(
       { onConflict: "tenant_id,job_id" }
     );
   const described = describeWriteFailure(error ? error.message : undefined, "save that tailored resume");
-  if (described !== undefined) return { themes, selection, unread, error: described };
+  if (described !== undefined) {
+    return {
+      career: merged,
+      themes,
+      selection,
+      overrides: {},
+      coverage,
+      warnings,
+      unread,
+      error: described,
+    };
+  }
 
-  return { themes, selection, unread };
+  return { career: merged, themes, selection, overrides: {}, coverage, warnings, unread };
 }
 
-export async function getTailoredResume(
-  jobId: string
-): Promise<{ themes: string[]; selection: ResumeSelection | null; error?: string }> {
+export async function getTailoredResume(jobId: string): Promise<{
+  themes: string[];
+  selection: ResumeSelection | null;
+  overrides: ResumeOverrides;
+  error?: string;
+}> {
   const actor = await requireResumeAdmin();
 
   const { data, error } = await supabase
@@ -195,12 +270,70 @@ export async function getTailoredResume(
     // message === "", which `describeWriteFailure` substitutes text for — a
     // bare `error.message` here would return `{error: ""}`, which every
     // caller's `if (result.error)` check reads as falsy, i.e. success.
-    return { themes: [], selection: null, error: describeWriteFailure(error.message, "load that tailored resume") };
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      error: describeWriteFailure(error.message, "load that tailored resume"),
+    };
   }
-  if (!data) return { themes: [], selection: null };
+  if (!data) return { themes: [], selection: null, overrides: {} };
 
-  const content = (data as { content: { themes: string[]; selection: ResumeSelection } }).content;
-  return { themes: content.themes, selection: content.selection };
+  // A row written before `overrides` existed has no such key — normal, never
+  // an error, so it defaults to `{}` rather than being flagged.
+  const content = (data as {
+    content: { themes: string[]; selection: ResumeSelection; overrides?: ResumeOverrides };
+  }).content;
+  return { themes: content.themes, selection: content.selection, overrides: content.overrides || {} };
+}
+
+/**
+ * Everything the tailor screen needs, resolved server-side against ONE record.
+ *
+ * The career record must not be imported statically by the page any more: an
+ * overlay bullet or a text override the server scored would not exist in the
+ * client's copy, and render.js:145-146 drops unknown ids silently and the whole
+ * role when nothing survives.
+ */
+export async function loadResumeContext(jobId: string): Promise<{
+  career?: CareerRecord;
+  themes: string[];
+  selection: ResumeSelection | null;
+  overrides: ResumeOverrides;
+  coverage: CoverageReport | null;
+  warnings: string[];
+  error?: string;
+}> {
+  await requireResumeAdmin();
+  const rowsResult = await readAllSettingsResult();
+  if (rowsResult.error !== undefined) {
+    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: rowsResult.error };
+  }
+  const overlay = careerOverlayFrom(rowsResult.rows);
+
+  const stored = await getTailoredResume(jobId);
+  if (stored.error !== undefined) {
+    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: stored.error };
+  }
+
+  const overrides = stored.overrides;
+  const { career: merged, warnings } = effectiveCareer(
+    career as CareerRecord,
+    overlay,
+    overrides.text || {}
+  );
+  const coverage = stored.selection
+    ? coverageReport(merged, stored.themes, stored.selection, themeVocabulary as ThemeVocabulary)
+    : null;
+
+  return {
+    career: merged,
+    themes: stored.themes,
+    selection: stored.selection,
+    overrides,
+    coverage,
+    warnings,
+  };
 }
 
 /**
