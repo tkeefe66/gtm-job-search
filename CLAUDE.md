@@ -781,6 +781,48 @@ estimate (font-metric rounding and orphans/widows aren't modeled), so
 Print / Export PDF remains the ground truth for anything this guide and the
 real output might disagree on.
 
+**The guides were counting themselves, and `measure()` is what the CHAT is told.**
+`collectFragments` walks `rsm.children`, and the markers this file draws are
+appended as children of `.rsm`. `draw()` removes them before it walks, so the
+on-screen markers were always computed from clean input and looked right —
+`measure()` does not, so its LAST fragment was a zero-height absolutely-positioned
+marker sitting at the first break, and the document's real end vanished. Measured
+live on the deployed app 2026-09-08: `__rsmMeasure()` returned `1 page, 99.5% full`
+for an 1809px document Chrome printed on three, and 2 the moment the markers were
+removed from the DOM. That is the number `__rsmMeasure` feeds the résumé chat —
+the entire reason the API exists is so the model can notice a nearly empty final
+page — so every judgement it made about length was about a one-page résumé that
+did not exist. The guard lives in the shared walk, never in `measure()`, so no
+future caller can reintroduce it. `lib/rsm-page-guides.test.ts` loads the browser
+IIFE against a hand-built DOM stub implementing only the calls it makes, so the
+walk EXECUTES rather than being grepped for; geometry comes from fixed numbers, so
+nothing depends on font metrics. One of its tests was wrong on the first pass and
+the file records it: asserting that two GUIDED measurements agree does not bite,
+because with the bug both are wrong the same way. It strips the markers, measures
+the truth, puts them back, and compares.
+
+**A flowing `<doc-page>` emits NO `@page size`, so the print dialog owns the page
+box — which is why `PORTRAIT_PAGE_CSS` (`lib/resume-download.ts`) exists.**
+`doc-page.js` sets a `size` descriptor only for true-size, scaled-fit, explicitly
+paginated, or `orientation="landscape"` documents; a plain flowing one gets
+`@page { margin: 0 }` and nothing else, deliberately, so the component can print on
+any paper. Meanwhile `rsm-page-guides.js` hardcodes `PAPER.letter` portrait and
+subtracts two margins, so the moment the dialog's Layout is set to Landscape the
+two disagree by 109px — about two bullets — and the on-screen marker reads as
+broken. Measured against live DOM coordinates: landscape gives a usable band of
+612pt = 816px versus portrait's `1056 - 2*65.28 = 925.44`, and each number lands
+exactly on an observed break, with no fudge factor. **This cost most of an
+afternoon and three wrong root causes** (a fragmented-grid theory and a
+narrow-column theory, both built on `pdftotext -layout` reporting a wrapped
+bullet's lines out of order — render the page to PNG before believing a text dump).
+The rule is applied on all four surfaces that render a `<doc-page>` from ONE
+constant, the way `DEFAULT_PAGE_MARGIN` is, and sets SIZE ONLY: `doc-page.js` owns
+the margin descriptor, so a second margin would race it on source order and
+silently override a saved row's `page_margin`. It is app-side on purpose — pinning
+portrait inside `doc-page.js` would take A4 away from every other consumer of the
+design system to fix one portrait-only résumé, which is the wrong end of the
+ownership rule.
+
 ## Closed: the three career-agnostic gaps (2026-08-18)
 
 All three were closed in one pass. Recorded rather than deleted, because each one's REASONING still constrains the next change.
