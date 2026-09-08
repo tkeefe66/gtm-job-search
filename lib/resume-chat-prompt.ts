@@ -43,6 +43,7 @@ import type { ResumeOverrides } from "@/lib/resume-overrides";
 import type { CoverageReport } from "@/lib/resume-coverage";
 import { OPERATION_SCHEMA } from "@/lib/resume-ops";
 import { DESIGN_TOKENS } from "@/lib/resume-design-tokens";
+import { houseFindingsBlock, houseRulesBlock, type HouseFinding } from "@/lib/house-style";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -56,6 +57,10 @@ export interface ChatPromptInput {
   selection: ResumeSelection;
   overrides: ResumeOverrides;
   coverage: CoverageReport;
+  /** How the CURRENT document measures against the house-style rules, so the
+   *  model knows what it is already breaking before it is asked to change
+   *  anything. Optional so the fixture-pinned callers stay explicit about it. */
+  houseFindings?: HouseFinding[];
   requirements: string[];
   niceToHaves: string[];
   roleTitle: string;
@@ -221,8 +226,41 @@ function operationCatalogueBlock(): string {
     .join("\n");
 }
 
+/** Names ALONE were all the model used to get, which is why it invented
+ *  plausible-but-nonexistent tokens and proposed values outside the accepted
+ *  range: it could not see the range, the units, or what any knob controls.
+ *  TokenSpec already carries min/max/units — none of it was reaching the
+ *  prompt. */
+
+/** What each knob actually controls. The token NAMES are self-describing to
+ *  someone who has read document.css and opaque to everyone else — including a
+ *  model asked to "tighten the spacing". */
+const TOKEN_PURPOSE: Record<string, string> = {
+  "--rail": "width of the left section-label column",
+  "--gap-bullet": "vertical space between bullets",
+  "--type-body": "body and bullet font size",
+  "--type-meta": "dates and contact-line font size",
+  "--type-name": "the header name font size",
+  "--type-org": "employer line font size",
+  "--type-role": "role title font size",
+  "--type-section": "section label font size",
+  "--leading-tight": "line height for headings and tight blocks",
+  "--tracking-tight": "letter spacing for section labels",
+  "--ink-900": "primary heading colour",
+  "--text-primary": "body text colour",
+  "--rule-100": "hairline rule colour",
+  "--rule-200": "heavier rule colour",
+  "--link": "link colour",
+};
+
 function designTokenBlock(): string {
-  return DESIGN_TOKENS.map((t) => `- ${t.name}`).join("\n");
+  return DESIGN_TOKENS.map((t) => {
+    const purpose = TOKEN_PURPOSE[t.name] ? ` — ${TOKEN_PURPOSE[t.name]}` : "";
+    if (t.kind === "color") return `- ${t.name} (color: hex or a CSS colour keyword)${purpose}`;
+    const units = t.units ? t.units.filter((u) => u !== "").join("/") : "";
+    const range = t.min !== undefined && t.max !== undefined ? `${t.min}–${t.max}` : "";
+    return `- ${t.name} (length ${range}${units ? ", " + units : ""})${purpose}`;
+  }).join("\n");
 }
 
 function transcriptBlock(messages: ChatMessage[]): string {
@@ -262,6 +300,13 @@ ${operationCatalogueBlock()}
 
 DESIGN TOKENS set_design_token MAY ADJUST (no others are accepted)
 ${designTokenBlock()}
+
+HOUSE STYLE — what a good résumé looks like. Judge your own change against
+these before reporting it done, and say so when a request would break one.
+${houseRulesBlock()}
+
+HOW THE DOCUMENT MEASURES AGAINST THEM RIGHT NOW
+${houseFindingsBlock(input.houseFindings || [])}
 
 ${INVARIANT}`;
 

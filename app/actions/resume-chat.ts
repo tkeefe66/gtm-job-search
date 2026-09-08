@@ -17,6 +17,7 @@
 //      coverage panel is a read-time report over that.
 
 import { requireResumeAdmin } from "@/lib/require-resume-admin";
+import { evaluateHouseStyle } from "@/lib/house-style";
 import { withBudget } from "@/lib/metered";
 import { completeDetailed, parseJson, type DetailedResponse } from "@/lib/model-call";
 import { supabase } from "@/lib/supabase";
@@ -81,6 +82,10 @@ interface TurnResult {
    * re-render discards the user's unsaved hand edits.
    */
   changedDocument: boolean;
+  /** House-style rules the document breaks AFTER this turn. Advisory, never an
+   *  error: the user asked for the change and got it. The client shows them so
+   *  a request that quietly degrades the page says so out loud. */
+  houseFindings?: { rule: string; detail: string }[];
   rejected?: string;
   /**
    * The record the returned `selection` is meant to render against: the
@@ -379,6 +384,10 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     roleTitle: jobRes.job.roleTitle,
     company: jobRes.job.company,
     messages: messagesForPrompt,
+    // Evaluated against the document as it stands BEFORE this turn, so the
+    // model knows what it is already breaking rather than discovering it after
+    // its own edit lands.
+    houseFindings: evaluateHouseStyle(career, currentSelection),
   });
 
   const budget = await withBudget({
@@ -636,6 +645,11 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     coverage,
     messages: updated,
     transcriptSaveError: persisted.error,
+    // Evaluated against the document this turn PRODUCED, so a change that
+    // broke a rule is reported with the change rather than discovered on the
+    // next turn. Same argument as coverage above: computed from
+    // doc.career/doc.selection, never the pre-turn record.
+    houseFindings: evaluateHouseStyle(doc.career, doc.selection),
   };
 }
 

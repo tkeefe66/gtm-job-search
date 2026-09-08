@@ -244,10 +244,9 @@ export default function ChatPanel({
   }
 
   return (
-    <div className="flex flex-col gap-3 border-t border-slate pt-4 print:hidden">
-      <p className="text-xs font-medium uppercase tracking-wide text-ink/60">
-        Chat about this résumé
-      </p>
+    // No heading here: ChatDock renders the title bar now, and this component's
+    // own heading duplicated it once the chat moved into the dock.
+    <div className="flex flex-col gap-3 print:hidden">
 
       {loadError && <p className="text-sm text-[#92400E]">{loadError}</p>}
 
