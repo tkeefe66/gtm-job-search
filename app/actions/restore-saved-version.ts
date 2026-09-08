@@ -84,9 +84,34 @@ async function appendRestoreMarker(
   return { error: describeWriteFailure(writeError ? writeError.message : undefined, "record the restore") };
 }
 
+export interface RestoreSavedVersionResult {
+  jobId?: string;
+  checkpointId?: string;
+  error?: string;
+  /**
+   * Present ONLY when the checkpoint and the restore itself already committed
+   * successfully and the SEPARATE write that appends a marker turn to
+   * resume_chats then failed. Mirrors app/actions/resume-chat.ts's
+   * `TurnResult.transcriptSaveError` (:99-111) exactly, and for the same
+   * reason: two writes with no shared transaction is an accepted limitation,
+   * but the result must not describe that as `error` — every caller in this
+   * repo treats `error !== undefined` as "the whole operation failed, offer a
+   * retry", and a retry here is actively harmful. On retry the draft already
+   * holds S's content, so shouldCheckpoint compares S's content against the
+   * checkpoint just written (which holds the OLD draft) — they differ, so a
+   * SECOND, worthless checkpoint is written holding S's content, and Step 5's
+   * demotion then moves the FIRST checkpoint — the only copy of the user's
+   * pre-restore draft — from a 30-day window down to 3. `jobId` and
+   * `checkpointId` above already reflect the real, saved outcome; this field
+   * is only a signal that the chat transcript may not carry the restore
+   * marker after a reload. Do not collapse this back into `error`.
+   */
+  markerSaveError?: string;
+}
+
 export async function restoreSavedVersion(
   savedId: string
-): Promise<{ jobId?: string; checkpointId?: string; error?: string }> {
+): Promise<RestoreSavedVersionResult> {
   // FIRST statement, never inside a try — auth-required.test.ts asserts this
   // THROWS, and a top-level catch would turn it into a returned {error}.
   const actor = await requireResumeAdmin();
@@ -186,6 +211,17 @@ export async function restoreSavedVersion(
       retentionDays: CHECKPOINT_RETENTION_DAYS,
     });
     if (checkpointResult.error !== undefined) return { error: checkpointResult.error };
+    // insertSavedRow has three outcomes: {id}, {error}, {duplicateOf}. The
+    // third is unreachable TODAY only because allowDuplicate: true above
+    // skips the dedupe check entirely — but a future "stop writing redundant
+    // checkpoints" change (dropping that flag) would make this reachable, and
+    // silently falling through with checkpointId left undefined would reach
+    // Step 6's destructive upsert with NO checkpoint written after
+    // shouldCheckpoint said one was required. Made explicit rather than left
+    // implicit in `checkpointId`'s type.
+    if (checkpointResult.id === undefined) {
+      return { error: "Could not checkpoint your current draft, so nothing was restored." };
+    }
     checkpointId = checkpointResult.id;
 
     // Step 5: demote older checkpoints for this job. least() is load-bearing —
@@ -230,7 +266,10 @@ export async function restoreSavedVersion(
     formatDate(new Date(saved.created_at)) +
     ". The document below is that version; anything I changed after it is no longer applied.";
   const markerResult = await appendRestoreMarker(actor.tenantId, jobId, markerText);
-  if (markerResult.error !== undefined) return { error: markerResult.error, jobId, checkpointId };
+  if (markerResult.error !== undefined) {
+    // Do NOT collapse into `error` — see RestoreSavedVersionResult.markerSaveError.
+    return { jobId, checkpointId, markerSaveError: markerResult.error };
+  }
 
   return { jobId, checkpointId };
 }
