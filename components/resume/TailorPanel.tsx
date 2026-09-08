@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import ResumeDocument from "@/components/resume/ResumeDocument";
 import CoveragePanel from "@/components/resume/CoveragePanel";
+import ChatPanel from "@/components/resume/ChatPanel";
 import { captureResumeHtml } from "@/components/resume/useResumeCapture";
 import { tailorResumeForJob, type ResumeOverrides } from "@/app/actions/resume";
 import { saveResume } from "@/app/actions/saved-resumes";
@@ -126,11 +127,32 @@ export default function TailorPanel({
 
   function regenerate() {
     // Regenerate is not a navigation, so beforeunload never fires for it.
+    // The non-dirty wording used to say only "the current version will be
+    // replaced" — true, but it badly understates things once a user has
+    // spent ten chat turns tuning bullet choices, text edits and design
+    // tokens: Regenerate re-derives themes from the posting from scratch and
+    // discards ALL of that, dirty or not.
     const warning = dirty
       ? "You have unsaved edits. Regenerate and discard them?"
-      : "Regenerate this tailored resume? The current version will be replaced.";
+      : "Regenerate this resume? It re-derives themes from the posting and discards every " +
+        "change made in the chat — bullet choices, text edits and design changes.";
     if (!window.confirm(warning)) return;
     tailor();
+  }
+
+  // The one place a chat turn reaches TailorPanel's own state. Only ChatPanel
+  // decides WHEN to call this (a turn whose `applied` is non-empty) — this
+  // just mirrors resume.ts's tailor() success path and marks the document
+  // dirty, since the change has not gone through Save yet.
+  function onChatApplied(next: {
+    selection: ResumeSelection;
+    overrides: ResumeOverrides;
+    coverage: CoverageReport;
+  }) {
+    setSelection(next.selection);
+    setOverrides(next.overrides);
+    setCoverage(next.coverage);
+    setDirty(true);
   }
 
   if (!selection) {
@@ -204,6 +226,7 @@ export default function TailorPanel({
         </span>
       </div>
       {coverage && <CoveragePanel coverage={coverage} warnings={warnings} />}
+      <ChatPanel jobId={jobId} dirty={dirty} onApplied={onChatApplied} />
       <ResumeDocument
         career={career}
         selection={selection}
