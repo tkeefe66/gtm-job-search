@@ -17,12 +17,11 @@
 // bullet always survives, and this file must never filter its output.
 import { complete as defaultComplete, parseJson } from "@/lib/model-call";
 import { buildJdThemePrompt } from "@/lib/jd-theme-prompt";
+import { coverageReport, type CoverageReport } from "@/lib/resume-coverage";
 import {
-  coverage as coverageOf,
   renderResume,
   selectBullets,
   type CareerRecord,
-  type CoverageReport,
   type RenderResumeOptions,
   type ResumeSelection,
   type ThemeVocabulary,
@@ -230,9 +229,22 @@ export function warningFor(
     );
   }
 
-  const thin = report.themes.filter((t) => t.support === "thin").map((t) => labelFor(t.theme, vocabulary));
+  // "on the page", not "in the record": `report` is scoped to the roles
+  // renderBody actually draws, so a theme can read thin here while the record
+  // holds plenty — that surplus is `poolBeyondRendered`, and naming it is the
+  // difference between a dead end and something the reader can act on by
+  // raising compressAfter.
+  const thin = report.themes.filter((t) => t.support === "thin");
   if (thin.length > 0) {
-    parts.push(`Thin evidence for ${thin.join(", ")} — fewer than three bullets anywhere in the record.`);
+    const named = thin.map((t) => {
+      const label = labelFor(t.theme, vocabulary);
+      if (t.poolBeyondRendered === 0) return label;
+      const n = t.poolBeyondRendered;
+      return `${label} (${n} more supporting bullet${n === 1 ? "" : "s"} sits in a compressed role)`;
+    });
+    parts.push(
+      `Thin evidence on the page for ${named.join(", ")} — fewer than three bullets among the roles this document renders.`
+    );
   }
 
   if (report.strength === null) {
@@ -302,7 +314,12 @@ export async function tailorForJob(
     ...(derived.positioning ? { positioning: derived.positioning } : {}),
     ...(opts.lead ? { lead: opts.lead } : {}),
   });
-  const report = coverageOf(career, derived.themes, selection, vocabulary);
+  // coverageReport, NOT render.js's own coverage(): the latter audits the whole
+  // pool, including the roles renderBody compresses to one-line rows. Judging a
+  // warning threshold on that number judges a document nobody is looking at —
+  // measured on the shipped record, the two disagree by up to 7.6 points, in
+  // both directions. See lib/resume-coverage.ts's header.
+  const report = coverageReport(career, derived.themes, selection, vocabulary);
   const warning = warningFor(report, derived.unsupported, vocabulary);
 
   return {

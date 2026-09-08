@@ -6,7 +6,8 @@ import {
   warningFor,
   TailorResponseError,
 } from "@/lib/tailor-for-job";
-import type { CareerRecord, CoverageReport, ThemeVocabulary } from "@/lib/resume-render/render";
+import type { CareerRecord, ThemeVocabulary } from "@/lib/resume-render/render";
+import type { CoverageReport } from "@/lib/resume-coverage";
 import careerJson from "@/lib/resume-render/content/resume.json";
 import vocabularyJson from "@/lib/resume-render/content/themes.json";
 
@@ -41,7 +42,15 @@ const JD =
   "Director of Revenue Operations. Own pipeline architecture, forecasting, and the RevOps team.";
 
 function coverageStub(over: Partial<CoverageReport> = {}): CoverageReport {
-  return { themes: [], gaps: [], unknown: [], strength: 1, ...over };
+  return {
+    themes: [],
+    gaps: [],
+    unknown: [],
+    strength: 1,
+    overlayBullets: 0,
+    editedBullets: 0,
+    ...over,
+  };
 }
 
 describe("parseThemeResponse", () => {
@@ -130,7 +139,9 @@ describe("warningFor", () => {
       coverageStub({
         strength: 1,
         gaps: ["migration"],
-        themes: [{ theme: "migration", pool: 0, selected: 0, roles: [], support: "absent" }],
+        themes: [
+          { theme: "migration", pool: 0, selected: 0, roles: [], support: "absent", poolBeyondRendered: 0 },
+        ],
       }),
       [],
       vocabulary
@@ -275,6 +286,31 @@ describe("tailorForJob", () => {
     const out = await tailorForJob(JD, { complete: fn, career, vocabulary });
     expect(out.coverage.strength!).toBeGreaterThanOrEqual(MIN_STRENGTH);
     expect(out.warning).toBeUndefined();
+  });
+
+  // Mutation this catches: reporting render.js's own coverage() instead of
+  // lib/resume-coverage's coverageReport. coverage() audits the whole POOL —
+  // selectBullets fills `bullets` for all 12 roles while renderBody draws only
+  // the first `compressAfter`. For these themes that is 0.8261 against 0.7500:
+  // a warning threshold read off the first number is judging a document with
+  // seven bullets on it that nobody can see.
+  it("measures strength against the roles the document actually renders", async () => {
+    const { fn } = scriptedComplete([
+      response({ themes: ["ops", "data", "leadership", "migration"], positioning: null }),
+    ]);
+    const out = await tailorForJob(JD, { complete: fn, career, vocabulary });
+    expect(out.coverage.strength!).toBeCloseTo(0.75, 4);
+    expect(out.coverage.strength!).not.toBeCloseTo(0.8261, 4);
+  });
+
+  // Mutation this catches: keeping render.js's CoverageReport, which has no
+  // such field. Support sitting in a compressed role is real evidence the page
+  // is not showing, and it is the one gap the reader can actually act on.
+  it("reports supporting bullets stranded in compressed roles", async () => {
+    const { fn } = scriptedComplete([response({ themes: ["migration"], positioning: null })]);
+    const out = await tailorForJob(JD, { complete: fn, career, vocabulary });
+    const migration = out.coverage.themes.find((t) => t.theme === "migration")!;
+    expect(migration.poolBeyondRendered).toBe(2);
   });
 
   it("passes the job description through to the prompt", async () => {
