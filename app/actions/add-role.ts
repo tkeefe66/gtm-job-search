@@ -3,8 +3,15 @@
 import { ingestRoles } from "@/lib/ingest-roles";
 import { intakeIdentity, needsPaste, normalizeIntakeUrl } from "@/lib/manual-intake";
 import { withBudget } from "@/lib/metered";
-import { readPosting, readPostingText, type PostingRead } from "@/lib/posting-read";
+import { readDetail, readPosting, readPostingText, type PostingRead } from "@/lib/posting-read";
+import { relinkPatch } from "@/lib/relink";
 import { requireActor } from "@/lib/require-actor";
+import { NORMALIZED_COMPANY_SQL, normalizeCompanyName } from "@/lib/role-key";
+import { rawQuery } from "@/lib/supabase";
+import { resolveTenantId } from "@/lib/tenant";
+import { updateJob } from "@/app/actions/jobs";
+import { describeWriteFailure } from "@/lib/write-failure";
+import type { Job } from "@/lib/types";
 import { loadCriteriaAndScoringInputs } from "@/lib/search-criteria";
 import { readOnboardedAtFor } from "@/lib/settings-store";
 import type { Role } from "@/lib/types";
@@ -137,9 +144,11 @@ async function addRoleInner(
   });
 
   if (result.added.length === 0) {
-    return result.skipped.length > 0
-      ? { error: "You already have that role." }
-      : { error: "That role could not be stored." };
+    if (result.skipped.length === 0) return { error: "That role could not be stored." };
+    // A duplicate is not a dead end when we are holding a job description the
+    // stored row does not have. The user pasted a live posting URL for a role
+    // already tracked — refusing threw away the one thing they came for.
+    return attachToExisting(identity, url, read);
   }
   return {
     added: { company: identity.company, roleTitle: identity.roleTitle, read: true },
@@ -157,4 +166,51 @@ function reasonFor(read: PostingRead, identityComplete: boolean): string {
     return "The posting did not say which role at which company this is. Fill those in and it will be stored.";
   }
   return "The page loaded but said nothing usable. Paste the job description to store it against this link.";
+}
+
+/**
+ * Attaches a freshly read posting to the row the user already had.
+ *
+ * The pasted URL replaces the stored link, because the user found this posting
+ * themselves and that is better evidence than whatever a search returned — and
+ * relinkPatch keeps the old link in `source_url`, so the repair is never lossy.
+ *
+ * Only ever FILLS the summary columns, matching ingest: a value a human typed,
+ * or an earlier read stored, is not overwritten by this.
+ */
+async function attachToExisting(
+  identity: { company: string; roleTitle: string },
+  url: string,
+  read: PostingRead
+): Promise<AddRoleResult> {
+  if (read.kind !== "read") {
+    return { error: "You already have that role, and this posting could not be read." };
+  }
+
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<{ id: string; source_url: string | null }>(
+    `select id, source_url from jobs
+      where tenant_id = $3 and ${NORMALIZED_COMPANY_SQL} = $1 and lower(role_title) = lower($2)
+      order by created_at desc limit 1`,
+    [normalizeCompanyName(identity.company), identity.roleTitle, tenantId],
+    tenantId
+  );
+  const row = (data ?? [])[0];
+  if (error !== null || !row) {
+    return { error: "You already have that role, but it could not be found to update." };
+  }
+
+  const patch: Partial<Job> = {
+    posting: readDetail(read),
+    ...relinkPatch(row, url, url),
+  };
+  if (read.department) patch.department = read.department;
+  if (read.summary) patch.key_skills = read.summary;
+
+  const failure = describeWriteFailure(
+    (await updateJob(row.id, patch)).error,
+    `attach that posting to ${identity.company} / ${identity.roleTitle}`
+  );
+  if (failure !== undefined) return { error: failure };
+  return { added: { company: identity.company, roleTitle: identity.roleTitle, read: true } };
 }

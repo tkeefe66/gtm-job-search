@@ -677,7 +677,10 @@ export default function RolesTable({
         setAddTitle(res.needsPaste.roleTitle);
         return;
       }
-      setAddNotice(`Added ${res.added?.company} — ${res.added?.roleTitle}.`);
+      // The banner outlives the form, which closes: the confirmation belongs
+      // above the table the row just joined, not inside a box the user has
+      // finished with.
+      setAddNotice(`Added ${res.added?.company} — ${res.added?.roleTitle}, with its description.`);
       setAddUrl("");
       setAddPaste("");
       setAddCompany("");
@@ -1054,6 +1057,20 @@ export default function RolesTable({
           )}
 
           {addNotice && <p className="mt-3 text-xs text-ink/70">{addNotice}</p>}
+        </div>
+      )}
+
+      {/* Survives the form closing. A confirmation inside a box that disappears
+          on success is a confirmation nobody reads. */}
+      {!addOpen && addNotice && (
+        <div className="mb-6 flex items-start justify-between gap-4 rounded-lg border border-slate bg-canvas p-3 text-sm text-ink/70">
+          <span>{addNotice}</span>
+          <button
+            onClick={() => setAddNotice(null)}
+            className="shrink-0 rounded px-2 py-0.5 text-xs text-ink/40 transition hover:bg-slate hover:text-ink"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
