@@ -50,6 +50,9 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         roleTitle: resume.roleTitle,
         company: resume.company,
         label: resume.label,
+        // Carries the margin forward: a new version of a document that had a
+        // non-default margin should not silently revert to 0.68in.
+        pageMargin: resume.pageMargin,
       });
       if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       else if (res.duplicateOf) {
@@ -152,7 +155,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
       `}</style>
       <doc-page
         ref={docPageRef as React.RefObject<HTMLElement>}
-        margin="0.68in"
+        margin={resume.pageMargin || "0.68in"}
         contentEditable
         suppressContentEditableWarning
         dangerouslySetInnerHTML={{ __html: resume.html }}

@@ -111,6 +111,10 @@ export default function TailorPanel({
         company: company as string,
         label: label.trim() ? label.trim() : null,
         allowDuplicate,
+        // captureResumeHtml only reads docPageEl.innerHTML; the margin is an
+        // attribute on docPageEl itself, so it must be sent separately or a
+        // chat-set margin silently reverts to 0.68in on the saved screen.
+        pageMargin: overrides.pageMargin,
       });
       if (res.error !== undefined) {
         setError(res.error || UNDESCRIBED_DB_ERROR);
