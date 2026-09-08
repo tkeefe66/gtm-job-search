@@ -22,6 +22,11 @@ const h = vi.hoisted(() => ({
   // this is a different lookup from the guessed-slug one above and needs its
   // own stub. Default is the inert outcome, so every pre-existing test in this
   // file keeps its meaning.
+  score: 4,
+  statuses: [
+    { key: "New", label: "New", bucket: "active", hidden: false },
+    { key: "Not Interested", label: "Not Interested", bucket: "terminal", hidden: false },
+  ] as { key: string; label: string; bucket: string; hidden: boolean }[],
   read: { kind: "unreadable" } as
     | { kind: "unreadable" }
     | { kind: "failed"; message: string }
@@ -45,12 +50,13 @@ vi.mock("@/lib/supabase", () => ({
   // No rows: every role under test is new.
   rawQuery: vi.fn(async () => ({ data: [], error: null })),
 }));
-vi.mock("@/app/actions/jobs", () => ({
+vi.mock("@/app/actions/parse-role", () => ({
+  scoreFit: vi.fn(async () => ({ score: h.score, rationale: "fits" })),
+}));
+vi.mock("@/app/actions/jobs", async () => ({
   addJob: vi.fn(async () => h.addJobResult),
   updateJob: vi.fn(async () => ({})),
-}));
-vi.mock("@/app/actions/parse-role", () => ({
-  scoreFit: vi.fn(async () => ({ score: 4, rationale: "fits" })),
+  getJobStatuses: vi.fn(async () => ({ statuses: h.statuses })),
 }));
 vi.mock("@/lib/tenant", () => ({
   resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
@@ -75,7 +81,7 @@ vi.mock("@/lib/resolve-job-link", () => ({
 import { MAX_INGEST_READS, ingestRoles } from "./ingest-roles";
 import { readPosting } from "@/lib/posting-read";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
-import { addJob } from "@/app/actions/jobs";
+import { addJob, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import { INGEST_EXEMPT_COLUMNS, SCORING_INPUT_COLUMNS } from "@/lib/rescore-scope";
@@ -105,6 +111,7 @@ beforeEach(() => {
   h.resolved = null;
   h.verified = { kind: "notApplicable" };
   h.read = { kind: "unreadable" };
+  h.score = 4;
   vi.clearAllMocks();
 });
 
@@ -589,5 +596,54 @@ describe("a role's posting is read before it is scored", () => {
 
     expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(MAX_INGEST_READS);
     expect(vi.mocked(scoreFit)).toHaveBeenCalledTimes(many.length);
+  });
+});
+
+// The cutoff, applied where the score is first computed. Ten for ten, every 1
+// and 2 the user ever touched was dismissed, so keeping them New costs a
+// rescore and a posting read and earns nothing.
+describe("a role that reads weak is filed away, not left New", () => {
+  const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
+
+  beforeEach(() => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: ["5 years of SQL"], niceToHaves: [] },
+      department: "RevOps",
+      summary: "Runs the stack.",
+      empty: false,
+    };
+  });
+
+  test("a 2 that was actually read is moved to the user's first terminal status", async () => {
+    h.score = 2;
+
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({
+      fit_score: 2,
+      status: "Not Interested",
+    });
+  });
+
+  test("a 3 is left alone", async () => {
+    h.score = 3;
+
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1].status).toBeUndefined();
+  });
+
+  // The guard that keeps this fair: a role past ingest's per-run read budget is
+  // scored on the extraction's summary, and a blind 2 is not evidence of a weak
+  // role. It stays New and stays in the enrich queue.
+  test("a 2 scored WITHOUT its posting is left New for the backfill to read", async () => {
+    h.score = 2;
+    h.read = { kind: "unreadable" };
+
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1].status).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { addJob, updateJob } from "@/app/actions/jobs";
+import { addJob, getJobStatuses, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
@@ -8,6 +8,7 @@ import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { BoardCache } from "@/lib/resolve-job-link";
 import { postingDetailFrom } from "@/lib/posting-detail";
+import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
 import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
@@ -154,6 +155,14 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   // Crawl, whose context fields are frequently null — and buildFitPrompt
   // renders company_description raw, with no "unknown" fallback, so "." went
   // to the model as the company's description.
+  // The tenant's OWN statuses, read once per ingest rather than per role: the
+  // cutoff below files a weak role into whatever terminal status they actually
+  // have, and a hardcoded key would not survive an edit on /settings. A failed
+  // read leaves `fileInto` null, which files nothing — the roles stay New and
+  // cost one rescore each, which is the harmless direction.
+  const { statuses, error: statusesError } = await getJobStatuses();
+  const fileInto = statusesError === undefined ? autoFileStatus(statuses) : null;
+
   const companyDescription = [ctx.tagline, ctx.traction]
     .map((part) => (part ?? "").trim())
     .filter((part) => part !== "")
@@ -283,10 +292,23 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           fitInputs,
         });
         if (scored.score > 0) {
+          // Filed away rather than left New when the posting was READ and still
+          // scored below the bar — see lib/fit-cutoff.ts for why the read is a
+          // precondition. Written in the SAME update as the score, so a row can
+          // never exist scored-but-unfiled.
+          const file =
+            fileInto !== null &&
+            shouldAutoFile({ score: scored.score, wasRead: wasRead !== null, status: "New" });
           await updateJob(jobRes.job.id, {
             fit_score: scored.score,
             fit_summary: scored.rationale || role.fit_signal || null,
+            ...(file ? { status: fileInto } : {}),
           });
+          if (file) {
+            console.log(
+              `ingestRoles(${company}): ${role.role_title} scored ${scored.score}, filed as ${fileInto}`
+            );
+          }
         }
       }
     })

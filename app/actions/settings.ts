@@ -5,9 +5,10 @@ import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { revalidatePath } from "next/cache";
-import { updateJob } from "@/app/actions/jobs";
+import { getJobStatuses, updateJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { validateList } from "@/lib/criteria-validation";
+import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
 import { passDrained } from "@/lib/rescore-progress";
 import { resolveStatuses, type JobStatusDef } from "@/lib/job-statuses";
 import { CRAWL_TITLE_MATCH_SQL, titleMatchPatterns } from "@/lib/removed-titles";
@@ -98,12 +99,28 @@ async function latestEnrichWrite(): Promise<string | null> {
   return data?.[0]?.at ?? null;
 }
 
+/**
+ * The tenant's own terminal status KEYS, for the rescore queries' `$…` list.
+ *
+ * A failed read returns the empty list, which excludes NOTHING — a rescore over
+ * a few extra rows costs money but is correct, where guessing the defaults
+ * could exclude rows whose status the user renamed into a different bucket.
+ */
+async function terminalStatusKeys(): Promise<string[]> {
+  const { statuses, error } = await getJobStatuses();
+  if (error !== undefined) {
+    console.error(`settings: could not read statuses to scope the rescore — ${error || UNDESCRIBED_DB_ERROR}`);
+    return [];
+  }
+  return statuses.filter((s) => s.bucket === "terminal").map((s) => s.key);
+}
+
 async function countScoredJobs(): Promise<{ count: number; error?: string }> {
   // Shares its `fit_score is not null` predicate with the rescore queries, so
   // the number shown to the user and the set rescoreAll walks cannot drift.
   const { data, error } = await rawQuery<{ n: string }>(
     SCORED_JOBS_COUNT_SQL,
-    [await resolveTenantId()],
+    [await resolveTenantId(), await terminalStatusKeys()],
     await resolveTenantId()
   );
   if (error) {
@@ -755,12 +772,14 @@ async function rescoreAllInner(opts?: {
   const passStartedAt = passStartFrom(opts?.passStartedAt);
   const limit = clampRescoreLimit(opts?.limit);
   const fitInputs = await loadScoringInputs();
+  // Read once for the whole batch, not per row.
+  const fileInto = autoFileStatus((await getJobStatuses()).statuses);
 
   // rawQuery, NOT the builder — see SCORED_JOBS_SQL. `.neq("fit_score", null)`
   // matches zero rows and reports success.
   const { data, error } = await rawQuery<ScoredJobRow>(
     SCORED_JOBS_SQL,
-    [limit, await resolveTenantId()],
+    [limit, await resolveTenantId(), await terminalStatusKeys()],
     await resolveTenantId()
   );
   if (error) {
@@ -805,7 +824,22 @@ async function rescoreAllInner(opts?: {
         // (`Summary: ${opts.fit_summary}`) and was the field the original plan
         // overwrote with scored.rationale — rescore twice and the model is
         // summarizing its own previous rationale instead of the posting.
-        const { error: updErr } = await updateJob(row.id, { fit_score: scored.score });
+        // The fit cutoff's other call site. A row that has been READ and still
+        // scores below the bar is filed here rather than left New — this is
+        // where a blind 2 that a backfill has since given a posting to gets its
+        // fair hearing, and where one that stays a 2 is settled. Both guards
+        // live in shouldAutoFile, not in this expression.
+        const file =
+          fileInto !== null &&
+          shouldAutoFile({
+            score: scored.score,
+            wasRead: typeof (row.posting ?? null)?.enrichedAt === "string",
+            status: row.status,
+          });
+        const { error: updErr } = await updateJob(row.id, {
+          fit_score: scored.score,
+          ...(file ? { status: fileInto } : {}),
+        });
         // describeWriteFailure, not `if (updErr)`. Presence, not truthiness, and
         // the stakes here are higher than anywhere else this doctrine applies:
         // updateJob returns `error.message` verbatim, pg with an unset or
@@ -851,7 +885,7 @@ async function rescoreAllInner(opts?: {
 async function countRemaining(passStartedAt: string): Promise<number | null> {
   const { data, error } = await rawQuery<{ n: string }>(
     SCORED_JOBS_REMAINING_SQL,
-    [passStartedAt, await resolveTenantId()],
+    [passStartedAt, await resolveTenantId(), await terminalStatusKeys()],
     await resolveTenantId()
   );
   if (error) {

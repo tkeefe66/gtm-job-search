@@ -31,7 +31,17 @@ vi.mock("@/lib/require-actor", () => ({
 // needs no database, no Anthropic key, and about two milliseconds.
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn(), supabase: {} }));
-vi.mock("@/app/actions/jobs", () => ({ updateJob: vi.fn() }));
+vi.mock("@/app/actions/jobs", () => ({
+  updateJob: vi.fn(),
+  // The rescore queries now scope OUT terminal rows, and the terminal set is
+  // the tenant's own config, so the pass reads it.
+  getJobStatuses: vi.fn(async () => ({
+    statuses: [
+      { key: "New", label: "New", bucket: "active", hidden: false },
+      { key: "Rejected", label: "Rejected", bucket: "terminal", hidden: false },
+    ],
+  })),
+}));
 vi.mock("@/app/actions/parse-role", () => ({ scoreFit: vi.fn() }));
 vi.mock("@/lib/settings-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings-store")>()),
@@ -439,5 +449,61 @@ describe("the save and reset paths report a write that failed", () => {
     query.mockClear();
     expect(await resetSetting(SETTING_KEYS.titles)).toEqual({});
     expect(query.mock.calls.length).toBeGreaterThan(0);
+  });
+});
+
+// The other half of the fit cutoff. The backfill's whole point is that a row
+// scored before its posting was read carries a number computed from less — so
+// the rescore is where a blind 2 gets its fair hearing, and where one that
+// stays a 2 with the posting in hand is finally settled.
+describe("a rescore files a role that stays below the bar", () => {
+  const READ = { requirements: ["SQL"], niceToHaves: [], enrichedAt: "2026-09-08T00:00:00.000Z" };
+
+  function batchOf(row: ScoredJobRow) {
+    query.mockImplementation((sql: string) => {
+      if (sql === SCORED_JOBS_SQL) return { data: [row], error: null } as never;
+      if (sql === SCORED_JOBS_REMAINING_SQL) return { data: [{ n: "0" }], error: null } as never;
+      return { data: [], error: null } as never;
+    });
+  }
+
+  test("a row that reads weak and is still New is filed with its new score", async () => {
+    batchOf({ ...ROW, status: "New", posting: READ });
+    score.mockResolvedValue({ score: 2, rationale: "thin" });
+
+    await rescoreAll();
+
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 2, status: "Rejected" });
+  });
+
+  test("a row that clears the bar is only re-scored", async () => {
+    batchOf({ ...ROW, status: "New", posting: READ });
+
+    await rescoreAll();
+
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 4 });
+  });
+
+  // The guard that makes the whole cutoff fair, at this call site too: a row
+  // nobody has read is a row whose score is not evidence. It keeps its number
+  // and stays in the enrich queue.
+  test("a weak row whose posting was never read is not filed", async () => {
+    batchOf({ ...ROW, status: "New", posting: null });
+    score.mockResolvedValue({ score: 2, rationale: "thin" });
+
+    await rescoreAll();
+
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 2 });
+  });
+
+  // A row the user has moved is a row they have an opinion about, and a pass
+  // firing mid-conversation must not sweep it away.
+  test("a row the user has already moved keeps its status", async () => {
+    batchOf({ ...ROW, status: "Applied", posting: READ });
+    score.mockResolvedValue({ score: 2, rationale: "thin" });
+
+    await rescoreAll();
+
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 2 });
   });
 });

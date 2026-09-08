@@ -9,6 +9,7 @@
 // `import type` of a value, used only through `typeof` below. Fully erased at
 // compile time, so this does NOT pull the Anthropic SDK into the test process.
 import type { scoreFit } from "@/app/actions/parse-role";
+import type { PostingDetail } from "@/lib/posting-detail";
 
 /** One row of SCORED_JOBS_SQL. Field names are the column names. */
 export interface ScoredJobRow {
@@ -24,6 +25,14 @@ export interface ScoredJobRow {
   arr: string | null;
   exit_signal: string | null;
   backer: string | null;
+  /**
+   * Not scoring inputs — the fit cutoff's inputs. A pass files a row that reads
+   * weak, and both guards need the row: `status` so a role the user has already
+   * moved is never swept away, `posting` so a row nobody has READ is never
+   * filed on a number computed without it. See lib/fit-cutoff.ts.
+   */
+  status: string;
+  posting: PostingDetail | null;
 }
 
 /**
@@ -71,6 +80,24 @@ export const INGEST_EXEMPT_COLUMNS = [
 const SCORED = `fit_score is not null`;
 
 /**
+ * The one definition of "still worth paying to re-score".
+ *
+ * A terminal row — closed, rejected, or filed below the fit bar — earns nothing
+ * from a new number, and a rescore pays per row: 57 of 161 scored roles were
+ * terminal when this was written, a third of every pass bought for nothing.
+ *
+ * The terminal SET is user-editable (lib/job-statuses.ts), so it cannot be
+ * written here as literals; it arrives as a bound parameter, and the
+ * placeholder is an ARGUMENT because the three queries number their parameters
+ * differently — a fixed `$3` would have mis-bound the count query, which takes
+ * the tenant as `$1`. `<> all(...)` also gives the right behaviour for the
+ * empty list: a config with no terminal statuses excludes nothing.
+ */
+export function notTerminalSql(placeholder: string): string {
+  return `status <> all(${placeholder})`;
+}
+
+/**
  * A bounded batch of already-scored jobs, oldest-touched first.
  *
  * Three load-bearing properties, all pinned by lib/rescore-scope.test.ts:
@@ -93,14 +120,16 @@ const SCORED = `fit_score is not null`;
  *    the queue.
  */
 export const SCORED_JOBS_SQL = `select id, company, role_title, company_description, department, location,
-            key_skills, fit_summary, salary_range, arr, exit_signal, backer
+            key_skills, fit_summary, salary_range, arr, exit_signal, backer,
+            status, posting
        from jobs
-      where tenant_id = $2 and ${SCORED}
+      where tenant_id = $2 and ${SCORED} and ${notTerminalSql("$3")}
       order by updated_at asc nulls first
       limit $1`;
 
 /** Every scored job, for the "this is what a rescore will cost" figure. */
-export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where tenant_id = $1 and ${SCORED}`;
+export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs
+      where tenant_id = $1 and ${SCORED} and ${notTerminalSql("$2")}`;
 
 /**
  * Scored jobs this pass has not finished yet: everything still carrying an
@@ -116,7 +145,7 @@ export const SCORED_JOBS_COUNT_SQL = `select count(*) n from jobs where tenant_i
  * permanently failing row. Stop when a batch reports `rescored === 0`.
  */
 export const SCORED_JOBS_REMAINING_SQL = `select count(*) n from jobs
-      where tenant_id = $2 and ${SCORED}
+      where tenant_id = $2 and ${SCORED} and ${notTerminalSql("$3")}
         and (updated_at is null or updated_at < $1)`;
 
 /**

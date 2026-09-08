@@ -4,6 +4,7 @@ import {
   type RescoreOutcome,
   DEFAULT_RESCORE_LIMIT,
   MAX_RESCORE_LIMIT,
+  notTerminalSql,
   SCORED_JOBS_COUNT_SQL,
   SCORED_JOBS_REMAINING_SQL,
   SCORED_JOBS_SQL,
@@ -52,9 +53,12 @@ describe("SCORED_JOBS_SQL", () => {
     // `.neq("fit_score", null)` renders `"fit_score" <> $1` with $1 = null,
     // which is never true in Postgres: zero rows, no error, "rescored 0 of 0"
     // reported as success. This is why rescoreAll uses rawQuery at all.
+    // Targeted at fit_score specifically. A bare "no <> anywhere" assertion
+    // used to stand in for this, and it stopped meaning anything the moment a
+    // legitimate `status <> all(...)` joined the query.
     expect(SCORED_JOBS_SQL).toContain("fit_score is not null");
-    expect(SCORED_JOBS_SQL).not.toContain("<>");
-    expect(SCORED_JOBS_SQL).not.toContain("!=");
+    expect(SCORED_JOBS_SQL).not.toContain("fit_score <>");
+    expect(SCORED_JOBS_SQL).not.toContain("fit_score !=");
   });
 
   test("all three queries share one definition of 'already scored'", () => {
@@ -67,7 +71,7 @@ describe("SCORED_JOBS_SQL", () => {
       SCORED_JOBS_REMAINING_SQL,
     ]) {
       expect(sql).toContain("fit_score is not null");
-      expect(sql).not.toContain("<>");
+      expect(sql).not.toContain("fit_score <>");
     }
   });
 
@@ -331,5 +335,43 @@ describe("remainingCountFrom", () => {
     // rawQuery yields `error: null`; a hand-built result may omit it.
     expect(remainingCountFrom([{ n: "3" }], null)).toBe(3);
     expect(remainingCountFrom([{ n: "3" }], undefined)).toBe(3);
+  });
+});
+
+// A rescore pays per row, and a terminal row earns nothing from a new number:
+// it is closed, rejected, or filed below the bar. Of 161 scored roles, 57 were
+// terminal — a third of every pass, bought for nothing.
+describe("terminal rows are not rescored", () => {
+  test("all three queries exclude them, from one definition", () => {
+    for (const sql of [SCORED_JOBS_SQL, SCORED_JOBS_COUNT_SQL, SCORED_JOBS_REMAINING_SQL]) {
+      expect(sql).toContain("status <> all($");
+    }
+  });
+
+  // The placeholder is an argument because the three queries number their
+  // parameters differently: the count query takes the tenant as $1, the other
+  // two as $2. A fixed number would have bound the count query's list to
+  // nothing, and `<> all(null)` matches no rows — a pass that silently
+  // reported zero rows to rescore.
+  test("each query binds the list at its own position", () => {
+    expect(SCORED_JOBS_COUNT_SQL).toContain(notTerminalSql("$2"));
+    expect(SCORED_JOBS_SQL).toContain(notTerminalSql("$3"));
+    expect(SCORED_JOBS_REMAINING_SQL).toContain(notTerminalSql("$3"));
+  });
+
+  // The terminal SET is user-editable (lib/job-statuses.ts), so it cannot be
+  // written into the SQL as literals — it arrives as a parameter, and the
+  // queries must agree on WHICH parameter or one of them filters on the limit.
+  test("the terminal keys arrive as a bound parameter, never inlined", () => {
+    const sql = notTerminalSql("$3");
+    expect(sql).toContain("$3");
+    expect(sql).not.toContain("Rejected");
+    expect(sql).not.toContain("Not Interested");
+  });
+
+  // `<> all(...)` is null-safe here only because status is NOT NULL in the
+  // schema; a null status would match nothing and vanish from the pass.
+  test("the exclusion is an ALL comparison, so an empty list excludes nothing", () => {
+    expect(notTerminalSql("$3")).toContain("<> all");
   });
 });
