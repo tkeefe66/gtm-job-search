@@ -1,22 +1,73 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   checkCompanyNow,
   getTrackedCompanies,
+  renameTrackedCompany,
   setCareersUrl,
   setCrawlInterval,
   setIgnoreLocationRule,
   setTracking,
   trackCompanyByName,
 } from "@/app/actions/watchlist";
+import { readCompanyInput } from "@/lib/company-input";
 import { isDue, nextCheckDue } from "@/lib/crawl-schedule";
 import { summarizeCrawlHealth } from "@/lib/crawl-health";
 import { stoppedTrackingReason } from "@/lib/dead-tracking";
+import { needsYou, rowStateFor, type RowState } from "@/lib/watchlist-row";
 import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
 import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
+
+// The dot colour and its sentence in one place, so the legend can never
+// describe a colour the rows do not use. Kept in components/ deliberately:
+// tailwind.config.ts scans ./app/** and ./components/** only, so an
+// arbitrary-value class defined in lib/ is never generated — the same trap
+// STATUS_STYLES in RolesTable.tsx records.
+const STATE_STYLE: Record<
+  RowState,
+  { dot: string; label: string; legend: string }
+> = {
+  ok: {
+    dot: "bg-[#22C55E]",
+    label: "Checking",
+    legend: "Checking on schedule",
+  },
+  due: {
+    dot: "bg-ink",
+    label: "Due now",
+    legend: "Due now — the crawler will get to it",
+  },
+  empty: {
+    dot: "bg-[#A8A29E]",
+    label: "No matches",
+    legend: "Read fine, no matching roles",
+  },
+  failing: {
+    dot: "bg-[#92400E]",
+    label: "Failing",
+    legend: "Failing its checks — needs you",
+  },
+  needs_url: {
+    dot: "bg-[#92400E]",
+    label: "Needs a URL",
+    legend: "No careers page found — needs you",
+  },
+};
+
+// Legend order is reading order, not the enum's: healthy first, the ones that
+// want you last. `failing` and `needs_url` share a colour, so they share one
+// entry rather than printing the same swatch twice.
+const LEGEND: { dot: string; text: string }[] = [
+  { dot: STATE_STYLE.ok.dot, text: STATE_STYLE.ok.legend },
+  { dot: STATE_STYLE.due.dot, text: STATE_STYLE.due.legend },
+  { dot: STATE_STYLE.empty.dot, text: STATE_STYLE.empty.legend },
+  { dot: STATE_STYLE.failing.dot, text: "Needs you — failing, or no careers page" },
+];
+
+type Filter = "all" | "attention" | "due";
 
 export default function Watchlist() {
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
@@ -33,12 +84,38 @@ export default function Watchlist() {
   const [notice, setNotice] = useState<string | null>(null);
   const [urlDrafts, setUrlDrafts] = useState<Record<string, string>>({});
   const [showUntracked, setShowUntracked] = useState(false);
+  // Which rows are open. Keyed by company for the same reason busyRows is: the
+  // list reloads after every mutation, so an index would reopen the wrong row.
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+  // Set when a URL was pasted into the name box. Holds the URL and the name
+  // derived from it, which the user confirms or corrects before anything is
+  // written — the name is a join key, so a derived one is offered, never
+  // committed. See lib/company-input.ts.
+  const [pendingUrl, setPendingUrl] = useState<{ url: string; name: string } | null>(
+    null
+  );
+  // The company whose name is being edited, and the draft. Keyed by company for
+  // the same reason busyRows is: the list reloads after every mutation.
+  const [renaming, setRenaming] = useState<{ company: string; draft: string } | null>(
+    null
+  );
 
   function setRowBusy(company: string, busy: boolean) {
     setBusyRows((prev) => {
       const next = new Set(prev);
       if (busy) next.add(company);
       else next.delete(company);
+      return next;
+    });
+  }
+
+  function toggleRow(company: string) {
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(company)) next.delete(company);
+      else next.add(company);
       return next;
     });
   }
@@ -66,18 +143,63 @@ export default function Watchlist() {
 
   async function handleTrack(e: React.FormEvent) {
     e.preventDefault();
-    const name = newCompany.trim();
-    if (!name) return;
+    const parsed = readCompanyInput(newCompany);
+    if (parsed.kind === "empty") return;
+
+    // A pasted careers page opens the confirm step instead of tracking. The
+    // server refuses this input too — this is the friendly half, not the guard.
+    if (parsed.kind === "url") {
+      setNotice(null);
+      setPendingUrl({ url: parsed.url, name: parsed.suggestion });
+      return;
+    }
+    await track(parsed.name);
+  }
+
+  /** The one path that actually tracks, shared by the box and the confirm step. */
+  async function track(name: string, careersUrl?: string) {
     setTrackingBusy(true);
     setNotice(null);
     try {
-      const res = await trackCompanyByName(name);
+      const res = await trackCompanyByName(name, careersUrl);
       if (res.error) setNotice(res.error);
       else if (res.outcome) setNotice(`${name}: ${describe(res.outcome)}`);
-      setNewCompany("");
+      if (!res.error) {
+        setNewCompany("");
+        setPendingUrl(null);
+      }
       await load();
     } finally {
       setTrackingBusy(false);
+    }
+  }
+
+  async function handleRename(from: string, to: string) {
+    setRowBusy(from, true);
+    setNotice(null);
+    try {
+      const res = await renameTrackedCompany(from, to);
+      if (res.error) {
+        setNotice(res.error);
+        return;
+      }
+      // Both keyed by company name, so both would point at a row that no longer
+      // exists under that key.
+      setOpenRows((prev) => {
+        const next = new Set(prev);
+        if (next.delete(from) && res.company) next.add(res.company);
+        return next;
+      });
+      setUrlDrafts((prev) => {
+        const next = { ...prev };
+        delete next[from];
+        return next;
+      });
+      setRenaming(null);
+      setNotice(`Renamed to "${res.company}".`);
+      await load();
+    } finally {
+      setRowBusy(from, false);
     }
   }
 
@@ -116,7 +238,7 @@ export default function Watchlist() {
   }
 
   async function handleSaveUrl(company: string) {
-    // Fall back to the row's current careers_url, not "": the field is now
+    // Fall back to the row's current careers_url, not "": the field is
     // pre-filled from it for every tracked row, so clicking Save without
     // editing must resubmit what's displayed, not an empty string that would
     // fail setCareersUrl's http(s):// check.
@@ -142,17 +264,6 @@ export default function Watchlist() {
     }
   }
 
-  function formatDate(iso: string) {
-    return new Date(iso).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-
-  const tracked = companies.filter((c) => c.tracking_enabled);
-  const untracked = companies.filter((c) => !c.tracking_enabled);
-
   async function changeInterval(company: string, days: number) {
     // The per-row lock, not a shared one — see busyRows' comment above: a single
     // shared value lets one row's action re-enable another row mid-flight.
@@ -168,146 +279,252 @@ export default function Watchlist() {
     await load();
   }
 
+  function formatDate(iso: string) {
+    return new Date(iso).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
+  const tracked = companies.filter((c) => c.tracking_enabled);
+  const untracked = companies.filter((c) => !c.tracking_enabled);
+
+  function stateOf(c: TrackedCompany): RowState {
+    return rowStateFor({
+      trackingEnabled: c.tracking_enabled,
+      lastCrawlStatus: c.last_crawl_status,
+      consecutiveFailures: c.consecutive_failures,
+      isDue: isDue(c.last_checked_at, c.crawl_interval_days),
+    });
+  }
+
+  const attentionCount = tracked.filter((c) => needsYou(stateOf(c))).length;
+  const dueCount = tracked.filter((c) => stateOf(c) === "due").length;
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return tracked.filter((c) => {
+      const state = stateOf(c);
+      if (filter === "attention" && !needsYou(state)) return false;
+      if (filter === "due" && state !== "due") return false;
+      if (!q) return true;
+      // Match the signal too, not just the name: the signal is why the company
+      // is on the list, and it is the half you remember.
+      return (
+        c.company.toLowerCase().includes(q) ||
+        (c.signal ?? "").toLowerCase().includes(q) ||
+        (c.tagline ?? "").toLowerCase().includes(q)
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracked, filter, query]);
+
+  function chipClass(active: boolean) {
+    return `rounded-full border px-2.5 py-1 text-xs transition ${
+      active
+        ? "border-ink bg-ink font-medium text-white"
+        : "border-slate bg-white text-ink/60 hover:border-ink/40 hover:text-ink"
+    }`;
+  }
+
+  /** The one line every tracked company gets. */
   function renderRow(c: TrackedCompany, i: number) {
+    const state = stateOf(c);
+    const style = STATE_STYLE[state];
     const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
-    const failing = c.consecutive_failures >= 3;
-    // Only the crawler leaves failing_since set on a switched-off row — a manual
-    // toggle clears it — so this distinguishes "we gave up" from "you turned it
-    // off", which need different sentences and different remedies.
-    const droppedAsDead = !c.tracking_enabled && c.failing_since !== null;
+    const open = openRows.has(c.company);
+    const busy = busyRows.has(c.company);
     // Whatever the tenant's own hiringSignal.extraFields named — contract_value
     // and awarding_agency for a defence contractor, bed_count for a hospital.
     const extras = displayableExtras(c.extras);
     // The venture-shaped columns are the FALLBACK now, not the default: they
     // are populated only for rows added before db/migrations/012 (and for the
     // funding profile, whose extras happen to carry the same three names).
-    // Showing both would render a funding row's stage twice.
     // `!c.signal`, not `=== null`: a row read back before db/migrations/012
     // is applied has no such KEY at all, so a strict null check reads
-    // undefined as "has a signal" and hides the legacy tags too — a blank row
-    // instead of a degraded one.
+    // undefined as "has a signal" and hides the legacy tags too.
     const showLegacyTags = !c.signal && extras.length === 0;
 
     return (
-      <div
-        key={c.company}
-        className={`flex flex-col gap-2 p-4 sm:flex-row sm:items-start ${
-          i > 0 ? "border-t border-slate" : ""
-        }`}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-heading font-semibold">{c.company}</span>
-            {showLegacyTags && c.stage && <Tag>{c.stage}</Tag>}
-            {showLegacyTags && c.raised && <Tag>{c.raised}</Tag>}
-            {showLegacyTags && c.category && <Tag>{c.category}</Tag>}
-            {extras.map(([k, v]) => (
-              <Tag key={k}>{v}</Tag>
-            ))}
-            {c.source && <Tag>via {c.source}</Tag>}
+      <div key={c.company} className={i > 0 ? "border-t border-slate" : ""}>
+        <div
+          onClick={() => toggleRow(c.company)}
+          className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-x-4 px-4 py-2.5 transition hover:bg-canvas sm:grid-cols-[1fr_auto_7rem_4rem]"
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span
+              className={`h-[7px] w-[7px] flex-none rounded-full ${style.dot}`}
+              title={style.legend}
+            />
+            <span className="font-heading text-sm font-semibold">{c.company}</span>
+            <span className="hidden truncate text-xs text-ink/45 sm:block">
+              {c.signal ?? c.tagline ?? ""}
+            </span>
+            {needsYou(state) && (
+              <span className="flex-none rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-medium text-[#92400E]">
+                {style.label}
+              </span>
+            )}
           </div>
 
-          {c.tagline && (
-            <p className="mt-0.5 text-sm text-ink/60 line-clamp-1">{c.tagline}</p>
-          )}
-
-          {/* WHY this company is worth watching, in the tenant's own terms.
-              Before db/migrations/012 this page could only show the venture
-              trio, so a non-funding tenant's actual signal reached it in no
-              form at all. */}
-          {c.signal && <p className="mt-0.5 text-xs text-ink/70">{c.signal}</p>}
-
-          {c.tracking_enabled && (
-            <label className="mt-1 flex items-center gap-1 text-xs text-ink/50">
-              Check every
-              <select
-                value={c.crawl_interval_days}
-                disabled={busyRows.has(c.company)}
-                onChange={(e) => void changeInterval(c.company, Number(e.target.value))}
-                className="rounded border border-slate bg-white px-1 py-0.5 text-xs disabled:opacity-40"
-              >
-                {[1, 3, 7, 14, 30, 90].map((d) => (
-                  <option key={d} value={d}>
-                    {d === 1 ? "day" : `${d} days`}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
-          {c.tracking_enabled && (
-            <label
-              className="mt-1 flex items-center gap-1 text-xs text-ink/50"
-              title="Search for roles at this company regardless of the location rule on Settings — for a company you're pursuing even if the role isn't remote or local yet."
+          {/* Stays on the row rather than inside the detail: the interval is
+              the one setting worth changing while scanning the schedule. */}
+          <label className="text-xs text-ink/55" onClick={(e) => e.stopPropagation()}>
+            <span className="sr-only">Check {c.company} every</span>
+            <select
+              value={c.crawl_interval_days}
+              disabled={busy}
+              onChange={(e) => void changeInterval(c.company, Number(e.target.value))}
+              className="rounded border border-slate bg-white px-1 py-0.5 text-xs disabled:opacity-40"
             >
-              <input
-                type="checkbox"
-                checked={c.ignore_location_rule}
-                disabled={busyRows.has(c.company)}
-                onChange={(e) =>
-                  void handleSetIgnoreLocationRule(c.company, e.target.checked)
-                }
-              />
-              Ignore location
-            </label>
-          )}
-
-          <p className="mt-1 text-xs text-ink/40">
-            Added {formatDate(c.added_at)}
-            {c.last_checked_at
-              ? ` · Last checked ${formatDate(c.last_checked_at)}`
-              : " · Never checked"}
-            {c.tracking_enabled &&
-              (isDue(c.last_checked_at, c.crawl_interval_days) ? (
-                <>
-                  {" · "}
-                  <strong className="font-semibold text-ink/70">Due now</strong>
-                </>
-              ) : due ? (
-                <>
-                  {" · Next check "}
-                  <strong className="font-semibold text-ink/70">
-                    {formatDate(due.toISOString())}
-                  </strong>
-                </>
-              ) : (
-                ""
+              {[1, 3, 7, 14, 30, 90].map((d) => (
+                <option key={d} value={d}>
+                  {d === 1 ? "every day" : `every ${d} days`}
+                </option>
               ))}
-          </p>
+            </select>
+          </label>
 
-          {c.last_crawl_status === "empty" && (
-            <p className="mt-1 text-xs text-ink/40">No matching roles on the last check.</p>
-          )}
+          <span
+            className={`hidden text-right text-xs sm:block ${
+              state === "due" ? "font-semibold text-ink" : "text-ink/45"
+            }`}
+          >
+            {state === "due" ? "Due now" : due ? formatDate(due.toISOString()) : "—"}
+          </span>
 
-          {droppedAsDead ? (
-            <p className="mt-1 text-xs text-[#92400E]">
-              {stoppedTrackingReason(c.consecutive_failures)}
-              {c.last_crawl_error ? ` Last error: ${c.last_crawl_error}` : ""}
-            </p>
-          ) : (
-            failing && (
-              <p className="mt-1 text-xs text-[#92400E]">
-                Failing — {c.consecutive_failures} checks in a row.
-                {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
-              </p>
-            )
-          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleRow(c.company);
+            }}
+            aria-expanded={open}
+            className="text-right text-xs text-ink/35 transition hover:text-ink"
+          >
+            {open ? "Close" : "Open"}
+          </button>
+        </div>
 
-          {c.tracking_enabled && (
+        {open && (
+          <div className="border-t border-slate bg-canvas px-4 py-3.5">
+            <div className="flex flex-wrap items-start justify-between gap-x-10 gap-y-3">
+              <div className="min-w-0">
+                {renaming?.company === c.company ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleRename(c.company, renaming.draft);
+                    }}
+                    className="mb-2 flex flex-wrap items-center gap-2"
+                  >
+                    <input
+                      autoFocus
+                      value={renaming.draft}
+                      onChange={(e) =>
+                        setRenaming({ company: c.company, draft: e.target.value })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                      className="w-56 rounded-md border border-slate bg-white px-2 py-1 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={busy || !renaming.draft.trim()}
+                      className="rounded-md border border-ink bg-ink px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+                    >
+                      Save name
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenaming(null)}
+                      className="text-xs text-ink/45 hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                    {/* Renaming rewrites the name on this company's saved roles
+                        too, because the name is what ties them together. Said
+                        here rather than in a confirm dialog: it is the
+                        behaviour people want, not a risk they must accept. */}
+                    <span className="basis-full text-xs text-ink/45">
+                      Its saved roles and crawl history move with it.
+                    </span>
+                  </form>
+                ) : (
+                  <button
+                    onClick={() => setRenaming({ company: c.company, draft: c.company })}
+                    className="mb-2 text-xs text-ink/45 underline-offset-2 hover:text-ink hover:underline"
+                  >
+                    Rename company
+                  </button>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {showLegacyTags && c.stage && <Tag>{c.stage}</Tag>}
+                  {showLegacyTags && c.raised && <Tag>{c.raised}</Tag>}
+                  {showLegacyTags && c.category && <Tag>{c.category}</Tag>}
+                  {extras.map(([k, v]) => (
+                    <Tag key={k}>{v}</Tag>
+                  ))}
+                  {c.source && <Tag>via {c.source}</Tag>}
+                </div>
+                {c.tagline && <p className="mt-1.5 text-sm text-ink/70">{c.tagline}</p>}
+                {/* WHY this company is worth watching, in the tenant's own
+                    terms. Truncated on the row above; in full here. */}
+                {c.signal && <p className="mt-1 text-sm text-ink/70">{c.signal}</p>}
+                <p className="mt-1.5 text-xs text-ink/40">
+                  Added {formatDate(c.added_at)}
+                  {c.last_checked_at
+                    ? ` · Last checked ${formatDate(c.last_checked_at)}`
+                    : " · Never checked"}
+                </p>
+                {state === "empty" && (
+                  <p className="mt-1 text-xs text-ink/40">
+                    No matching roles on the last check.
+                  </p>
+                )}
+                {state === "failing" && (
+                  <p className="mt-1 text-xs text-[#92400E]">
+                    Failing — {c.consecutive_failures} checks in a row.
+                    {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
+                  </p>
+                )}
+              </div>
+
+              <label
+                className="flex items-start gap-2 text-xs text-ink/60"
+                title="Search for roles at this company regardless of the location rule on Settings — for a company you're pursuing even if the role isn't remote or local yet."
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={c.ignore_location_rule}
+                  disabled={busy}
+                  onChange={(e) =>
+                    void handleSetIgnoreLocationRule(c.company, e.target.checked)
+                  }
+                />
+                Search here even outside my location rule
+              </label>
+            </div>
+
             <div
-              className={`mt-2 flex flex-wrap items-center gap-2 ${
-                c.last_crawl_status === "needs_url"
+              className={`mt-3 flex flex-wrap items-center gap-2 ${
+                state === "needs_url"
                   ? "rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-2"
                   : ""
               }`}
             >
-              {c.last_crawl_status === "needs_url" ? (
-                <span className="text-xs font-medium text-[#92400E]">
-                  No careers page found — add one:
-                </span>
-              ) : (
-                <span className="text-xs text-ink/40">Careers URL:</span>
-              )}
+              <span
+                className={`text-xs ${
+                  state === "needs_url" ? "font-medium text-[#92400E]" : "text-ink/40"
+                }`}
+              >
+                {state === "needs_url"
+                  ? "No careers page found — add one:"
+                  : "Careers page"}
+              </span>
               <input
                 type="text"
                 value={urlDrafts[c.company] ?? c.careers_url ?? ""}
@@ -315,22 +532,18 @@ export default function Watchlist() {
                   setUrlDrafts((prev) => ({ ...prev, [c.company]: e.target.value }))
                 }
                 placeholder="https://company.com/careers"
-                className="w-72 rounded-md border border-slate px-2 py-1 text-sm"
+                className="w-80 max-w-full rounded-md border border-slate bg-white px-2 py-1 text-sm"
               />
               <button
                 onClick={() => handleSaveUrl(c.company)}
-                disabled={busyRows.has(c.company)}
-                className="rounded-md border border-ink px-2 py-1 text-xs font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
+                disabled={busy}
+                className="rounded-md border border-slate bg-white px-2.5 py-1 text-xs font-medium text-ink/70 transition hover:border-ink hover:text-ink disabled:opacity-50"
               >
-                Save careers URL
+                Save and check
               </button>
             </div>
-          )}
-        </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {c.tracking_enabled ? (
-            <>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => handleCheckNow(c.company)}
                 disabled={!!checking}
@@ -348,24 +561,52 @@ export default function Watchlist() {
                   Careers ↗
                 </a>
               )}
+              <span className="flex-1" />
               <button
                 onClick={() => handleSetTracking(c.company, false)}
-                disabled={busyRows.has(c.company)}
+                disabled={busy}
                 className="text-sm text-ink/30 transition hover:text-[#92400E] disabled:opacity-50"
               >
                 Stop tracking
               </button>
-            </>
-          ) : (
-            <button
-              onClick={() => handleSetTracking(c.company, true)}
-              disabled={busyRows.has(c.company)}
-              className="rounded-md border border-slate px-3 py-1.5 text-sm font-medium text-ink/60 transition hover:border-ink hover:text-ink disabled:opacity-50"
-            >
-              Resume
-            </button>
-          )}
-        </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /** An untracked row states its reason and offers the one thing worth doing. */
+  function renderUntrackedRow(c: TrackedCompany, i: number) {
+    // Only the crawler leaves failing_since set on a switched-off row — a manual
+    // toggle clears it — so this distinguishes "we gave up" from "you turned it
+    // off", which need different sentences and different remedies.
+    const droppedAsDead = c.failing_since !== null;
+    return (
+      <div
+        key={c.company}
+        className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${
+          i > 0 ? "border-t border-slate" : ""
+        }`}
+      >
+        <span className="h-[7px] w-[7px] flex-none rounded-full bg-slate" />
+        <span className="font-heading text-sm font-semibold text-ink/70">
+          {c.company}
+        </span>
+        <span className="min-w-0 flex-1 text-xs text-ink/50">
+          {droppedAsDead
+            ? `${stoppedTrackingReason(c.consecutive_failures)}${
+                c.last_crawl_error ? ` Last error: ${c.last_crawl_error}` : ""
+              }`
+            : "You switched checking off."}
+        </span>
+        <button
+          onClick={() => handleSetTracking(c.company, true)}
+          disabled={busyRows.has(c.company)}
+          className="rounded-md border border-slate px-2.5 py-1 text-xs font-medium text-ink/60 transition hover:border-ink hover:text-ink disabled:opacity-50"
+        >
+          Resume
+        </button>
       </div>
     );
   }
@@ -385,12 +626,32 @@ export default function Watchlist() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="text-xl font-heading font-semibold">Tracked companies</h2>
-        <p className="text-sm text-ink/60">
-          Tracked companies have their careers page checked automatically. New roles
-          land in Roles, already scored.
-        </p>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-heading font-semibold">Tracked companies</h2>
+          <p className="max-w-prose text-sm text-ink/60">
+            Tracked companies have their careers page checked automatically. New roles
+            land in Roles, already scored.
+          </p>
+        </div>
+
+        <form onSubmit={handleTrack} className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={newCompany}
+            onChange={(e) => setNewCompany(e.target.value)}
+            disabled={tracking}
+            placeholder="Track a company by name…"
+            className="w-56 rounded-md border border-slate bg-white px-3 py-1.5 text-sm disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={tracking || !newCompany.trim()}
+            className="rounded-md border border-ink bg-ink px-4 py-1.5 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
+          >
+            Track
+          </button>
+        </form>
       </div>
 
       {health.dropped > 0 && (
@@ -409,7 +670,7 @@ export default function Watchlist() {
       )}
 
       {health.behind && (
-        <div className="mb-6 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4">
+        <div className="mb-4 rounded-md border border-[#FDE68A] bg-[#FFFBEB] p-4">
           <p className="text-sm font-medium text-[#92400E]">
             {health.slipping} of your {health.tracked} tracked{" "}
             {health.tracked === 1 ? "company is" : "companies are"} behind schedule
@@ -429,23 +690,45 @@ export default function Watchlist() {
         </div>
       )}
 
-      <form onSubmit={handleTrack} className="mb-6 flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={newCompany}
-          onChange={(e) => setNewCompany(e.target.value)}
-          disabled={tracking}
-          placeholder="Track a company by name…"
-          className="w-72 rounded-md border border-slate px-3 py-2 text-sm disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={tracking || !newCompany.trim()}
-          className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
-        >
-          Track
-        </button>
-      </form>
+      {pendingUrl && !tracking && (
+        <div className="mb-4 rounded-md border border-slate bg-white p-4">
+          <p className="text-sm font-medium">That looks like a careers page.</p>
+          <p className="mt-1 text-xs text-ink/60">
+            The box takes a company name — it is what this company&apos;s roles are
+            filed under. Name it and the URL below becomes its careers page.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void track(pendingUrl.name.trim(), pendingUrl.url);
+            }}
+            className="mt-3 flex flex-wrap items-center gap-2"
+          >
+            <input
+              autoFocus
+              value={pendingUrl.name}
+              onChange={(e) => setPendingUrl({ ...pendingUrl, name: e.target.value })}
+              placeholder="Company name"
+              className="w-56 rounded-md border border-slate px-3 py-1.5 text-sm"
+            />
+            <button
+              type="submit"
+              disabled={!pendingUrl.name.trim()}
+              className="rounded-md border border-ink bg-ink px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              Track
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingUrl(null)}
+              className="text-sm text-ink/45 hover:text-ink"
+            >
+              Cancel
+            </button>
+            <span className="basis-full text-xs text-ink/40">{pendingUrl.url}</span>
+          </form>
+        </div>
+      )}
 
       {tracking && (
         <div className="mb-4">
@@ -469,9 +752,66 @@ export default function Watchlist() {
       )}
 
       {!loading && tracked.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-slate bg-white">
-          {tracked.map(renderRow)}
-        </div>
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setFilter("all")}
+              className={chipClass(filter === "all")}
+            >
+              All {tracked.length}
+            </button>
+            {attentionCount > 0 && (
+              <button
+                onClick={() => setFilter("attention")}
+                className={chipClass(filter === "attention")}
+              >
+                Needs you {attentionCount}
+              </button>
+            )}
+            {dueCount > 0 && (
+              <button
+                onClick={() => setFilter("due")}
+                className={chipClass(filter === "due")}
+              >
+                Due now {dueCount}
+              </button>
+            )}
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter…"
+              className="ml-auto w-40 rounded-md border border-slate bg-white px-2 py-1 text-xs"
+            />
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-slate bg-white">
+            <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 border-b border-slate px-4 py-2 text-[11px] font-medium text-ink/40 sm:grid-cols-[1fr_auto_7rem_4rem]">
+              <span>Company</span>
+              <span>Checked</span>
+              <span className="hidden text-right sm:block">Next check</span>
+              <span className="hidden sm:block" />
+            </div>
+            {visible.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-ink/40">
+                No company matches that filter.
+              </p>
+            ) : (
+              visible.map(renderRow)
+            )}
+          </div>
+
+          {/* The legend is the price of a colour-only status. Rendered from the
+              same STATE_STYLE map the rows use, so it cannot drift from them. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 px-1 text-[11px] text-ink/45">
+            {LEGEND.map((l) => (
+              <span key={l.text} className="flex items-center gap-1.5">
+                <span className={`h-[7px] w-[7px] rounded-full ${l.dot}`} />
+                {l.text}
+              </span>
+            ))}
+          </div>
+        </>
       )}
 
       {!loading && untracked.length > 0 && (
@@ -483,8 +823,8 @@ export default function Watchlist() {
             {showUntracked ? "▾" : "▸"} Not tracked ({untracked.length})
           </button>
           {showUntracked && (
-            <div className="mt-2 overflow-hidden rounded-lg border border-slate bg-white opacity-70">
-              {untracked.map(renderRow)}
+            <div className="mt-2 overflow-hidden rounded-lg border border-slate bg-white">
+              {untracked.map(renderUntrackedRow)}
             </div>
           )}
         </div>
