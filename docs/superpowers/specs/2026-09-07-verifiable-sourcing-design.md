@@ -70,18 +70,44 @@ theme derivation on the stored summary fields and named re-fetching the posting 
 needs re-fetching; it is a column. The ruling's own escape hatch is the authority for
 this change.
 
-### Step 1 — Let the user paste a JD
+### Step 1 — Add a role by URL, with paste as the fallback
 
-A textarea on a role that feeds the existing extraction path (`readPosting`'s model
-call, minus the fetch). Coverage becomes 100% for any role the user can open in a
-browser, including the three populations no automation reaches: aggregator-only rows
-(~36), employer sites that 403 our fetch (openai.com, 17 of 120 sampled), and sites
-with no honest API and no readable HTML (Workday tenants, Corning, TE).
+Revision 2 proposed a paste box. A URL box is strictly better and the paste box
+becomes its fallback, for a reason that is about identity rather than convenience:
+**pasted text has no identity.** It carries no employer, no canonical link and no
+posting id, so the user must supply the company and title by hand, liveness can never
+be re-checked, and dedupe against existing rows has nothing to match on.
 
-This is deliberately placed above the sourcing rebuild. Review's strongest argument
-against this whole document was that the app's job is to get one person into five
-interviews, not to build a machine-verified market index — and for the five roles
-that matter, a paste box is complete coverage for an hour's work.
+A URL, by contrast, feeds the path that already exists — `readPosting`: robots gate,
+fetch, `readPostingPage`, and the board-API fallback for a client-rendered shell —
+plus `hiringOrganizationFrom` for the employer's own name. So one pasted URL yields
+the JD, the real employer, a canonical link and (on an ATS deep link) a posting id
+that `verifyPostingLink` can re-check forever.
+
+The flow:
+
+1. User pastes a URL. The app reads it exactly as ingest and the backfill do.
+2. **Read succeeded** — the role is created with its JD, employer name, department
+   and a checkable link, and is scored against the real posting from the first
+   moment.
+3. **Read failed** — the URL is stored anyway, and a textarea appears *with the
+   reason* ("this site blocks automated readers"). The pasted text goes through the
+   same extraction call; the row keeps the URL, so liveness checking still works even
+   though the JD came by hand.
+
+That fallback is not a nicety: aggregator-only rows (~36), employer sites that 403
+our fetch (openai.com, 17 of the 120 sampled) and sites with no honest API and no
+readable HTML (Workday tenants, Corning, TE) are unreachable in principle, not merely
+unimplemented. This is the only mechanism in the document that reaches them.
+
+Placed above the sourcing rebuild deliberately. Review's strongest argument against
+this whole document was that the app's job is to get one person into five interviews,
+not to build a machine-verified market index — and for the five roles that matter,
+manual intake is complete coverage for an hour's work.
+
+**Open question:** whether a URL-added role should bypass `emptySearchReason` and the
+crawl's dedupe. It ingests through `ingestRoles` like everything else, so the dedupe
+is free; the gate needs a decision.
 
 ### Step 2 — Measure the numbers that decide whether Step 3 happens at all
 
@@ -99,6 +125,31 @@ numbers, none yet measured:
    the safety of Step 3, not just its reach (see below).
 4. **Board size distribution** at resolved companies, against the 300s Railway edge
    timeout and a measured 91.2s worst-case crawl.
+
+### What survives: the two discovery surfaces, with verification added
+
+Revision 2 read as though boards would REPLACE search. They must not, and review
+caught this as the split's biggest silent casualty. Both surfaces stay, and the
+change to each is a verification step, not a replacement:
+
+- **Discover (find companies)** is untouched. Searching a hiring signal for companies
+  the user has never heard of is what a model is genuinely good at, and no board can
+  do it — a board API answers "what is open at this company", never "which companies
+  are hiring". What improves is downstream: once a found company's board resolves,
+  its roles arrive complete and with descriptions, so "interesting company" becomes
+  "here are their open roles" without a second billed search.
+
+- **By Role (find roles like mine)** stays as the discovery mechanism, and this is
+  the one revision 2 nearly broke. Role-first search exists precisely to catch roles
+  at companies the user does NOT track, and titles a company-first crawl never
+  surfaces — "Business Systems Manager", "Growth Systems Lead". A board-only pipeline
+  cannot find those, because there is no board to ask until you already know the
+  company. What changes: a search hit is resolved to the employer's own posting and
+  READ before it is stored, instead of being stored as whatever link ranked. Same
+  discovery, verified intake.
+
+Stated as a rule: **search decides WHAT to look at; boards and the posting itself
+decide WHAT IS TRUE about it.** Nothing in Step 3 may reduce what the app can find.
 
 ### Step 3 — Board ENUMERATION, only if the numbers support it
 
@@ -162,6 +213,21 @@ spend) or add a model call to classify the board's titles (which removes the
 "no extraction call" saving). This must be decided, with a measured recall number,
 before Step 3 is built.
 
+## The shape this produces
+
+Four surfaces, each doing the thing it is actually good at:
+
+| Surface | Answers | Source of truth |
+|---|---|---|
+| **Discover** | which companies are hiring | model + web search |
+| **By Role** | which roles match my experience | model + web search, verified per hit |
+| **Add by URL** | this specific posting I found myself | the posting itself, paste as fallback |
+| **Roles** | what am I actually pursuing | only JD-backed, liveness-checked rows |
+
+The first two FIND. The last two are where truth is established. Nothing in this
+document narrows the first two, and every mechanism in it exists to make the fourth
+trustworthy enough to act on without re-checking by hand.
+
 ## Cost: corrected
 
 Revision 1 claimed "no `web_search` call, no extraction call. One HTTP fetch returns
@@ -195,6 +261,9 @@ to touch, not consequences.
 - Fixing Find Roles / role search sourcing. Step 3 changes the crawl only. If Step
   2's second number says those paths own the problem, this document needs a sequel,
   not an extension.
+- Reducing what the app can FIND. Discover and By Role keep their reach; see the
+  section above. A design that made the table more trustworthy by making it emptier
+  would be solving the wrong problem.
 
 ## Operational signal (revision 1 named the risk and proposed nothing)
 
@@ -214,6 +283,9 @@ Per `mutation-first-tests`, each must be shown to fail against the unfixed code.
 
 - The theme prompt renders `posting.requirements`; deleting the field changes the
   rendered prompt (fixture-pinned, as the fit prompt is).
+- A URL whose page cannot be read still creates a row carrying that URL, and offers
+  the paste fallback — it must not silently fail or create a row with no link.
+- A role added by URL dedupes against an existing row for the same posting.
 - A guessed slug with no corroborating employer name sources NO roles.
 - A board-sourced run does not provide closure evidence unless its slug was read.
 - An empty board never closes anything.
@@ -248,6 +320,12 @@ change.
   it and its key is a raw company string.
 - **Title filtering has no adequate matcher**, so "filtering moves client-side" was
   not a free move.
-- **The strongest argument against the whole document** — a paste-JD box gets 100%
+- **The strongest argument against the whole document** — manual intake gets 100%
   coverage on the roles that matter — is now Step 1 rather than a rejected
-  alternative.
+  alternative. Refined after discussion into URL-first with paste as the fallback:
+  pasted text has no identity, so it cannot be re-checked, deduped, or attributed
+  without the user typing what the URL would have supplied.
+- **Revision 2 read as though boards replaced search.** They do not, and role-first
+  discovery is the surface that would have been silently lost: a board cannot be
+  asked which companies are hiring, so By Role is the only way roles at untracked
+  companies are ever found. Now stated as its own section and a non-goal.
