@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
         kind: "read";
         detail: { requirements: string[]; niceToHaves: string[] };
         department: string;
+        employer: string;
         summary: string;
         empty: boolean;
       },
@@ -521,6 +522,7 @@ describe("a role's posting is read before it is scored", () => {
       kind: "read",
       detail: { requirements: ["5 years of SQL"], niceToHaves: ["Python"] },
       department: "Revenue Operations",
+      employer: "",
       summary: "Runs the revenue stack.",
       empty: false,
     };
@@ -611,6 +613,7 @@ describe("a role that reads weak is filed away, not left New", () => {
       kind: "read",
       detail: { requirements: ["5 years of SQL"], niceToHaves: [] },
       department: "RevOps",
+      employer: "",
       summary: "Runs the stack.",
       empty: false,
     };
@@ -645,5 +648,44 @@ describe("a role that reads weak is filed away, not left New", () => {
     await ingestRoles({ ...OPTS, roles: [LIVE] });
 
     expect(vi.mocked(updateJob).mock.calls[0][1].status).toBeUndefined();
+  });
+});
+
+// Measured 2026-09-07: three rows were stored as "basten" for Baseten, which
+// normalizeCompanyName treats as a different employer — a second Discover card,
+// a board-slug guess that cannot resolve, and a watchlist that never matches.
+describe("the employer's own spelling of its name wins", () => {
+  const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
+
+  test("a misspelled company is stored the way the employer spells it", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: [], niceToHaves: [] },
+      department: "",
+      employer: "Baseten",
+      summary: "Runs the stack.",
+      empty: false,
+    };
+
+    await ingestRoles({ ...OPTS, company: "basten", roles: [LIVE] });
+
+    expect(insertedRow().company).toBe("Baseten");
+  });
+
+  test("a differently-worded name is left alone, not renamed", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: [], niceToHaves: [] },
+      department: "",
+      employer: "Fireworks",
+      summary: "Runs the stack.",
+      empty: false,
+    };
+
+    await ingestRoles({ ...OPTS, company: "Fireworks AI", roles: [LIVE] });
+
+    expect(insertedRow().company).toBe("Fireworks AI");
   });
 });

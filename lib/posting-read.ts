@@ -10,7 +10,7 @@
 import { buildEnrichPrompt, enrichSystem } from "@/lib/enrich-prompt";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import { callStructured, parseJson } from "@/lib/model-call";
-import { readPostingPage } from "@/lib/page-extract";
+import { hiringOrganizationFrom, readPostingPage } from "@/lib/page-extract";
 import { postingDetailFrom, type PostingDetail } from "@/lib/posting-detail";
 import { fetchPostingBody } from "@/lib/resolve-job-link";
 
@@ -21,6 +21,12 @@ export type PostingRead =
       detail: PostingDetail;
       /** The team, from the model or (failing that) the vendor's own filing. */
       department: string;
+      /**
+       * The employer's OWN spelling of its name, from the posting's structured
+       * data or the board API — empty when neither published one. Never a
+       * guess; see betterCompanyName for what may be done with it.
+       */
+      employer: string;
       /** 1-2 sentences on what the role does. */
       summary: string;
       /** True when nothing usable came back — a real answer, not a failure. */
@@ -66,6 +72,9 @@ export async function readPosting(opts: {
   // what the vendor chose to publish.
   let text: string;
   let boardDepartment = "";
+  // Read off the PAGE when we have one — schema.org JobPosting is published by
+  // far more hosts than have an honest board API.
+  let employer = html === null ? "" : (hiringOrganizationFrom(html) ?? "");
   if (fromPage?.kind === "content") {
     text = fromPage.page.text;
   } else {
@@ -86,6 +95,7 @@ export async function readPosting(opts: {
     text = body.text;
     // The vendor's own filing, used only where the posting text yields none.
     boardDepartment = body.department;
+    if (employer === "") employer = body.company;
   }
 
   let answer: {
@@ -122,6 +132,7 @@ export async function readPosting(opts: {
     kind: "read",
     detail,
     department,
+    employer,
     summary,
     empty:
       detail.requirements.length === 0 &&

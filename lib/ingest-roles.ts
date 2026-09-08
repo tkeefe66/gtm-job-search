@@ -8,6 +8,7 @@ import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { BoardCache } from "@/lib/resolve-job-link";
 import { postingDetailFrom } from "@/lib/posting-detail";
+import { betterCompanyName } from "@/lib/company-name";
 import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
 import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
 import { describeWriteFailure } from "@/lib/write-failure";
@@ -223,8 +224,15 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       const summary = wasRead?.summary || role.description_summary || "";
       const isDead = deadUrl || links[i].unlisted;
 
+      // The employer's own spelling, when the read found one and it is the same
+      // name written better. Per-ROW rather than per-ingest: the correction
+      // comes from the posting this row points at, and only that row's link is
+      // evidence about it. betterCompanyName is deliberately narrow — a legal
+      // entity or a differently-worded brand is not an improvement.
+      const storedCompany = (wasRead && betterCompanyName(company, wasRead.employer)) || company;
+
       const jobRes = await addJob({
-        company,
+        company: storedCompany,
         role_title: role.role_title,
         status: isDead ? "Posting Closed" : "New",
         // NARROWER than isDead, deliberately. `unlisted` means a board found by
@@ -278,7 +286,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
 
       if (jobRes.job && !isDead) {
         const scored = await scoreFit({
-          company,
+          company: storedCompany,
           role_title: role.role_title,
           company_description: companyDescription,
           key_skills: summary,

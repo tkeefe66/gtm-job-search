@@ -305,3 +305,25 @@ describe("the vendors whose bodies were probed, and the one that failed", () => 
     expect(parsePostingBody("breezy", "1", { description: "anything" })).toBeNull();
   });
 });
+
+// The employer's own spelling of its name, where the vendor publishes one.
+// Greenhouse puts it on every posting; the others do not, and a name invented
+// from a slug would be worse than none.
+describe("the employer's declared name", () => {
+  test("Greenhouse publishes it per posting", () => {
+    const body = parsePostingBody("greenhouse", "1", {
+      content: "<p>Requires SQL</p>",
+      company_name: "Baseten",
+    });
+
+    expect(body?.company).toBe("Baseten");
+  });
+
+  test("a vendor that publishes none returns empty, never a guess", () => {
+    const body = parsePostingBody("ashby", "j", {
+      jobs: [{ id: "j", descriptionPlain: "Requires SQL", department: "Eng" }],
+    });
+
+    expect(body?.company).toBe("");
+  });
+});

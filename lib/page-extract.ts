@@ -91,3 +91,51 @@ export function readPostingPage(
   const page = stripHtml(html);
   return page.text.length < MIN_CONTENT_CHARS ? { kind: "shell" } : { kind: "content", page };
 }
+
+/**
+ * The employer's own name, out of the page's schema.org JobPosting.
+ *
+ * Job pages publish this for Google Jobs, which makes it the one
+ * employer-DECLARED name available on a page we merely fetched — the
+ * extraction's company name is a model's transcription of a search result, and
+ * it slips ("basten" for Baseten, three times in a 120-row sample).
+ *
+ * Only a JobPosting's `hiringOrganization` counts. The bare `Organization` on
+ * one of these pages is usually the JOB BOARD marking ITSELF up as the site's
+ * publisher, so reading any Organization would confidently rename an employer
+ * to "BuiltIn".
+ *
+ * Null for anything unrecognised, and a malformed block never loses a later
+ * good one: these pages routinely carry several, some of them broken.
+ */
+export function hiringOrganizationFrom(html: string): string | null {
+  // exec in a loop, NOT `for (const m of html.matchAll(...))`: tsconfig
+  // declares no target, so `npm run build` typechecks at ES5 and iterating a
+  // matchAll result fails there with "can only be iterated through when using
+  // --downlevelIteration" — while vitest compiles it happily. See CLAUDE.md.
+  const pattern = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let block: RegExpExecArray | null;
+  while ((block = pattern.exec(html)) !== null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(block[1].trim());
+    } catch {
+      continue;
+    }
+    const nodes: unknown[] = Array.isArray(parsed)
+      ? parsed
+      : [parsed, ...(((parsed as { "@graph"?: unknown })?.["@graph"] as unknown[]) ?? [])];
+    for (const node of nodes) {
+      if (!node || typeof node !== "object") continue;
+      const type = (node as { "@type"?: unknown })["@type"];
+      const isPosting =
+        type === "JobPosting" || (Array.isArray(type) && type.includes("JobPosting"));
+      if (!isPosting) continue;
+      const org = (node as { hiringOrganization?: unknown }).hiringOrganization;
+      const name =
+        typeof org === "string" ? org : (org as { name?: unknown } | undefined)?.name;
+      if (typeof name === "string" && name.trim() !== "") return name.trim();
+    }
+  }
+  return null;
+}

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { isJsShell, MAX_PAGE_CHARS, readPostingPage, stripHtml } from "./page-extract";
+import {
+  hiringOrganizationFrom,
+  isJsShell,
+  MAX_PAGE_CHARS,
+  readPostingPage,
+  stripHtml,
+} from "./page-extract";
 
 const REAL_PAGE = `
 <html><head><style>.a{color:red}</style><script>var x=1;</script></head>
@@ -164,5 +170,59 @@ describe("readPostingPage judges a single posting, not a listing", () => {
     const res = readPostingPage(`<html><body><p>${long}</p></body></html>`);
 
     expect(res.kind === "content" && res.page.text).toContain("five years of experience");
+  });
+});
+
+// Job pages publish schema.org JobPosting for Google Jobs, and its
+// hiringOrganization is the employer's OWN spelling of its name — the only
+// employer-declared name available on a page we merely fetched.
+describe("hiringOrganizationFrom reads the posting's own structured data", () => {
+  const ld = (obj: unknown) =>
+    `<html><head><script type="application/ld+json">${JSON.stringify(obj)}</script></head></html>`;
+
+  test("a plain JobPosting", () => {
+    const html = ld({
+      "@type": "JobPosting",
+      title: "RevOps Manager",
+      hiringOrganization: { "@type": "Organization", name: "Baseten" },
+    });
+
+    expect(hiringOrganizationFrom(html)).toBe("Baseten");
+  });
+
+  test("an organization given as a bare string", () => {
+    expect(hiringOrganizationFrom(ld({ "@type": "JobPosting", hiringOrganization: "Baseten" }))).toBe(
+      "Baseten"
+    );
+  });
+
+  test("a @graph, which is how most CMS pages ship it", () => {
+    const html = ld({
+      "@graph": [
+        { "@type": "WebPage", name: "Careers" },
+        { "@type": "JobPosting", hiringOrganization: { name: "Baseten" } },
+      ],
+    });
+
+    expect(hiringOrganizationFrom(html)).toBe("Baseten");
+  });
+
+  // The Organization on a page is very often the JOB BOARD, not the employer:
+  // a reseller marks itself up as the site's publisher. Only a JobPosting's
+  // hiringOrganization counts.
+  test("a site-level Organization is not the employer", () => {
+    expect(hiringOrganizationFrom(ld({ "@type": "Organization", name: "BuiltIn" }))).toBeNull();
+  });
+
+  test("malformed JSON in one block does not lose a later good one", () => {
+    const html =
+      `<script type="application/ld+json">{ not json }</script>` +
+      ld({ "@type": "JobPosting", hiringOrganization: { name: "Baseten" } });
+
+    expect(hiringOrganizationFrom(html)).toBe("Baseten");
+  });
+
+  test("a page with no structured data says nothing", () => {
+    expect(hiringOrganizationFrom("<html><body>Apply now</body></html>")).toBeNull();
   });
 });

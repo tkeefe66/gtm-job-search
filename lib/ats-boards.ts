@@ -219,6 +219,13 @@ export interface PostingBody {
   text: string;
   /** The team the vendor files it under, when it publishes one. */
   department: string;
+  /**
+   * The employer's OWN spelling of its name, where the vendor publishes one
+   * (Greenhouse does, per posting; the others do not). Empty rather than
+   * guessed from a slug — see betterCompanyName for what is done with it, and
+   * why a legal entity is not an improvement.
+   */
+  company: string;
 }
 
 /**
@@ -306,7 +313,12 @@ export function parsePostingBody(
     if (text === "") return null;
     const departments = Array.isArray(job.departments) ? job.departments : [];
     const first = departments[0] as { name?: unknown } | undefined;
-    return { text, department: typeof first?.name === "string" ? first.name : "" };
+    const declared = (json as { company_name?: unknown }).company_name;
+    return {
+      text,
+      department: typeof first?.name === "string" ? first.name : "",
+      company: typeof declared === "string" ? declared : "",
+    };
   }
 
   if (vendor === "lever") {
@@ -330,7 +342,7 @@ export function parsePostingBody(
     const text = parts.join(" ").replace(/\s+/g, " ").trim();
     if (text === "") return null;
     const team = (job.categories as { department?: unknown } | undefined)?.department;
-    return { text, department: typeof team === "string" ? team : "" };
+    return { text, department: typeof team === "string" ? team : "", company: "" };
   }
 
   if (vendor === "workable") {
@@ -343,7 +355,11 @@ export function parsePostingBody(
       .map(htmlToText);
     const text = parts.join(" ").trim();
     if (text === "") return null;
-    return { text, department: typeof job.department === "string" ? job.department : "" };
+    return {
+      text,
+      department: typeof job.department === "string" ? job.department : "",
+      company: "",
+    };
   }
 
   if (vendor === "ashby") {
@@ -365,6 +381,7 @@ export function parsePostingBody(
     return {
       text: raw.trim(),
       department: typeof job.department === "string" ? job.department : "",
+      company: "",
     };
   }
 
