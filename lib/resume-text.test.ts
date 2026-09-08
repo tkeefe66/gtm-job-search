@@ -43,4 +43,40 @@ describe("sanitizeBulletText", () => {
   it("rejects empty or whitespace-only text", () => {
     expect(sanitizeBulletText("   ").error).toBeDefined();
   });
+
+  it("rejects input under the raw cap that expands past it after escaping", () => {
+    // 400 raw chars of '<' → escapes to 1600 chars, well over 600 limit
+    const input = "<".repeat(400);
+    expect(input.length).toBe(400); // confirm input is under cap
+    const res = sanitizeBulletText(input);
+    expect(res.text).toBeUndefined(); // rejection, not acceptance
+    expect(res.error).toBeDefined();
+    expect(res.error).toContain("grew to"); // post-escape error, not raw-cap error
+  });
+
+  it("accepts a near-cap input that does not expand past the limit", () => {
+    // 580 legitimate characters that escape to <630 chars should be rejected
+    // but 400 + some text should fit: 400 chars + "test" = 404 raw -> stays under
+    const input = "A valid bullet with some text " + "x".repeat(370);
+    expect(input.length).toBeLessThanOrEqual(MAX_BULLET_CHARS);
+    const res = sanitizeBulletText(input);
+    expect(res.text).toBeDefined(); // acceptance
+    expect(res.error).toBeUndefined();
+  });
+
+  it("guarantees accepted output satisfies the length cap", () => {
+    // Test a variety of inputs that should pass, and verify all stay under cap
+    const validInputs = [
+      "A simple bullet.",
+      "Owned a <strong>$100M+</strong> pipeline.",
+      "Led <b>growth</b> & <em>marketing</em> efforts.",
+      "x".repeat(590), // near-cap legitimate text
+    ];
+    for (const input of validInputs) {
+      const res = sanitizeBulletText(input);
+      if (res.text) {
+        expect(res.text.length).toBeLessThanOrEqual(MAX_BULLET_CHARS);
+      }
+    }
+  });
 });

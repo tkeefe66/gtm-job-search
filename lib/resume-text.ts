@@ -39,5 +39,18 @@ export function sanitizeBulletText(input: string): { text?: string; error?: stri
     allowedSchemes: [],
     disallowedTagsMode: "escape",
   });
+  // Escaping never shrinks text, only grows it — < becomes &lt; (4x expansion in worst case).
+  // The raw-input check above is a cheap early guard, but does not guarantee the output length.
+  // Task 7 consumes this text directly with no re-check, so we must enforce the cap on output.
+  if (text.length > MAX_BULLET_CHARS) {
+    return {
+      error:
+        "That text grew to " +
+        text.length +
+        " characters after escaping special characters; the limit is " +
+        MAX_BULLET_CHARS +
+        ".",
+    };
+  }
   return { text };
 }
