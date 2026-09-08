@@ -15,6 +15,7 @@
 // style="margin-bottom:0" on the last section on every render, and stripping it
 // restores a bottom margin that at a page boundary is one page versus two.
 import sanitizeHtml from "sanitize-html";
+import { TOKEN_STYLE_RULES } from "@/lib/resume-design-tokens";
 
 export const MAX_HTML_BYTES = 512 * 1024;
 
@@ -46,9 +47,19 @@ export function sanitizeResumeHtml(input: string): { html?: string; error?: stri
 
   const html = sanitizeHtml(input, {
     allowedTags: ALLOWED_TAGS,
-    allowedAttributes: { "*": ["class"], a: ["href"], section: ["style"] },
+    // `div: ["style"]` carries the chat's per-document design tokens, which
+    // renderBody puts on the .rsm root and useResumeCapture therefore captures.
+    // THE allowedStyles.div ENTRY BELOW IS NOT OPTIONAL: sanitize-html's
+    // filterCss does `allowedStyles[selector] || allowedStyles['*']` and, when
+    // neither key exists, returns every declaration UNFILTERED — so this
+    // attribute without that rule set opens arbitrary inline CSS on all ~40
+    // divs renderBody emits plus whatever contentEditable produces. A test
+    // pins the pairing. allowedStyles is keyed by TAG, never by class, so this
+    // permits allowlisted custom properties on any div; that is accepted
+    // deliberately, because the VALUE allowlist is what makes it safe.
+    allowedAttributes: { "*": ["class"], a: ["href"], section: ["style"], div: ["style"] },
     allowedClasses: { "*": [RSM_CLASS] },
-    allowedStyles: { section: { "margin-bottom": [/^0$/] } },
+    allowedStyles: { section: { "margin-bottom": [/^0$/] }, div: TOKEN_STYLE_RULES },
     allowedSchemes: ["http", "https", "mailto"],
     // nonTextTags is DELIBERATELY not overridden. Its default
     // ['script','style','textarea','option'] is what drops <script>'s CONTENTS
