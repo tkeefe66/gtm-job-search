@@ -6,7 +6,7 @@ import CoveragePanel from "@/components/resume/CoveragePanel";
 import ChatPanel from "@/components/resume/ChatPanel";
 import { captureResumeHtml } from "@/components/resume/useResumeCapture";
 import { tailorResumeForJob, type ResumeOverrides } from "@/app/actions/resume";
-import { saveResume } from "@/app/actions/saved-resumes";
+import { saveResumeFromDraft } from "@/app/actions/saved-resumes";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
 import type { CoverageReport } from "@/lib/resume-coverage";
 import { styleAttributeFor } from "@/lib/resume-design-tokens";
@@ -104,7 +104,7 @@ export default function TailorPanel({
     setError(null);
     const html = captureResumeHtml(el);
     startTransition(async () => {
-      const res = await saveResume({
+      const res = await saveResumeFromDraft({
         jobId,
         html,
         roleTitle: roleTitle as string,

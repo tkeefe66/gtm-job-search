@@ -1,103 +1,117 @@
 // app/actions/saved-resumes.ts
 "use server";
 
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { supabase, rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { sanitizeResumeHtml } from "@/lib/resume-sanitize";
-import { EXPIRED_PREDICATE, LIVE_PREDICATE, expiresAtFrom } from "@/lib/resume-retention";
-import { DESIGN_VERSION, TOKEN_CSS_FILES } from "@/lib/resume-download";
-import type { SavedResume, SavedResumeSummary, SaveResumeInput } from "@/lib/types";
+import { EXPIRED_PREDICATE, LIVE_PREDICATE, RETENTION_DAYS } from "@/lib/resume-retention";
+import { TOKEN_CSS_FILES } from "@/lib/resume-download";
+import { insertSavedRow } from "@/lib/saved-resume-insert";
+import { savedRowToSummary, type SavedSummaryRow } from "@/lib/saved-resume-shape";
+import type { SavedResume, SavedResumeSummary } from "@/lib/types";
 
-interface SavedRow {
-  id: string;
-  job_id: string | null;
-  role_title: string;
-  company: string;
-  label: string | null;
-  created_at: string;
-  expires_at: string;
-  page_margin: string | null;
+interface SavedRow extends SavedSummaryRow {
   html?: string;
   design_version?: string;
+  content?: unknown;
 }
 
-function toSummary(r: SavedRow): SavedResumeSummary {
-  return {
-    id: r.id,
-    jobId: r.job_id,
-    roleTitle: r.role_title,
-    company: r.company,
-    label: r.label,
-    createdAt: r.created_at,
-    expiresAt: r.expires_at,
-    pageMargin: r.page_margin,
-  };
-}
-
-export async function saveResume(
-  input: SaveResumeInput
-): Promise<{ id?: string; duplicateOf?: string; error?: string }> {
+/**
+ * Reads the draft's `content` server-side and writes a "save" row. `content`
+ * is never accepted from the caller: the tailor screen holds the EFFECTIVE
+ * selection (app/resume/page.tsx passes it to TailorPanel and discards
+ * baseSelection), and storing that would double-apply every override on the
+ * next effectiveDocument pass. tailored_resumes holds the BASE selection this
+ * needs instead.
+ */
+export async function saveResumeFromDraft(input: {
+  jobId: string;
+  html: string;
+  roleTitle: string;
+  company: string;
+  label?: string | null;
+  allowDuplicate?: boolean;
+  pageMargin?: string | null;
+}): Promise<{ id?: string; duplicateOf?: string; error?: string }> {
   // FIRST statement, never inside a try — auth-required.test.ts asserts this
   // THROWS, and a top-level catch would turn it into a returned {error}.
   const actor = await requireResumeAdmin();
 
-  const clean = sanitizeResumeHtml(input.html);
-  if (clean.error !== undefined) return { error: clean.error };
-  const html = clean.html as string;
-  const contentHash = createHash("sha256").update(html).digest("hex");
-
-  // Duplicate check against this job's newest saved row. Without it, saving the
-  // algorithmic render three times leaves three cards differing only by a
-  // timestamp, permanently.
-  if (!input.allowDuplicate) {
-    const { data, error } = await rawQuery<{ id: string }>(
-      "select id from saved_resumes where tenant_id = $1 and job_id = $2 and " +
-        LIVE_PREDICATE +
-        " order by created_at desc limit 1",
-      [actor.tenantId, input.jobId],
-      actor.tenantId // <- sets app.tenant_id; without it this matches nothing
-    );
-    const described = describeWriteFailure(
-      error ? error.message : undefined,
-      "check for an identical saved résumé"
-    );
-    if (described !== undefined) return { error: described };
-    if (data.length > 0) {
-      const dup = await rawQuery<{ id: string }>(
-        "select id from saved_resumes where tenant_id = $1 and id = $2 and content_hash = $3",
-        [actor.tenantId, data[0].id, contentHash],
-        actor.tenantId
-      );
-      if (dup.data.length > 0) return { duplicateOf: dup.data[0].id };
-    }
-  }
-
-  const now = new Date();
-  const { data, error } = await rawQuery<{ id: string }>(
-    "insert into saved_resumes " +
-      "(tenant_id, job_id, role_title, company, label, html, design_version, content_hash, expires_at, page_margin) " +
-      "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id",
-    [
-      actor.tenantId,
-      input.jobId,
-      input.roleTitle,
-      input.company,
-      input.label ? input.label : null, // "" is stored as null: one unlabelled state, not two
-      html,
-      DESIGN_VERSION,
-      contentHash,
-      expiresAtFrom(now).toISOString(),
-      input.pageMargin ? input.pageMargin : null, // omitted/null/"" all store as null -> 0.68in default
-    ],
+  const { data, error } = await rawQuery<{ content: unknown }>(
+    "select content from tailored_resumes where tenant_id = $1 and job_id = $2",
+    [actor.tenantId, input.jobId],
     actor.tenantId
   );
-  const described = describeWriteFailure(error ? error.message : undefined, "save that résumé");
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "read the draft for this résumé"
+  );
   if (described !== undefined) return { error: described };
-  return { id: data[0].id };
+
+  return insertSavedRow(actor.tenantId, {
+    ...input,
+    content: data.length > 0 ? data[0].content : null,
+    kind: "save",
+    retentionDays: RETENTION_DAYS,
+  });
+}
+
+/**
+ * Copies a SOURCE saved row forward as a new row — never the working draft,
+ * because this button captures a frozen row's DOM and attaching the draft's
+ * selection would produce a row whose `html` and `content` describe different
+ * documents.
+ */
+export async function saveResumeAsNewVersion(input: {
+  fromSavedId: string;
+  html: string;
+  label?: string | null;
+  allowDuplicate?: boolean;
+  pageMargin?: string | null;
+}): Promise<{ id?: string; duplicateOf?: string; error?: string }> {
+  const actor = await requireResumeAdmin();
+
+  const { data, error } = await rawQuery<{
+    job_id: string | null;
+    role_title: string;
+    company: string;
+    content: unknown;
+  }>(
+    "select job_id, role_title, company, content from saved_resumes where tenant_id = $1 and id = $2",
+    [actor.tenantId, input.fromSavedId],
+    actor.tenantId
+  );
+  const described = describeWriteFailure(
+    error ? error.message : undefined,
+    "read the résumé you are saving a new version of"
+  );
+  if (described !== undefined) return { error: described };
+  if (data.length === 0) return { error: "Could not find that saved résumé." };
+  const src = data[0];
+  if (src.job_id === null) {
+    // The row outlived its job (016's ON DELETE SET NULL). job_id is NOT NULL
+    // on insert, and the duplicate check's `job_id = $2` matches nothing under
+    // SQL null semantics anyway — so this refuses rather than writing a row
+    // whose dedupe is silently inert.
+    return {
+      error: "The tracked role this résumé came from was deleted, so it cannot be versioned.",
+    };
+  }
+
+  return insertSavedRow(actor.tenantId, {
+    jobId: src.job_id,
+    html: input.html,
+    roleTitle: src.role_title,
+    company: src.company,
+    label: input.label,
+    allowDuplicate: input.allowDuplicate,
+    pageMargin: input.pageMargin,
+    content: src.content ?? null,
+    kind: "save",
+    retentionDays: RETENTION_DAYS,
+  });
 }
 
 export async function listSavedResumes(): Promise<{
@@ -118,7 +132,8 @@ export async function listSavedResumes(): Promise<{
   if (purge.error) console.error("listSavedResumes opportunistic purge failed:", purge.error);
 
   const { data, error } = await rawQuery<SavedRow>(
-    "select id, job_id, role_title, company, label, created_at, expires_at, page_margin " +
+    "select id, job_id, role_title, company, label, created_at, expires_at, page_margin, kind, " +
+      "(content is not null) as has_content " +
       "from saved_resumes where tenant_id = $1 and " +
       LIVE_PREDICATE +
       " order by created_at desc",
@@ -129,7 +144,7 @@ export async function listSavedResumes(): Promise<{
     console.error("listSavedResumes error:", error);
     return { resumes: [], error: describeWriteFailure(error.message, "load your saved résumés") };
   }
-  return { resumes: data.map(toSummary) };
+  return { resumes: data.map(savedRowToSummary) };
 }
 
 export async function getSavedResume(
@@ -138,7 +153,8 @@ export async function getSavedResume(
   const actor = await requireResumeAdmin();
 
   const { data, error } = await rawQuery<SavedRow>(
-    "select id, job_id, role_title, company, label, created_at, expires_at, html, design_version, page_margin " +
+    "select id, job_id, role_title, company, label, created_at, expires_at, html, design_version, " +
+      "page_margin, content, kind, (content is not null) as has_content " +
       "from saved_resumes where tenant_id = $1 and id = $2 and " +
       LIVE_PREDICATE,
     [actor.tenantId, id],
@@ -154,9 +170,10 @@ export async function getSavedResume(
   const r = data[0];
   return {
     resume: {
-      ...toSummary(r),
+      ...savedRowToSummary(r),
       html: r.html as string,
       designVersion: r.design_version as string,
+      content: r.content ?? null,
     },
   };
 }

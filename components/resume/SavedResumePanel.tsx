@@ -8,7 +8,7 @@ import { captureResumeHtml } from "@/components/resume/useResumeCapture";
 import {
   deleteSavedResume,
   getDownloadAssets,
-  saveResume,
+  saveResumeAsNewVersion,
 } from "@/app/actions/saved-resumes";
 import {
   DEFAULT_PAGE_MARGIN,
@@ -43,13 +43,13 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
     const html = captureResumeHtml(el);
     startTransition(async () => {
       // Never an overwrite of the opened row: this writes a NEW row, which is
-      // what "frozen" means. jobId can be null once the role is untracked, and
-      // the column allows it.
-      const res = await saveResume({
-        jobId: resume.jobId as string,
+      // what "frozen" means. saveResumeAsNewVersion reads job_id, role_title,
+      // company and content off the SOURCE row itself (this.resume.id) — never
+      // the working draft, and refuses if the source's job was untracked, so
+      // jobId/roleTitle/company are not sent from here at all.
+      const res = await saveResumeAsNewVersion({
+        fromSavedId: resume.id,
         html,
-        roleTitle: resume.roleTitle,
-        company: resume.company,
         label: resume.label,
         // Carries the margin forward: a new version of a document that had a
         // non-default margin should not silently revert to 0.68in.

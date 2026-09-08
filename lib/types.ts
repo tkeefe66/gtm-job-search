@@ -275,6 +275,17 @@ export interface SavedResumeSummary {
    * this layer, is what turns that null into the 0.68in default.
    */
   pageMargin: string | null;
+  /** How the row was created. 'checkpoint' rows are written by the app before a
+   *  restore and carry a shorter retention (lib/resume-retention.ts). */
+  kind: "save" | "checkpoint";
+  /**
+   * Whether this row records the {themes, selection, overrides} that produced
+   * it, and can therefore be reopened as a draft. False for every row saved
+   * before migration 021. A BOOLEAN, not the payload: the archive list renders
+   * every live row in the tenant, and `content` carries the full selection and
+   * arbitrary rewritten bullet text — the same reason `html` is excluded above.
+   */
+  hasContent: boolean;
 }
 
 /**
@@ -285,22 +296,10 @@ export interface SavedResumeSummary {
 export interface SavedResume extends SavedResumeSummary {
   html: string;
   designVersion: string;
+  /** The {themes, selection, overrides} that produced this row, or null for a
+   *  row saved before migration 021 or with no draft behind it at save time.
+   *  Present alongside `hasContent` on the summary because a single fetched
+   *  row is not the archive list this file's `html` comment warns about. */
+  content: unknown;
 }
 
-export interface SaveResumeInput {
-  jobId: string;
-  html: string;
-  /** Snapshotted onto the row so the archive survives the job being deleted. */
-  roleTitle: string;
-  company: string;
-  label?: string | null;
-  /** Set by the client after the user confirms an identical re-save. */
-  allowDuplicate?: boolean;
-  /**
-   * Overrides <doc-page margin>. Unlike `html`, this lives outside the
-   * captured innerHTML (it's an attribute on docPageEl itself), so it must
-   * travel through this input separately or it is lost on Save. Omitted or
-   * null both store as null, which reads back as the 0.68in default.
-   */
-  pageMargin?: string | null;
-}

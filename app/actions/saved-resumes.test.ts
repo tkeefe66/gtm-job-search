@@ -4,12 +4,12 @@
 // SESSION-HOLDING but non-admin actor must still be refused. Exact mirror of
 // app/actions/resume.test.ts.
 //
-// Also pins page_margin (Task 14): saveResume persists it, both reads
+// Also pins page_margin (Task 14): saveResumeFromDraft persists it, both reads
 // (listSavedResumes and getSavedResume) return it, and a null column reads
 // back as null here — the DEFAULT_PAGE_MARGIN default (lib/resume-download.ts)
 // is applied by the renderer (SavedResumePanel's `resume.pageMargin ||
 // DEFAULT_PAGE_MARGIN`), never invented at this layer as "" or as a failure.
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
 
 // isAdmin is toggled per-suite via this hoisted, mutable state rather than a
 // static literal — the refusal tests below need isAdmin: false and the
@@ -63,13 +63,15 @@ vi.mock("@/lib/supabase", () => ({
 }));
 
 import {
-  saveResume,
+  saveResumeFromDraft,
+  saveResumeAsNewVersion,
   listSavedResumes,
   getSavedResume,
   deleteSavedResume,
   deleteSavedResumes,
   getDownloadAssets,
 } from "./saved-resumes";
+import { savedRowToSummary } from "@/lib/saved-resume-shape";
 
 const ID = "11111111-1111-1111-1111-111111111111";
 
@@ -81,9 +83,19 @@ beforeEach(() => {
 });
 
 describe("saved-resumes.ts refuses a non-admin actor", () => {
-  test("saveResume", async () => {
+  test("saveResumeFromDraft", async () => {
     await expect(
-      saveResume({ jobId: ID, html: "<div class=\"rsm\"></div>", roleTitle: "t", company: "c" })
+      saveResumeFromDraft({
+        jobId: ID,
+        html: "<div class=\"rsm\"></div>",
+        roleTitle: "t",
+        company: "c",
+      })
+    ).rejects.toThrow(/Not authorized/);
+  });
+  test("saveResumeAsNewVersion", async () => {
+    await expect(
+      saveResumeAsNewVersion({ fromSavedId: ID, html: "<div class=\"rsm\"></div>" })
     ).rejects.toThrow(/Not authorized/);
   });
   test("listSavedResumes", async () => {
@@ -108,8 +120,14 @@ describe("saved-resumes.ts: page_margin", () => {
     auth.isAdmin = true;
   });
 
-  test("saveResume inserts the given pageMargin", async () => {
-    const res = await saveResume({
+  // Index 9 of the insert's values list: tenant_id, job_id, role_title,
+  // company, label, html, design_version, content_hash, expires_at,
+  // page_margin, content, kind — see insertSavedRow's INSERT statement in
+  // lib/saved-resume-insert.ts.
+  const PAGE_MARGIN_ARG_INDEX = 9;
+
+  test("saveResumeFromDraft inserts the given pageMargin", async () => {
+    const res = await saveResumeFromDraft({
       jobId: ID,
       html: '<div class="rsm"></div>',
       roleTitle: "VP RevOps",
@@ -120,16 +138,12 @@ describe("saved-resumes.ts: page_margin", () => {
 
     expect(res.error).toBeUndefined();
     expect(res.id).toBe("new-id");
-    // Last positional arg in the insert's values list — see the column list
-    // in saveResume's INSERT statement.
     expect(h.state.insertArgs).not.toBeNull();
-    expect((h.state.insertArgs as unknown[])[(h.state.insertArgs as unknown[]).length - 1]).toBe(
-      "0.5in"
-    );
+    expect((h.state.insertArgs as unknown[])[PAGE_MARGIN_ARG_INDEX]).toBe("0.5in");
   });
 
-  test("saveResume stores an omitted pageMargin as null, not as \"\"", async () => {
-    await saveResume({
+  test("saveResumeFromDraft stores an omitted pageMargin as null, not as \"\"", async () => {
+    await saveResumeFromDraft({
       jobId: ID,
       html: '<div class="rsm"></div>',
       roleTitle: "VP RevOps",
@@ -137,9 +151,7 @@ describe("saved-resumes.ts: page_margin", () => {
       allowDuplicate: true,
     });
 
-    expect((h.state.insertArgs as unknown[])[(h.state.insertArgs as unknown[]).length - 1]).toBe(
-      null
-    );
+    expect((h.state.insertArgs as unknown[])[PAGE_MARGIN_ARG_INDEX]).toBe(null);
   });
 
   test("listSavedResumes returns the stored pageMargin", async () => {
@@ -220,5 +232,39 @@ describe("saved-resumes.ts: page_margin", () => {
     const res = await getSavedResume(ID);
 
     expect(res.resume?.pageMargin).toBeNull();
+  });
+});
+
+describe("savedRowToSummary", () => {
+  const row = {
+    id: "s1",
+    job_id: "j1",
+    role_title: "Director",
+    company: "Acme",
+    label: null,
+    created_at: "2026-09-08T00:00:00.000Z",
+    expires_at: "2026-11-07T00:00:00.000Z",
+    page_margin: null,
+    kind: "checkpoint",
+    has_content: true,
+  };
+
+  // Mutation this catches: selecting `content` itself into the list. lib/types.ts
+  // documents why `html` is excluded from the summary — at up to 512 KB a row it
+  // would ship every document in the tenant on one page load — and `content`
+  // carries the full selection plus overrides.text, which is arbitrary rewritten
+  // bullet prose. The affordance needs a boolean, so the summary carries one.
+  it("carries a boolean, never the content payload", () => {
+    const s = savedRowToSummary(row);
+    expect(s.hasContent).toBe(true);
+    expect(Object.keys(s)).not.toContain("content");
+  });
+
+  // Mutation this catches: defaulting kind to "save" in the mapper. A checkpoint
+  // mislabelled as a save reads as a document the user chose to keep, and its
+  // 3-day clock becomes invisible.
+  it("preserves the row's kind", () => {
+    expect(savedRowToSummary(row).kind).toBe("checkpoint");
+    expect(savedRowToSummary({ ...row, kind: "save" }).kind).toBe("save");
   });
 });
