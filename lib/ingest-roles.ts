@@ -43,6 +43,21 @@ export interface IngestOptions {
   // caller here is a batch path — a per-row settings read inside the
   // Promise.all below would be one database round trip per scored role.
   fitInputs: FitInputs;
+  /**
+   * Postings this caller has ALREADY read, keyed by the URL they were read
+   * from. Manual URL intake reads before it knows what the role is — that is
+   * how it learns the company and title — so re-reading here would spend a
+   * second fetch and a second model call to learn what the caller already
+   * holds.
+   */
+  preRead?: Record<string, PostingRead>;
+  /**
+   * How many postings this ingest may read, when it has to read them itself.
+   * Defaults to MAX_INGEST_READS, which exists to fit the crawler's single
+   * request inside Railway's 300s edge timeout. A user-initiated action is
+   * waiting on its own response and can afford more.
+   */
+  maxReads?: number;
 }
 
 /**
@@ -183,10 +198,15 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   // one host — the same politeness the robots gate exists for.
   const reads = new Map<number, PostingRead>();
   if (!dryRun) {
-    let budget = MAX_INGEST_READS;
+    let budget = opts.maxReads ?? MAX_INGEST_READS;
     for (let i = 0; i < fresh.length && budget > 0; i++) {
       const deadUrl = urlStatuses[i] === "dead";
       if (deadUrl || links[i].unlisted || !links[i].url) continue;
+      const already = opts.preRead?.[links[i].url];
+      if (already) {
+        reads.set(i, already);
+        continue;
+      }
       budget--;
       reads.set(
         i,

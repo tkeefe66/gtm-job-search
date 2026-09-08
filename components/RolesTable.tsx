@@ -30,6 +30,7 @@ import { classifyJobLink, hostOf } from "@/lib/job-link";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { enrichRoles } from "@/app/actions/enrich";
+import { addRoleFromUrl, type AddRoleResult } from "@/app/actions/add-role";
 import {
   enrichProgressLine,
   enrichStatRows,
@@ -242,6 +243,16 @@ export default function RolesTable({
   // is, not something to act on now.
   const [blockedOpen, setBlockedOpen] = useState(false);
   const [unclearOpen, setUnclearOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addUrl, setAddUrl] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+  // Set only when the fetch could not read the posting: the paste box appears
+  // WITH the reason, and carries the identity fields the page failed to supply.
+  const [addFallback, setAddFallback] = useState<AddRoleResult["needsPaste"] | null>(null);
+  const [addPaste, setAddPaste] = useState("");
+  const [addCompany, setAddCompany] = useState("");
+  const [addTitle, setAddTitle] = useState("");
+  const [addNotice, setAddNotice] = useState<string | null>(null);
 
   /**
    * The report's undecidable rows, split by reason. Computed once per report
@@ -635,6 +646,46 @@ export default function RolesTable({
     }
   }
 
+  /**
+   * Adds one role from a URL the user found themselves.
+   *
+   * The only path that reaches hosts which block automated readers — Indeed,
+   * ZipRecruiter, LinkedIn, Workday — because when the read fails the user can
+   * paste the description and the row still keeps the link.
+   */
+  async function handleAddRole() {
+    setAddBusy(true);
+    setAddNotice(null);
+    try {
+      const res = await addRoleFromUrl({
+        url: addFallback?.url ?? addUrl,
+        company: addCompany || undefined,
+        roleTitle: addTitle || undefined,
+        pastedText: addPaste || undefined,
+      });
+      if (res.error !== undefined) {
+        setAddNotice(res.error);
+        return;
+      }
+      if (res.needsPaste) {
+        setAddFallback(res.needsPaste);
+        setAddCompany(res.needsPaste.company);
+        setAddTitle(res.needsPaste.roleTitle);
+        return;
+      }
+      setAddNotice(`Added ${res.added?.company} — ${res.added?.roleTitle}.`);
+      setAddUrl("");
+      setAddPaste("");
+      setAddCompany("");
+      setAddTitle("");
+      setAddFallback(null);
+      setAddOpen(false);
+      await load();
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
   function toggleSelected(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -806,6 +857,16 @@ export default function RolesTable({
             {checkingLinks ? "Checking links…" : "Check links"}
           </button>
           <button
+            onClick={() => {
+              setAddOpen((v) => !v);
+              setAddNotice(null);
+            }}
+            title="Paste a link to a posting you found yourself"
+            className="rounded-md border border-slate px-4 py-2 text-sm font-medium text-ink/70 transition hover:border-ink hover:text-ink"
+          >
+            Add by URL
+          </button>
+          <button
             onClick={() => void handleEnrich()}
             disabled={enriching}
             title="Read the posting behind every role that has none stored, and save what it says"
@@ -932,6 +993,60 @@ export default function RolesTable({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {addOpen && (
+        <div className="mb-6 rounded-lg border border-slate bg-canvas p-4 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={addFallback?.url ?? addUrl}
+              onChange={(e) => setAddUrl(e.target.value)}
+              disabled={!!addFallback || addBusy}
+              placeholder="https://…  link to the posting"
+              className="min-w-[22rem] flex-1 rounded-md border border-slate px-3 py-2 text-sm disabled:bg-slate/30"
+            />
+            <button
+              onClick={() => void handleAddRole()}
+              disabled={addBusy || (addFallback ? addPaste.trim() === "" : addUrl.trim() === "")}
+              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-canvas transition disabled:opacity-40"
+            >
+              {addBusy ? "Reading…" : addFallback ? "Save with pasted text" : "Read and add"}
+            </button>
+          </div>
+
+          {addFallback && (
+            /* The fallback says WHY, because "blocks automated readers" is
+               actionable and an empty box is not. The URL is kept and stored
+               either way, so liveness checking still works on a hand-pasted
+               row. */
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-ink/60">{addFallback.reason}</p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  value={addCompany}
+                  onChange={(e) => setAddCompany(e.target.value)}
+                  placeholder="Company"
+                  className="rounded-md border border-slate px-3 py-2 text-sm"
+                />
+                <input
+                  value={addTitle}
+                  onChange={(e) => setAddTitle(e.target.value)}
+                  placeholder="Role title"
+                  className="flex-1 rounded-md border border-slate px-3 py-2 text-sm"
+                />
+              </div>
+              <textarea
+                value={addPaste}
+                onChange={(e) => setAddPaste(e.target.value)}
+                rows={8}
+                placeholder="Paste the job description here"
+                className="w-full rounded-md border border-slate px-3 py-2 font-mono text-xs"
+              />
+            </div>
+          )}
+
+          {addNotice && <p className="mt-3 text-xs text-ink/70">{addNotice}</p>}
         </div>
       )}
 

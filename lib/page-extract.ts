@@ -109,6 +109,17 @@ export function readPostingPage(
  * good one: these pages routinely carry several, some of them broken.
  */
 export function hiringOrganizationFrom(html: string): string | null {
+  return jobPostingFrom(html).company;
+}
+
+/**
+ * The posting's own title and employer, from schema.org JobPosting.
+ *
+ * Both together, because manual URL intake needs an identity for a role nobody
+ * has typed: the user pastes a link and the app must know what role at what
+ * company it is about before it can dedupe, score or store it.
+ */
+export function jobPostingFrom(html: string): { title: string | null; company: string | null } {
   // exec in a loop, NOT `for (const m of html.matchAll(...))`: tsconfig
   // declares no target, so `npm run build` typechecks at ES5 and iterating a
   // matchAll result fails there with "can only be iterated through when using
@@ -134,8 +145,12 @@ export function hiringOrganizationFrom(html: string): string | null {
       const org = (node as { hiringOrganization?: unknown }).hiringOrganization;
       const name =
         typeof org === "string" ? org : (org as { name?: unknown } | undefined)?.name;
-      if (typeof name === "string" && name.trim() !== "") return name.trim();
+      const title = (node as { title?: unknown }).title;
+      return {
+        title: typeof title === "string" && title.trim() !== "" ? title.trim() : null,
+        company: typeof name === "string" && name.trim() !== "" ? name.trim() : null,
+      };
     }
   }
-  return null;
+  return { title: null, company: null };
 }

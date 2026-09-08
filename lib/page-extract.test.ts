@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   hiringOrganizationFrom,
+  jobPostingFrom,
   isJsShell,
   MAX_PAGE_CHARS,
   readPostingPage,
@@ -226,3 +227,34 @@ describe("hiringOrganizationFrom reads the posting's own structured data", () =>
     expect(hiringOrganizationFrom("<html><body>Apply now</body></html>")).toBeNull();
   });
 });
+
+// Manual URL intake needs an IDENTITY for a role nobody has typed: which role,
+// at which company. schema.org publishes both.
+describe("jobPostingFrom reads the posting's identity", () => {
+  const ld = (obj: unknown) =>
+    `<script type="application/ld+json">${JSON.stringify(obj)}</script>`;
+
+  test("title and employer together", () => {
+    const html = ld({
+      "@type": "JobPosting",
+      title: "Director, Revenue Operations",
+      hiringOrganization: { name: "Baseten" },
+    });
+
+    expect(jobPostingFrom(html)).toEqual({
+      title: "Director, Revenue Operations",
+      company: "Baseten",
+    });
+  });
+
+  test("a posting with one and not the other still yields what it has", () => {
+    expect(jobPostingFrom(ld({ "@type": "JobPosting", title: "RevOps Lead" }))).toEqual({
+      title: "RevOps Lead",
+      company: null,
+    });
+  });
+
+  test("no structured data yields neither", () => {
+    expect(jobPostingFrom("<p>Apply now</p>")).toEqual({ title: null, company: null });
+  });
+})

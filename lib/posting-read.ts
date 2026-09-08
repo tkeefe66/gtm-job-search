@@ -10,7 +10,7 @@
 import { buildEnrichPrompt, enrichSystem } from "@/lib/enrich-prompt";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import { callStructured, parseJson } from "@/lib/model-call";
-import { hiringOrganizationFrom, readPostingPage } from "@/lib/page-extract";
+import { jobPostingFrom, readPostingPage } from "@/lib/page-extract";
 import { postingDetailFrom, type PostingDetail } from "@/lib/posting-detail";
 import { fetchPostingBody } from "@/lib/resolve-job-link";
 
@@ -27,6 +27,8 @@ export type PostingRead =
        * guess; see betterCompanyName for what may be done with it.
        */
       employer: string;
+      /** The posting's own title, where its structured data published one. */
+      title: string;
       /** 1-2 sentences on what the role does. */
       summary: string;
       /** True when nothing usable came back — a real answer, not a failure. */
@@ -48,8 +50,13 @@ export type PostingRead =
  */
 export async function readPosting(opts: {
   url: string;
-  company: string;
-  roleTitle: string;
+  /**
+   * What we believe the role is. OPTIONAL because manual URL intake has neither
+   * until the page is read — the prompt then names the posting generically and
+   * the identity comes back on the result.
+   */
+  company?: string;
+  roleTitle?: string;
   /** For the log line, so a crawl and a backfill are distinguishable. */
   label: string;
 }): Promise<PostingRead> {
@@ -74,7 +81,8 @@ export async function readPosting(opts: {
   let boardDepartment = "";
   // Read off the PAGE when we have one — schema.org JobPosting is published by
   // far more hosts than have an honest board API.
-  let employer = html === null ? "" : (hiringOrganizationFrom(html) ?? "");
+  const identity = html === null ? { title: null, company: null } : jobPostingFrom(html);
+  let employer = identity.company ?? "";
   if (fromPage?.kind === "content") {
     text = fromPage.page.text;
   } else {
@@ -87,7 +95,7 @@ export async function readPosting(opts: {
     const body = await fetchPostingBody(opts.url);
     if (body === null) {
       console.log(
-        `${opts.label}: ${opts.company} / ${opts.roleTitle} could not be read ` +
+        `${opts.label}: ${opts.company ?? "?"} / ${opts.roleTitle ?? opts.url} could not be read ` +
           `(${fromPage === null ? "no page" : "JS shell"}, no board body)`
       );
       return { kind: "unreadable" };
@@ -98,6 +106,54 @@ export async function readPosting(opts: {
     if (employer === "") employer = body.company;
   }
 
+  return structureText({
+    text,
+    company: opts.company || employer,
+    roleTitle: opts.roleTitle || identity.title || "",
+    label: opts.label,
+    boardDepartment,
+    employer,
+    title: identity.title ?? "",
+  });
+}
+
+/**
+ * A job description the USER pasted, run through the same extraction the
+ * fetched path uses.
+ *
+ * Exists because some hosts block automated readers in principle — Indeed,
+ * ZipRecruiter, LinkedIn, Workday tenants — so the only way to hold those
+ * postings' words is for the user to supply them. Everything after the text
+ * arrives is identical, which is the point: one extraction contract, not two.
+ */
+export async function readPostingText(opts: {
+  text: string;
+  company: string;
+  roleTitle: string;
+  label: string;
+}): Promise<PostingRead> {
+  if (opts.text.trim() === "") return { kind: "unreadable" };
+  return structureText({
+    text: opts.text,
+    company: opts.company,
+    roleTitle: opts.roleTitle,
+    label: opts.label,
+    boardDepartment: "",
+    // A paste carries no identity of its own — see lib/manual-intake.ts.
+    employer: "",
+    title: "",
+  });
+}
+
+async function structureText(opts: {
+  text: string;
+  company: string;
+  roleTitle: string;
+  label: string;
+  boardDepartment: string;
+  employer: string;
+  title: string;
+}): Promise<PostingRead> {
   let answer: {
     requirements?: unknown;
     nice_to_haves?: unknown;
@@ -108,9 +164,12 @@ export async function readPosting(opts: {
     const raw = await callStructured({
       system: enrichSystem(),
       prompt: buildEnrichPrompt({
-        company: opts.company,
-        roleTitle: opts.roleTitle,
-        page: { text, links: [] },
+        // Generic stand-ins when the caller has no identity yet (manual URL
+        // intake): the prompt reads the posting, so it does not depend on
+        // knowing what the posting is.
+        company: opts.company || opts.employer || "the employer",
+        roleTitle: opts.roleTitle || opts.title || "this role",
+        page: { text: opts.text, links: [] },
       }),
       maxTokens: 2000,
     });
@@ -119,20 +178,21 @@ export async function readPosting(opts: {
     // Not describeWriteFailure: this failure is the model or the parse, and
     // UNDESCRIBED_DB_ERROR names the database, which would be a false sentence.
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`${opts.label}: ${opts.company} / ${opts.roleTitle} — ${message}`);
+    console.error(`${opts.label}: ${opts.company || "?"} / ${opts.roleTitle || "(untitled)"} — ${message}`);
     return { kind: "failed", message };
   }
 
   const detail = postingDetailFrom(answer);
   const department =
-    (typeof answer.department === "string" ? answer.department.trim() : "") || boardDepartment;
+    (typeof answer.department === "string" ? answer.department.trim() : "") || opts.boardDepartment;
   const summary =
     typeof answer.description_summary === "string" ? answer.description_summary.trim() : "";
   return {
     kind: "read",
     detail,
     department,
-    employer,
+    employer: opts.employer,
+    title: opts.title,
     summary,
     empty:
       detail.requirements.length === 0 &&
