@@ -119,4 +119,8 @@ describe("tenant scoping", () => {
   test("forTenant refuses an empty tenant id", () => {
     expect(() => supabase.forTenant("")).toThrow(/requires a tenant id/);
   });
+
+  test("registers resume_chats as a tenant table", () => {
+    expect(TENANT_TABLES).toContain("resume_chats");
+  });
 });

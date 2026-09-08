@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { sanitizeResumeHtml, MAX_HTML_BYTES } from "./resume-sanitize";
 
 describe("markup the career record and the renderer actually produce", () => {
@@ -104,5 +104,63 @@ describe("the shipped career record survives sanitization unchanged", () => {
     const after = ((sanitizeResumeHtml(rendered).html || "").match(/<strong>/g) || []).length;
     expect(before).toBeGreaterThan(0);
     expect(after).toBe(before);
+  });
+});
+
+describe("design token overrides on the .rsm root", () => {
+  it("keeps an allowlisted custom property", () => {
+    const html = '<div class="rsm" style="--rail:120px"><p>x</p></div>';
+    expect(sanitizeResumeHtml(html).html).toContain("--rail:120px");
+  });
+
+  it("strips a property that is not on the allowlist", () => {
+    const html = '<div class="rsm" style="--rail:120px;background:red"><p>x</p></div>';
+    const out = sanitizeResumeHtml(html).html!;
+    expect(out).toContain("--rail:120px");
+    expect(out).not.toContain("background");
+  });
+
+  // The reason allowedStyles.div is not optional: filterCss falls back to
+  // allowedStyles['*'] and, when neither key exists, returns declarations
+  // UNFILTERED. Adding div to allowedAttributes without this pairing opens
+  // arbitrary inline CSS on every div the renderer emits.
+  it("strips arbitrary CSS from a non-root div", () => {
+    const html = '<div class="rsm"><div class="rsm-role" style="background:url(http://evil)">x</div></div>';
+    expect(sanitizeResumeHtml(html).html).not.toContain("evil");
+  });
+
+  it("rejects a value that tries to escape the declaration", () => {
+    const html = '<div class="rsm" style="--rail:1px } .rsm { background:url(http://evil)"><p>x</p></div>';
+    expect(sanitizeResumeHtml(html).html).not.toContain("evil");
+  });
+});
+
+describe("injection payloads driven through sanitizeResumeHtml on the .rsm root style attribute", () => {
+  it("rejects a declaration-escape payload and the smuggled rule does not survive", () => {
+    const html = '<div class="rsm" style="--rail:1px } .rsm { background:url(http://evil)"><p>x</p></div>';
+    const out = sanitizeResumeHtml(html).html!;
+    expect(out).not.toContain("evil");
+    expect(out).not.toContain("background");
+  });
+
+  it("rejects a url() value on an allowlisted property", () => {
+    const html = '<div class="rsm" style="--rail:url(http://evil/x)"><p>x</p></div>';
+    const out = sanitizeResumeHtml(html).html!;
+    expect(out).not.toContain("evil");
+    expect(out).not.toContain("--rail:url");
+  });
+
+  it("keeps the legitimate declaration and drops the smuggled one when both are present", () => {
+    const html = '<div class="rsm" style="--rail:120px; background:red"><p>x</p></div>';
+    const out = sanitizeResumeHtml(html).html!;
+    expect(out).toContain("--rail:120px");
+    expect(out).not.toContain("background");
+  });
+
+  it("rejects an expression() payload", () => {
+    const html = '<div class="rsm" style="--rail:expression(alert(1))"><p>x</p></div>';
+    const out = sanitizeResumeHtml(html).html!;
+    expect(out).not.toContain("expression");
+    expect(out).not.toContain("alert");
   });
 });

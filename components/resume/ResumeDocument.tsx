@@ -3,6 +3,7 @@
 import Script from "next/script";
 import { renderBody } from "@/lib/resume-render/render";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import { DEFAULT_PAGE_MARGIN } from "@/lib/resume-download";
 
 // `<doc-page>` is a custom element defined by /public/resume-design/doc-page.js
 // at runtime — not a React component. This augments JSX so TypeScript accepts
@@ -26,6 +27,12 @@ export interface ResumeDocumentProps {
   docPageRef?: React.RefObject<HTMLElement>;
   /** Fires on the first and every subsequent edit, so Save can be armed. */
   onEdit?: () => void;
+  /** Validated declarations for the .rsm root — see lib/resume-design-tokens. */
+  rootStyle?: string;
+  /** Overrides <doc-page margin>. NOT captured on Save: it is an attribute on
+   *  docPageEl itself, which is outside the innerHTML useResumeCapture reads,
+   *  so a saved row carries it in its own column instead. */
+  pageMargin?: string;
 }
 
 /**
@@ -43,8 +50,10 @@ export default function ResumeDocument({
   selection,
   docPageRef,
   onEdit,
+  rootStyle,
+  pageMargin,
 }: ResumeDocumentProps) {
-  const html = renderBody(career, selection);
+  const html = renderBody(career, selection, { rootStyle });
   return (
     <>
       {/* The vendored page-guides.js (the "PAGE 2" dashed-line overlay) is
@@ -73,7 +82,7 @@ export default function ResumeDocument({
           saving is what makes an edit durable, and only then. */}
       <doc-page
         ref={docPageRef as React.RefObject<HTMLElement>}
-        margin="0.68in"
+        margin={pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning
         onInput={onEdit}

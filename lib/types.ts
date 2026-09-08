@@ -269,6 +269,12 @@ export interface SavedResumeSummary {
   label: string | null;
   createdAt: string;
   expiresAt: string;
+  /**
+   * Overrides <doc-page margin>. null on every row written before this column
+   * existed, and on any row saved with no margin override — the renderer, not
+   * this layer, is what turns that null into the 0.68in default.
+   */
+  pageMargin: string | null;
 }
 
 /**
@@ -290,4 +296,11 @@ export interface SaveResumeInput {
   label?: string | null;
   /** Set by the client after the user confirms an identical re-save. */
   allowDuplicate?: boolean;
+  /**
+   * Overrides <doc-page margin>. Unlike `html`, this lives outside the
+   * captured innerHTML (it's an attribute on docPageEl itself), so it must
+   * travel through this input separately or it is lost on Save. Omitted or
+   * null both store as null, which reads back as the 0.68in default.
+   */
+  pageMargin?: string | null;
 }

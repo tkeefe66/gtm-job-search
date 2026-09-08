@@ -20,6 +20,7 @@ interface SavedRow {
   label: string | null;
   created_at: string;
   expires_at: string;
+  page_margin: string | null;
   html?: string;
   design_version?: string;
 }
@@ -33,6 +34,7 @@ function toSummary(r: SavedRow): SavedResumeSummary {
     label: r.label,
     createdAt: r.created_at,
     expiresAt: r.expires_at,
+    pageMargin: r.page_margin,
   };
 }
 
@@ -77,8 +79,8 @@ export async function saveResume(
   const now = new Date();
   const { data, error } = await rawQuery<{ id: string }>(
     "insert into saved_resumes " +
-      "(tenant_id, job_id, role_title, company, label, html, design_version, content_hash, expires_at) " +
-      "values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id",
+      "(tenant_id, job_id, role_title, company, label, html, design_version, content_hash, expires_at, page_margin) " +
+      "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id",
     [
       actor.tenantId,
       input.jobId,
@@ -89,6 +91,7 @@ export async function saveResume(
       DESIGN_VERSION,
       contentHash,
       expiresAtFrom(now).toISOString(),
+      input.pageMargin ? input.pageMargin : null, // omitted/null/"" all store as null -> 0.68in default
     ],
     actor.tenantId
   );
@@ -115,7 +118,7 @@ export async function listSavedResumes(): Promise<{
   if (purge.error) console.error("listSavedResumes opportunistic purge failed:", purge.error);
 
   const { data, error } = await rawQuery<SavedRow>(
-    "select id, job_id, role_title, company, label, created_at, expires_at " +
+    "select id, job_id, role_title, company, label, created_at, expires_at, page_margin " +
       "from saved_resumes where tenant_id = $1 and " +
       LIVE_PREDICATE +
       " order by created_at desc",
@@ -135,7 +138,7 @@ export async function getSavedResume(
   const actor = await requireResumeAdmin();
 
   const { data, error } = await rawQuery<SavedRow>(
-    "select id, job_id, role_title, company, label, created_at, expires_at, html, design_version " +
+    "select id, job_id, role_title, company, label, created_at, expires_at, html, design_version, page_margin " +
       "from saved_resumes where tenant_id = $1 and id = $2 and " +
       LIVE_PREDICATE,
     [actor.tenantId, id],

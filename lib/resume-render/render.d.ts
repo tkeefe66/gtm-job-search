@@ -1,6 +1,8 @@
 // Type declarations for render.js, ported verbatim from the "TK Resume Design
 // System" Claude Design project (999f7fe8-e8bc-449f-9121-0f2d8dc9730c).
-// render.js itself is untouched pure JS — see its own header comment.
+// render.js now carries dated DIVERGENCE comments from that vendored source —
+// see the comments marked "DIVERGENCE" inside render.js itself for what
+// changed and why.
 
 export interface ContactItem {
   label: string;
@@ -11,8 +13,19 @@ export interface ResumeBullet {
   id: string;
   priority: number;
   themes: string[];
+  /**
+   * Recognition rather than accomplishment — awards, honours. Always sorts
+   * after every non-tail bullet in its role, whatever its theme weight.
+   * Priority alone used to carry this, which is why a weight-first sort
+   * without it promotes an awards line to the top of a role.
+   */
+  tail?: boolean;
   /** May contain a literal <strong>...</strong> span around one figure. */
   text: string;
+  /** Metadata for the coverage panel. renderBody ignores unknown fields. */
+  origin?: "overlay";
+  /** Metadata for the coverage panel. renderBody ignores unknown fields. */
+  edited?: boolean;
 }
 
 export interface ResumeRole {
@@ -115,10 +128,16 @@ export function selectBullets(
   opts?: SelectBulletsOptions
 ): ResumeSelection;
 
+export interface RenderOptions {
+  /** Validated CSS custom-property declarations for the .rsm root. */
+  rootStyle?: string;
+}
+
 /** Just the `.rsm` div — for embedding in a page you already own. */
 export function renderBody(
   career: CareerRecord,
-  selection?: ResumeSelection
+  selection?: ResumeSelection,
+  opts?: RenderOptions
 ): string;
 
 /** A complete, print-ready HTML document. */

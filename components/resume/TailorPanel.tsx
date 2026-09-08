@@ -1,23 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import ResumeDocument from "@/components/resume/ResumeDocument";
+import CoveragePanel from "@/components/resume/CoveragePanel";
+import ChatPanel from "@/components/resume/ChatPanel";
 import { captureResumeHtml } from "@/components/resume/useResumeCapture";
-import { tailorResumeForJob } from "@/app/actions/resume";
+import { tailorResumeForJob, type ResumeOverrides } from "@/app/actions/resume";
 import { saveResume } from "@/app/actions/saved-resumes";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import type { CoverageReport } from "@/lib/resume-coverage";
+import { styleAttributeFor } from "@/lib/resume-design-tokens";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 export default function TailorPanel({
-  career,
+  career: initialCareer,
   jobId,
   initialSelection,
+  initialOverrides,
+  initialCoverage,
+  initialWarnings,
   roleTitle,
   company,
 }: {
   career: CareerRecord;
   jobId: string;
   initialSelection: ResumeSelection | null;
+  initialOverrides: ResumeOverrides;
+  initialCoverage: CoverageReport | null;
+  initialWarnings: string[];
   /**
    * Snapshotted onto the saved row so the archive card survives the job being
    * deleted. null when the page could not read the job — Save is withheld
@@ -27,10 +37,20 @@ export default function TailorPanel({
   roleTitle: string | null;
   company: string | null;
 }) {
+  const [career, setCareer] = useState(initialCareer);
   const [selection, setSelection] = useState(initialSelection);
+  const [overrides, setOverrides] = useState(initialOverrides);
+  const [coverage, setCoverage] = useState(initialCoverage);
+  const [warnings, setWarnings] = useState(initialWarnings);
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // Validated once here, never hand-assembled: TOKEN_STYLE_RULES matching is
+  // case-sensitive and untrimmed, so a hand-built declaration string fails
+  // CLOSED with no error anywhere. styleAttributeFor is the one place that
+  // normalises and validates a design override into a style string.
+  const rootStyle = useMemo(() => styleAttributeFor(overrides.design || {}), [overrides.design]);
 
   const docPageRef = useRef<HTMLElement>(null);
   const [dirty, setDirty] = useState(false);
@@ -63,6 +83,12 @@ export default function TailorPanel({
       if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       else {
         setSelection(res.selection);
+        if (res.career) setCareer(res.career);
+        // Regenerate discards overrides — reflect that reset rather than
+        // keeping a design/text override the just-saved row no longer carries.
+        setOverrides(res.overrides);
+        setCoverage(res.coverage);
+        setWarnings(res.warnings);
         // A warning, never a refusal. The user can read the posting in a
         // browser; withholding the document helps nobody. But a résumé tailored
         // from a job TITLE, with no posting behind it, must not look identical
@@ -85,6 +111,10 @@ export default function TailorPanel({
         company: company as string,
         label: label.trim() ? label.trim() : null,
         allowDuplicate,
+        // captureResumeHtml only reads docPageEl.innerHTML; the margin is an
+        // attribute on docPageEl itself, so it must be sent separately or a
+        // chat-set margin silently reverts to 0.68in on the saved screen.
+        pageMargin: overrides.pageMargin,
       });
       if (res.error !== undefined) {
         setError(res.error || UNDESCRIBED_DB_ERROR);
@@ -101,11 +131,42 @@ export default function TailorPanel({
 
   function regenerate() {
     // Regenerate is not a navigation, so beforeunload never fires for it.
+    // The non-dirty wording used to say only "the current version will be
+    // replaced" — true, but it badly understates things once a user has
+    // spent ten chat turns tuning bullet choices, text edits and design
+    // tokens: Regenerate re-derives themes from the posting from scratch and
+    // discards ALL of that, dirty or not.
     const warning = dirty
       ? "You have unsaved edits. Regenerate and discard them?"
-      : "Regenerate this tailored resume? The current version will be replaced.";
+      : "Regenerate this resume? It re-derives themes from the posting and discards every " +
+        "change made in the chat — bullet choices, text edits and design changes.";
     if (!window.confirm(warning)) return;
     tailor();
+  }
+
+  // The one place a chat turn — or an accepted bullet — reaches TailorPanel's
+  // own state. Only ChatPanel decides WHEN to call this: a turn the SERVER
+  // reported as `changedDocument` (lib/resume-ops.ts), never `applied.length`,
+  // which counts operations rather than changes. This just mirrors resume.ts's
+  // tailor() success path and marks the document dirty, since the change has
+  // not gone through Save yet.
+  function onChatApplied(next: {
+    career: CareerRecord;
+    selection: ResumeSelection;
+    overrides: ResumeOverrides;
+    coverage: CoverageReport;
+  }) {
+    // The CAREER moves too, and it has to: a set_text edit changes a bullet's
+    // words and a set_compress_after changes rules.compressAfter, both on the
+    // record rather than in the selection. Without this the server stored the
+    // edit correctly and the document on screen did not change until a
+    // reload — the user asked to tighten a bullet, was told it was done, and
+    // read the old wording.
+    setCareer(next.career);
+    setSelection(next.selection);
+    setOverrides(next.overrides);
+    setCoverage(next.coverage);
+    setDirty(true);
   }
 
   if (!selection) {
@@ -178,11 +239,15 @@ export default function TailorPanel({
           Click any text below to edit it directly — for Google Docs, select all and copy/paste after editing.
         </span>
       </div>
+      {coverage && <CoveragePanel coverage={coverage} warnings={warnings} />}
+      <ChatPanel jobId={jobId} dirty={dirty} onApplied={onChatApplied} />
       <ResumeDocument
         career={career}
         selection={selection}
         docPageRef={docPageRef}
         onEdit={() => setDirty(true)}
+        rootStyle={rootStyle}
+        pageMargin={overrides.pageMargin}
       />
     </div>
   );

@@ -160,6 +160,61 @@ export const ONBOARDED_AT_KEY = "onboarded_at";
  */
 export const ENRICH_RESCORED_AT_KEY = "enrich_rescored_at";
 
+/**
+ * Bullets the user accepted from the résumé chat, which are NOT in the
+ * checked-in career record.
+ *
+ * A standalone key, deliberately NOT a SETTING_KEYS member — the same call
+ * PROFILE_KEY and JOB_STATUSES_KEY make, and for the same reason: the value is
+ * a whole array of objects, so admitting it would force another shape group
+ * onto mergeSettings, which is shape-guarded for the list/text/number values
+ * that ARE Criteria fields.
+ *
+ * It cannot be a write to lib/resume-render/content/resume.json: that file is
+ * checked in and bundled, a runtime write on Railway does not survive the next
+ * deploy, and it is the git history that makes the career record auditable.
+ */
+export const CAREER_OVERLAY_KEY = "career_overlay";
+
+export interface OverlayBullet {
+  /** Namespaced `ov-*` at creation so it can never collide with a record id. */
+  id: string;
+  roleId: string;
+  text: string;
+  themes: string[];
+  priority?: number;
+}
+
+/** REPAIRS whatever is in the row rather than rejecting it — the contract
+ *  resolveStatuses established and resolveProfile follows. A malformed entry is
+ *  dropped; a malformed ROW reads as no overlay at all. */
+export function careerOverlayFrom(rows: SettingRow[]): OverlayBullet[] {
+  const value = rows.find((r) => r.key === CAREER_OVERLAY_KEY)?.value;
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((b): b is OverlayBullet => {
+      if (!b || typeof b !== "object") return false;
+      const o = b as Record<string, unknown>;
+      return (
+        typeof o.id === "string" &&
+        typeof o.roleId === "string" &&
+        typeof o.text === "string" &&
+        Array.isArray(o.themes)
+      );
+    })
+    .map((b) => ({
+      id: b.id,
+      roleId: b.roleId,
+      text: b.text,
+      themes: b.themes.filter((t) => typeof t === "string"),
+      priority: typeof b.priority === "number" ? b.priority : undefined,
+    }));
+}
+
+export async function writeCareerOverlay(overlay: OverlayBullet[]): Promise<{ error?: string }> {
+  return upsertSetting(CAREER_OVERLAY_KEY, overlay);
+}
+
 export interface SettingRow {
   key: string;
   value: unknown;
@@ -407,7 +462,8 @@ async function upsertSetting(
     | typeof JOB_STATUSES_KEY
     | typeof PROFILE_KEY
     | typeof ONBOARDED_AT_KEY
-    | typeof ENRICH_RESCORED_AT_KEY,
+    | typeof ENRICH_RESCORED_AT_KEY
+    | typeof CAREER_OVERLAY_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   // `on conflict (tenant_id, key)`, matching the composite primary key that

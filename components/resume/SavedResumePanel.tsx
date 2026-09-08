@@ -11,6 +11,7 @@ import {
   saveResume,
 } from "@/app/actions/saved-resumes";
 import {
+  DEFAULT_PAGE_MARGIN,
   DESIGN_VERSION,
   buildDownloadHtml,
   downloadFilename,
@@ -50,6 +51,9 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         roleTitle: resume.roleTitle,
         company: resume.company,
         label: resume.label,
+        // Carries the margin forward: a new version of a document that had a
+        // non-default margin should not silently revert to 0.68in.
+        pageMargin: resume.pageMargin,
       });
       if (res.error !== undefined) setError(res.error || UNDESCRIBED_DB_ERROR);
       else if (res.duplicateOf) {
@@ -71,6 +75,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         css: assets.css,
         docPageJs: assets.docPageJs,
         title: `Résumé — ${resume.roleTitle} at ${resume.company}`,
+        pageMargin: resume.pageMargin,
       });
       const url = URL.createObjectURL(new Blob([file], { type: "text/html" }));
       const a = document.createElement("a");
@@ -152,7 +157,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
       `}</style>
       <doc-page
         ref={docPageRef as React.RefObject<HTMLElement>}
-        margin="0.68in"
+        margin={resume.pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning
         dangerouslySetInnerHTML={{ __html: resume.html }}

@@ -17,7 +17,7 @@ vi.mock("./providers/registry", () => ({
   }),
 }));
 
-import { callWithWebSearch, complete as completeCall, SearchUnavailableError } from "./model-call";
+import { callWithWebSearch, complete as completeCall, completeDetailed, SearchUnavailableError } from "./model-call";
 
 // cachedInputTokens is deliberately NON-ZERO: it is priced separately from
 // fresh input, and a zero fixture cannot tell "carried through" apart from
@@ -102,5 +102,19 @@ describe("a metered call on a provider that cannot cap in-request", () => {
     enforcement = "none";
     await runWithBilling(scope({ maxSearches: 6 }), () => completeCall({ system: "s", prompt: "p" }));
     expect(complete).toHaveBeenCalled();
+  });
+});
+
+describe("completeDetailed", () => {
+  test("passes the jsonSchema through and surfaces the provider's stopReason", async () => {
+    complete.mockResolvedValue({ text: '{"a":1}', usage: { ...usage, searches: 0 }, stopReason: "max_tokens" });
+    const schema = { type: "object" };
+
+    const res = await runWithBilling(scope(), () =>
+      completeDetailed({ system: "s", prompt: "p", maxTokens: 2000, jsonSchema: schema })
+    );
+
+    expect(complete.mock.calls[0][0]).toMatchObject({ jsonSchema: schema, maxTokens: 2000 });
+    expect(res).toEqual({ text: '{"a":1}', stopReason: "max_tokens" });
   });
 });

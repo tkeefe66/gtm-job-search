@@ -148,6 +148,9 @@ export const TENANT_TABLES = [
   // and the bulk delete use rawQuery, where the tenant id must be passed as the
   // third argument or the statement runs unscoped and silently matches nothing.
   "saved_resumes",
+  // Added by migration 019. Same inline-tenant_id pattern as the two above, so
+  // likewise invisible to lib/supabase.test.ts's retrofit regex.
+  "resume_chats",
 ] as const;
 
 export function isTenantTable(table: string): boolean {

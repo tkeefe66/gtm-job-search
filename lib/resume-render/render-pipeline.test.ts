@@ -16,7 +16,7 @@
 // it, so this test isn't re-proving that filter — it's proving selectBullets
 // and renderBody themselves tolerate an unknown id gracefully, in case that
 // filter is ever missing, reordered, or bypassed by some other caller.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, it } from "vitest";
 import { selectBullets, renderBody, type CareerRecord } from "./render";
 import career from "./content/resume.json";
 
@@ -48,5 +48,60 @@ describe("the tailoring pipeline (selectBullets + renderBody) never crashes", ()
     const html = renderBody(career as CareerRecord, selection);
     expect(typeof html).toBe("string");
     expect(html.length).toBeGreaterThan(0);
+  });
+});
+
+const ORDERING_FIXTURE = {
+  identity: { name: "T", contacts: [] },
+  positioning: [{ id: "p", themes: [], tagline: "t", summary: "s" }],
+  roles: [
+    {
+      id: "r1",
+      title: "Role One",
+      org: "Org",
+      dates: "2020 – Present",
+      bullets: [
+        { id: "b1", priority: 1, themes: [], text: "anchor, off-theme" },
+        { id: "b2", priority: 2, themes: ["other"], text: "middle" },
+        { id: "b3", priority: 3, themes: ["systems"], text: "on-theme" },
+        { id: "b6", priority: 6, themes: ["systems"], tail: true, text: "award" },
+      ],
+    },
+  ],
+  advisory: [],
+  education: [],
+  rules: { taper: [4], themes: ["systems", "other"], compressAfter: null },
+} as unknown as CareerRecord;
+
+describe("selectBullets ordering", () => {
+  it("leads with the on-theme bullet, keeps the anchor, and sinks tail bullets", () => {
+    const sel = selectBullets(ORDERING_FIXTURE, { themes: ["systems"] });
+    expect(sel.bullets.r1[0]).toBe("b3");
+    expect(sel.bullets.r1).toContain("b1");
+    expect(sel.bullets.r1[sel.bullets.r1.length - 1]).toBe("b6");
+  });
+
+  it("orders tail bullets among themselves by priority, after every non-tail bullet", () => {
+    const twoTails = JSON.parse(JSON.stringify(ORDERING_FIXTURE));
+    twoTails.roles[0].bullets.push({ id: "b5", priority: 5, themes: ["systems"], tail: true, text: "award 2" });
+    twoTails.rules.taper = [5];
+    const sel = selectBullets(twoTails, { themes: ["systems"] });
+    const ids = sel.bullets.r1;
+    expect(ids.slice(-2)).toEqual(["b5", "b6"]);
+  });
+});
+
+describe("renderBody rootStyle", () => {
+  it("puts the style on the .rsm root", () => {
+    const html = renderBody(ORDERING_FIXTURE, undefined, { rootStyle: "--rail:120px" });
+    expect(html.indexOf('<div class="rsm" style="--rail:120px">')).toBe(0);
+  });
+
+  it("emits the bare root when no style is given", () => {
+    expect(renderBody(ORDERING_FIXTURE, undefined).indexOf('<div class="rsm">')).toBe(0);
+  });
+
+  it("never emits a style attribute for an empty string", () => {
+    expect(renderBody(ORDERING_FIXTURE, undefined, { rootStyle: "" })).toContain('<div class="rsm">');
   });
 });

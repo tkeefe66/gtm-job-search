@@ -2,8 +2,8 @@
 // The allowlist is derived from THREE sources, not one. An earlier design took
 // it from renderBody's literal tag output, which is wrong twice:
 //
-//  1. render.js does not escape bullet text (:155), role title (:149) or the
-//     <b> interpolations (:161,:173), and content/resume.json carries 22
+//  1. render.js does not escape bullet text (:182), role title (:176) or the
+//     <b> interpolations (:188,:200), and content/resume.json carries 22
 //     <strong> tags. A list without `strong` silently strips every bold run
 //     from every archived résumé.
 //  2. What gets saved is contentEditable output, not renderer output. Enter
@@ -11,10 +11,11 @@
 //     user's edits with no message — likelier than the <img onerror> paste
 //     this module is built for.
 //
-// The `style` exception is real too: render.js:169 emits
+// The `style` exception is real too: render.js:196 emits
 // style="margin-bottom:0" on the last section on every render, and stripping it
 // restores a bottom margin that at a page boundary is one page versus two.
 import sanitizeHtml from "sanitize-html";
+import { TOKEN_STYLE_RULES } from "@/lib/resume-design-tokens";
 
 export const MAX_HTML_BYTES = 512 * 1024;
 
@@ -46,9 +47,19 @@ export function sanitizeResumeHtml(input: string): { html?: string; error?: stri
 
   const html = sanitizeHtml(input, {
     allowedTags: ALLOWED_TAGS,
-    allowedAttributes: { "*": ["class"], a: ["href"], section: ["style"] },
+    // `div: ["style"]` carries the chat's per-document design tokens, which
+    // renderBody puts on the .rsm root and useResumeCapture therefore captures.
+    // THE allowedStyles.div ENTRY BELOW IS NOT OPTIONAL: sanitize-html's
+    // filterCss does `allowedStyles[selector] || allowedStyles['*']` and, when
+    // neither key exists, returns every declaration UNFILTERED — so this
+    // attribute without that rule set opens arbitrary inline CSS on all ~40
+    // divs renderBody emits plus whatever contentEditable produces. A test
+    // pins the pairing. allowedStyles is keyed by TAG, never by class, so this
+    // permits allowlisted custom properties on any div; that is accepted
+    // deliberately, because the VALUE allowlist is what makes it safe.
+    allowedAttributes: { "*": ["class"], a: ["href"], section: ["style"], div: ["style"] },
     allowedClasses: { "*": [RSM_CLASS] },
-    allowedStyles: { section: { "margin-bottom": [/^0$/] } },
+    allowedStyles: { section: { "margin-bottom": [/^0$/] }, div: TOKEN_STYLE_RULES },
     allowedSchemes: ["http", "https", "mailto"],
     // nonTextTags is DELIBERATELY not overridden. Its default
     // ['script','style','textarea','option'] is what drops <script>'s CONTENTS

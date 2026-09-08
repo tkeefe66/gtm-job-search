@@ -1,13 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireActorPage } from "@/lib/require-actor";
-import { getJobContext, getTailoredResume } from "@/app/actions/resume";
+import { getJobContext, loadResumeContext } from "@/app/actions/resume";
 import { listSavedResumes } from "@/app/actions/saved-resumes";
 import TailorPanel from "@/components/resume/TailorPanel";
 import SavedResumeList from "@/components/resume/SavedResumeList";
 import SavedResumeScreen from "@/components/resume/SavedResumeScreen";
-import type { CareerRecord } from "@/lib/resume-render/render";
-import career from "@/lib/resume-render/content/resume.json";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +48,7 @@ export default async function ResumePage({
     );
   }
 
-  const [context, existing] = await Promise.all([getJobContext(jobId), getTailoredResume(jobId)]);
+  const [context, resumeContext] = await Promise.all([getJobContext(jobId), loadResumeContext(jobId)]);
 
   // Three distinct states, not two: `getJobContext` returns `null` for a
   // genuine 404 (the job row is gone) and `{ ..., error }` for a DB read
@@ -85,17 +83,29 @@ export default async function ResumePage({
       <link rel="stylesheet" href="/resume-design/styles.css" />
       <h1 className="text-xl font-semibold print:hidden">Résumé</h1>
       {contextNode}
-      {existing.error !== undefined && (
-        <p className="mt-1 text-sm text-[#92400E] print:hidden">{existing.error}</p>
-      )}
       <div className="mt-6 print:mt-0">
-        <TailorPanel
-          career={career as CareerRecord}
-          jobId={jobId}
-          initialSelection={existing.selection}
-          roleTitle={context && context.error === undefined ? context.roleTitle : null}
-          company={context && context.error === undefined ? context.company : null}
-        />
+        {resumeContext.error !== undefined ? (
+          <p className="mt-1 text-sm text-[#92400E] print:hidden">{resumeContext.error}</p>
+        ) : resumeContext.career ? (
+          // The narrowing above (rather than trusting `error === undefined`
+          // alone) is deliberate: `career` is optional on the return type, and
+          // casting it away here would hide the one case loadResumeContext's
+          // own type admits but its implementation never produces.
+          <TailorPanel
+            career={resumeContext.career}
+            jobId={jobId}
+            initialSelection={resumeContext.selection}
+            initialOverrides={resumeContext.overrides}
+            initialCoverage={resumeContext.coverage}
+            initialWarnings={resumeContext.warnings}
+            roleTitle={context && context.error === undefined ? context.roleTitle : null}
+            company={context && context.error === undefined ? context.company : null}
+          />
+        ) : (
+          <p className="mt-1 text-sm text-[#92400E] print:hidden">
+            Could not load the career record for this résumé.
+          </p>
+        )}
       </div>
     </div>
   );
