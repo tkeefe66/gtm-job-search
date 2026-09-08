@@ -75,6 +75,7 @@ import {
   addToWatchlist,
   checkCompanyNow,
   getWatchedCompanyKeys,
+  renameTrackedCompany,
   setIgnoreLocationRule,
   setTracking,
   trackCompanyByName,
@@ -311,5 +312,135 @@ describe("the interactive crawl paths are metered", () => {
       expect.objectContaining({ action: "crawl-now", estimateCents: 10 })
     );
     spy.mockRestore();
+  });
+});
+
+// The company name is a JOIN KEY, not a label — it is what jobs,
+// discovered_roles and crawl_runs are written under and what ingestRoles
+// dedupes against. These tests defend the two ends of that: a URL must never
+// become a name, and a rename must carry every table or the next crawl
+// re-inserts the company's whole role history as duplicates.
+describe("a careers URL is never accepted as a company name", () => {
+  test("trackCompanyByName refuses a pasted URL and names the company it read", async () => {
+    readOk([]);
+
+    const res = await trackCompanyByName("https://cursor.com/careers");
+
+    expect(res.error).toMatch(/Cursor/);
+    expect(res.error).toMatch(/not a company name/i);
+    // Nothing written, and — the expensive half — nothing crawled.
+    expect(h.state.writes).toHaveLength(0);
+    expect(crawl).not.toHaveBeenCalled();
+  });
+
+  test("a real name still tracks, and the confirm step's URL is stored with it", async () => {
+    readOk([]);
+
+    const res = await trackCompanyByName("Cursor", "https://cursor.com/careers");
+
+    expect(res.error).toBeUndefined();
+    expect(h.state.writes[0].payload).toMatchObject({
+      company: "Cursor",
+      careers_url: "https://cursor.com/careers",
+    });
+  });
+
+  test("a URL pasted into the box does not clobber a careers URL already stored", async () => {
+    // resolveCareersUrlWrite's rule 1: a stored URL may have been typed by hand
+    // to rescue a broken crawl. Re-tracking must not overwrite it.
+    readOk([{ company: "Cursor", careers_url: "https://cursor.com/hand-typed" }]);
+
+    await trackCompanyByName("Cursor", "https://cursor.com/careers");
+
+    expect(h.state.writes[0].payload).not.toHaveProperty("careers_url");
+  });
+
+  test("renameTrackedCompany refuses a URL as the new name", async () => {
+    readOk([{ company: "Cursor", careers_url: null }]);
+
+    const res = await renameTrackedCompany("Cursor", "https://cursor.com/careers");
+
+    expect(res.error).toMatch(/not a company name/i);
+    expect(res.company).toBeUndefined();
+  });
+});
+
+describe("renameTrackedCompany carries the name through every table", () => {
+  test("one statement updates all four tables the name keys", async () => {
+    readOk([{ company: "https://cursor.com/careers", careers_url: null }]);
+
+    const res = await renameTrackedCompany("https://cursor.com/careers", "Cursor");
+
+    expect(res.error).toBeUndefined();
+    expect(res.company).toBe("Cursor");
+
+    const sql = String(query.mock.calls[query.mock.calls.length - 1][0]);
+    // Each table by name. Renaming the watchlist row alone is the defect this
+    // asserts against: ingestRoles would then find no rows under the new name
+    // and re-insert every existing role as a duplicate "New" job.
+    for (const table of ["watchlist", "jobs", "discovered_roles", "crawl_runs"]) {
+      expect(sql).toContain(table);
+    }
+    // ONE statement, so the four either all land or none do.
+    expect(sql).toContain("with");
+    // Every clause scoped by tenant, not just the first.
+    expect(sql.match(/tenant_id = \$3/g)).toHaveLength(4);
+  });
+
+  test("refuses to rename into another tracked company rather than merging", async () => {
+    readOk([
+      { company: "Cursor", careers_url: null },
+      { company: "Ramp", careers_url: null },
+    ]);
+
+    const res = await renameTrackedCompany("Cursor", "Ramp");
+
+    expect(res.error).toMatch(/already on your watchlist/);
+    // The refusal must say what a merge would cost, since the user cannot undo it.
+    expect(res.error).toMatch(/cannot be undone|merge/i);
+    // Nothing renamed: the read is the only query that ran.
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  test("a casing-only fix is not a merge — it is this row", async () => {
+    readOk([{ company: "cursor", careers_url: null }]);
+
+    const res = await renameTrackedCompany("cursor", "Cursor");
+
+    expect(res.error).toBeUndefined();
+    expect(res.company).toBe("Cursor");
+  });
+
+  test("refuses when the company is not on the watchlist", async () => {
+    readOk([{ company: "Ramp", careers_url: null }]);
+
+    const res = await renameTrackedCompany("Cursor", "Cursor Inc");
+
+    expect(res.error).toMatch(/not on the watchlist/);
+  });
+
+  test("refuses when the watchlist could not be READ, rather than reporting not-found", async () => {
+    readFailed();
+
+    const res = await renameTrackedCompany("Cursor", "Cursor Inc");
+
+    expect(res.error).toMatch(/could not be read|database/i);
+    expect(res.company).toBeUndefined();
+  });
+
+  test("reports a failed write whose message is EMPTY", async () => {
+    // Presence, not truthiness. An unreachable dual-stack host rejects with an
+    // AggregateError whose message is "" — `if (error)` reads that as success
+    // and tells the user the rename landed.
+    query.mockResolvedValueOnce({
+      data: [{ company: "cursor", careers_url: null }],
+      error: null,
+    } as never);
+    query.mockResolvedValueOnce({ data: [], error: { message: "" } } as never);
+
+    const res = await renameTrackedCompany("cursor", "Cursor");
+
+    expect(res.company).toBeUndefined();
+    expect(res.error).toBeTruthy();
   });
 });
