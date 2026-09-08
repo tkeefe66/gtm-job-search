@@ -44,6 +44,7 @@ import type { CoverageReport } from "@/lib/resume-coverage";
 import { OPERATION_SCHEMA } from "@/lib/resume-ops";
 import { DESIGN_TOKENS } from "@/lib/resume-design-tokens";
 import { houseFindingsBlock, houseRulesBlock, type HouseFinding } from "@/lib/house-style";
+import { geometryBlock, type PageGeometry } from "@/lib/page-geometry";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -61,6 +62,10 @@ export interface ChatPromptInput {
    *  model knows what it is already breaking before it is asked to change
    *  anything. Optional so the fixture-pinned callers stay explicit about it. */
   houseFindings?: HouseFinding[];
+  /** What the document actually measures once rendered — page count and how
+   *  full the last page is. Null when the client could not measure, which the
+   *  block states rather than guessing. */
+  geometry?: PageGeometry | null;
   requirements: string[];
   niceToHaves: string[];
   roleTitle: string;
@@ -307,6 +312,9 @@ ${houseRulesBlock()}
 
 HOW THE DOCUMENT MEASURES AGAINST THEM RIGHT NOW
 ${houseFindingsBlock(input.houseFindings || [])}
+
+THE RENDERED PAGE
+${geometryBlock(input.geometry || null)}
 
 ${INVARIANT}`;
 

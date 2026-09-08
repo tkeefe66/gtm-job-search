@@ -17,6 +17,7 @@
 //      coverage panel is a read-time report over that.
 
 import { requireResumeAdmin } from "@/lib/require-resume-admin";
+import { parseGeometry } from "@/lib/page-geometry";
 import { evaluateHouseStyle } from "@/lib/house-style";
 import { withBudget } from "@/lib/metered";
 import { completeDetailed, parseJson, type DetailedResponse } from "@/lib/model-call";
@@ -280,7 +281,7 @@ function parseTurn(raw: string): ParsedTurn | null {
   return { reply: o.reply, operations: o.operations as Operation[] };
 }
 
-export async function sendChatTurn(jobId: string, message: string): Promise<TurnResult> {
+export async function sendChatTurn(jobId: string, message: string, geometry?: unknown): Promise<TurnResult> {
   const actor = await requireResumeAdmin();
 
   const threadRes = await readThread(actor.tenantId, jobId);
@@ -388,6 +389,10 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     // model knows what it is already breaking rather than discovering it after
     // its own edit lands.
     houseFindings: evaluateHouseStyle(career, currentSelection),
+    // Measured in the browser and validated here, never trusted: parseGeometry
+    // refuses anything that is not a finite number in a sane range, because
+    // this value is interpolated into a model prompt.
+    geometry: parseGeometry(geometry),
   });
 
   const budget = await withBudget({

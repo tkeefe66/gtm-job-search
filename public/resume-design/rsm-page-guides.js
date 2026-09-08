@@ -140,6 +140,33 @@
     }
   }
 
+  /** The same fragment walk the guides draw from, reported as numbers instead
+   *  of lines: how many pages the document occupies and how full the last one
+   *  is. Exposed on `window` so the app can send it with a chat turn — the
+   *  model otherwise judges the document from its selection alone and cannot
+   *  see that an edit left a nearly empty final page. Shares collectFragments
+   *  deliberately: a second copy of the break logic would drift from the guides
+   *  it is supposed to describe. */
+  function measure() {
+    const docPage = document.querySelector('doc-page');
+    if (!docPage) return null;
+    const rsm = docPage.querySelector(':scope > .rsm');
+    if (!rsm) return null;
+    const pageH = pageContentHeight(docPage);
+    if (!(pageH > 0)) return null;
+    const fragments = collectFragments(rsm);
+    if (fragments.length === 0) return null;
+    const total = fragments[fragments.length - 1].bottom;
+    const pages = Math.max(1, Math.ceil(total / pageH));
+    // How much of the LAST page carries content. A document ending exactly on a
+    // page boundary reads as a full page, not an empty one.
+    const onLast = total - (pages - 1) * pageH;
+    const lastPageFill = pages === 1 ? Math.min(1, total / pageH) : Math.min(1, onLast / pageH);
+    return { pages: pages, lastPageFill: lastPageFill };
+  }
+
+  window.__rsmMeasure = measure;
+
   function run() {
     ensureStyle();
     document.querySelectorAll('doc-page').forEach((docPage) => {

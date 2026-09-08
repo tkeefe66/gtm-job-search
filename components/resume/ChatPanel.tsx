@@ -137,7 +137,19 @@ export default function ChatPanel({
     setError(null);
     setTranscriptNote(null);
     startTransition(async () => {
-      const res = await sendChatTurn(jobId, text);
+      // Measured at SEND time, not on render: the document may have been
+      // re-laid-out by fonts loading or a window resize since it was drawn, and
+      // the number the model reasons about should describe the page as it is
+      // now. Any failure is null, which the prompt states as "not measured"
+      // rather than guessing.
+      let geometry: unknown = null;
+      try {
+        const fn = (window as unknown as { __rsmMeasure?: () => unknown }).__rsmMeasure;
+        if (typeof fn === "function") geometry = fn();
+      } catch {
+        geometry = null;
+      }
+      const res = await sendChatTurn(jobId, text, geometry);
       setMessages(res.messages);
 
       // Presence, not truthiness — res.error can legitimately be "".

@@ -21,7 +21,7 @@
  * identifiable rather than merely suspect — the row stores markup, and its
  * appearance comes from those files at view time.
  */
-export const DESIGN_VERSION = "2026-08-28";
+export const DESIGN_VERSION = "2026-09-08";
 
 /**
  * The one definition of the default <doc-page> margin. `saved_resumes.page_margin`

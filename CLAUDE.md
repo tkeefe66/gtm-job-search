@@ -685,10 +685,19 @@ break-inside change above. `spacing.css`'s `--rail` went from `96px` to
 at `--type-section`'s 12px/0.2em tracking, so no single word fit — combined
 with `doc-page.js`'s global `text-wrap:balance` on headings, that forced a
 literal mid-word break ("PROFESSIONA"/"L") instead of a normal word-boundary
-wrap. **If this design system is ever re-synced from Claude Design, these
-three changes will be silently reverted** — check `git log` on
-`public/resume-design/tokens/` before trusting a fresh port over what's
-running in production.
+wrap. A FOURTH divergence landed 2026-09-08:
+`.rsm-header:not(:has(.rsm-tagline)){align-items:center}`. The header is a
+two-column grid whose row height is set by whichever column is taller — always
+the six-line contact block — so with the tagline cleared (which the chat can now
+do, see the clearable-slot rule above) the name sat as a single line against six
+and the header rendered with a hole under it. Centring the name in that one case
+reads deliberate rather than orphaned, and `:has()` scopes it so the default
+tagline-present layout is untouched. **If this design system is ever re-synced
+from Claude Design, these four changes will be silently reverted** — check
+`git log` on `public/resume-design/tokens/` before trusting a fresh port over
+what's running in production. Any change under `tokens/` also requires bumping
+`DESIGN_VERSION` (`lib/resume-download.ts`) by hand; this one took it to
+`2026-09-08`.
 
 **`public/resume-design/page-guides.js` (the vendored on-screen page-break
 overlay) is not loaded — `components/resume/ResumeDocument.tsx` loads
