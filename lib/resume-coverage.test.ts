@@ -46,9 +46,7 @@ describe("coverageReport", () => {
   });
 
   it("computes strength over rendered bullets only", () => {
-    expect(report.strength).not.toBeNull();
-    expect(report.strength!).toBeGreaterThan(0);
-    expect(report.strength!).toBeLessThanOrEqual(1);
+    expect(report.strength).toBe(1.0);
   });
 
   it("counts overlay and edited bullets", () => {
@@ -59,5 +57,10 @@ describe("coverageReport", () => {
     const r = coverageReport(withMeta, ["systems"], sel, VOCAB);
     expect(r.overlayBullets).toBe(1);
     expect(r.editedBullets).toBe(1);
+  });
+
+  it("reports poolBeyondRendered for themes in compressed roles", () => {
+    // systems has 2 bullets in rendered role + 2 in compressed role
+    expect(report.themes.find((t) => t.theme === "systems")!.poolBeyondRendered).toBe(2);
   });
 });

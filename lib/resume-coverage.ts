@@ -50,7 +50,22 @@ export function coverageReport(
   vocabulary: ThemeVocabulary
 ): CoverageReport {
   const rendered = renderedRoles(career);
-  const near = coverage(rendered, themes, selection, vocabulary);
+
+  // Narrow the selection to only rendered role IDs. coverage() builds selectedIds from
+  // every key in selection.bullets, not scoped to the career argument, so passing a
+  // narrowed career with a full selection would inflate the denominator with bullets
+  // from roles that never render, silently understating strength by ~30 points.
+  const renderedRoleIds = new Set(rendered.roles.map((r) => r.id));
+  const renderedSelection = selection.bullets
+    ? {
+        ...selection,
+        bullets: Object.fromEntries(
+          Object.entries(selection.bullets).filter(([roleId]) => renderedRoleIds.has(roleId))
+        ),
+      }
+    : selection;
+
+  const near = coverage(rendered, themes, renderedSelection, vocabulary);
   const full = coverage(career, themes, selection, vocabulary);
 
   const byTheme: Record<string, number> = {};
