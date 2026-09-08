@@ -16,7 +16,7 @@
 // it, so this test isn't re-proving that filter — it's proving selectBullets
 // and renderBody themselves tolerate an unknown id gracefully, in case that
 // filter is ever missing, reordered, or bypassed by some other caller.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, it } from "vitest";
 import { selectBullets, renderBody, type CareerRecord } from "./render";
 import career from "./content/resume.json";
 
@@ -51,8 +51,6 @@ describe("the tailoring pipeline (selectBullets + renderBody) never crashes", ()
   });
 });
 
-import { describe as describe2, it, expect as expect2 } from "vitest";
-
 const ORDERING_FIXTURE = {
   identity: { name: "T", contacts: [] },
   positioning: [{ id: "p", themes: [], tagline: "t", summary: "s" }],
@@ -75,12 +73,12 @@ const ORDERING_FIXTURE = {
   rules: { taper: [4], themes: ["systems", "other"], compressAfter: null },
 } as unknown as CareerRecord;
 
-describe2("selectBullets ordering", () => {
+describe("selectBullets ordering", () => {
   it("leads with the on-theme bullet, keeps the anchor, and sinks tail bullets", () => {
     const sel = selectBullets(ORDERING_FIXTURE, { themes: ["systems"] });
-    expect2(sel.bullets.r1[0]).toBe("b3");
-    expect2(sel.bullets.r1).toContain("b1");
-    expect2(sel.bullets.r1[sel.bullets.r1.length - 1]).toBe("b6");
+    expect(sel.bullets.r1[0]).toBe("b3");
+    expect(sel.bullets.r1).toContain("b1");
+    expect(sel.bullets.r1[sel.bullets.r1.length - 1]).toBe("b6");
   });
 
   it("orders tail bullets among themselves by priority, after every non-tail bullet", () => {
@@ -89,6 +87,21 @@ describe2("selectBullets ordering", () => {
     twoTails.rules.taper = [5];
     const sel = selectBullets(twoTails, { themes: ["systems"] });
     const ids = sel.bullets.r1;
-    expect2(ids.slice(-2)).toEqual(["b5", "b6"]);
+    expect(ids.slice(-2)).toEqual(["b5", "b6"]);
+  });
+});
+
+describe("renderBody rootStyle", () => {
+  it("puts the style on the .rsm root", () => {
+    const html = renderBody(ORDERING_FIXTURE, undefined, { rootStyle: "--rail:120px" });
+    expect(html.indexOf('<div class="rsm" style="--rail:120px">')).toBe(0);
+  });
+
+  it("emits the bare root when no style is given", () => {
+    expect(renderBody(ORDERING_FIXTURE, undefined).indexOf('<div class="rsm">')).toBe(0);
+  });
+
+  it("never emits a style attribute for an empty string", () => {
+    expect(renderBody(ORDERING_FIXTURE, undefined, { rootStyle: "" })).toContain('<div class="rsm">');
   });
 });
