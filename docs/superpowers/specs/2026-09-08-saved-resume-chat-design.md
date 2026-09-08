@@ -74,12 +74,21 @@ rejected.
 
 ```sql
 alter table saved_resumes add column if not exists content jsonb;
+alter table saved_resumes add column if not exists kind text not null default 'save';
 ```
 
 Nullable, no default, deliberately: a row written before this migration stays
 DISTINGUISHABLE from one written with an empty selection, the same reason
 `posting` and `page_margin` are nullable. A default of `'{}'` would make every
 historical row claim to be reproducible.
+
+`kind` is `'save'` or `'checkpoint'`, defaulting to `'save'` so every existing
+row is correctly classified as deliberate without a backfill. It exists because
+retention now depends on the distinction (Part 5) and the alternative — matching
+the `Checkpoint · <date>` label — would be a stringly-typed discriminator the
+user can type by hand. This repo already learned that once: `jobs.status` stores
+an immutable KEY and the label is presentation only, precisely so a rename
+rewrites no rows. Same rule here.
 
 An `ALTER` inherits the table's RLS and its `app_rw` grant — migration 009's
 column-list revoke is `users`-only and a table-level grant covers columns added
@@ -310,6 +319,61 @@ résumé outlives its role. For such a row the whole chat feature is permanently
 unreachable, not merely the button — `tailored_resumes.job_id` and
 `resume_chats.job_id` are both `NOT NULL`, so neither row can exist.
 
+### Part 5 — Tiered retention
+
+Revision 2 left this unresolved and blocking, because restoring put an
+indefinitely-held draft onto a 60-day clock. Resolved as three tiers:
+
+| row | retention |
+|---|---|
+| deliberate Save (`kind = 'save'`), **all of them** | 60 days |
+| newest checkpoint for a job | 30 days |
+| superseded checkpoints | 3 days |
+| the live `tailored_resumes` row | never expires |
+
+The last line is not a tier and must not become one: that row is the document
+being edited, not a snapshot of one.
+
+Every deliberate Save keeps its full 60 days however many there are. Decaying
+older ones was considered and rejected — a version the user consciously chose to
+keep would disappear because they saved a newer one, and the archive would stop
+being an archive.
+
+**The predicates do not change.** `EXPIRED_PREDICATE` and `LIVE_PREDICATE`
+(`lib/resume-retention.ts`) compare `expires_at` against `now()` and nothing
+else; only the STAMPING learns tiers. That keeps the one-home rule and the
+complementary-pair test intact, which matters because CLAUDE.md records this
+exact comparison as a live two-places hazard. `RETENTION_DAYS = 60` stays;
+`CHECKPOINT_RETENTION_DAYS = 30` and `SUPERSEDED_CHECKPOINT_DAYS = 3` join it in
+the same module, and `expiresAtFrom` takes the day count rather than three
+functions diverging.
+
+**Demotion.** "Newest" is a moving target, so writing a checkpoint demotes the
+previous newest checkpoint for that job:
+
+```sql
+update saved_resumes set expires_at = least(expires_at, now() + interval '3 days')
+where tenant_id = $1 and job_id = $2 and kind = 'checkpoint' and id <> $3
+```
+
+`least()` is load-bearing: stamping `now() + 3 days` unconditionally would
+EXTEND a checkpoint already 29 days old, quietly lengthening retention instead of
+shortening it. The demotion runs over every older checkpoint rather than only the
+one previously newest, so a row missed by an interrupted earlier write cannot
+linger at 30 days forever.
+
+**Visibility.** Saved cards already render "expires in N days" from `expires_at`.
+Checkpoint cards show the same line, so a 3-day row reads as urgent rather than
+disappearing silently. `listSavedResumes` therefore also selects `kind`, which is
+a short string and does not carry the payload problem `content` does.
+
+**What this narrows.** The promise is no longer "every state you have had is
+reachable." It is: the state before your most recent restore for 30 days,
+anything earlier for 3. Browse two saved versions in one sitting and the first
+checkpoint is immediately on the 3-day clock. Accepted deliberately — a
+checkpoint's real job is "undo what I just did" — but it is narrower than
+revision 2 claimed, and the earlier sentence in Part 2 is corrected accordingly.
+
 ## Deploy order
 
 1. Apply `021`. Additive and nullable; the running build is unaffected.
@@ -339,21 +403,25 @@ Pure logic, vitest, no database:
 - A restore with no `tailored_resumes` row yet writes no checkpoint and restores
   normally. Absent is not identical, and the two reach the same outcome by
   different routes.
+- Retention tiers: a deliberate Save stamps 60 days, a checkpoint 30. Demotion
+  moves an older checkpoint to 3 days but **never extends one** — assert against
+  a checkpoint whose `expires_at` is already inside 3 days, which is the case
+  `least()` exists for and the one a naive `now() + 3 days` passes silently.
+  Assert too that demotion leaves `kind = 'save'` rows untouched: a fixture with
+  only checkpoints in it cannot tell a correct `kind` filter from a missing one.
 
 Not covered, stated so it is not mistaken for covered: the upsert, the
 navigation, the confirm dialog, and the marker turn's effect on model behaviour.
 
 ## Risks
 
-- **Restoring puts an indefinitely-held draft on a 60-day clock.**
-  `tailored_resumes` has no expiry; `saved_resumes` rows expire at 60 days and are
-  swept by the cron purge, the opportunistic purge in `listSavedResumes`, and the
-  `LIVE_PREDICATE` filter on reads. After a restore, the pre-restore draft's only
-  copy is a checkpoint row, and ninety days later it is gone. Revision 1 called
-  this "the storage promise the app already makes rather than a new hazard" —
-  that was wrong, and it is the one risk here that silently loses user work.
-  Either the UI says so plainly, or checkpoints are exempted from retention.
-  **Unresolved; needs a decision before implementation.**
+- **Restoring puts an indefinitely-held draft on a clock.** `tailored_resumes`
+  has no expiry; a checkpoint does. Revision 1 called this "the storage promise
+  the app already makes rather than a new hazard," which was wrong. **Resolved by
+  Part 5**, which makes the clock explicit and visible rather than removing it:
+  30 days for the state before your most recent restore, 3 for anything earlier.
+  The residual risk is that 3 days is short if a user restores repeatedly while
+  exploring, then wants the state from the start of the session.
 - **No optimistic concurrency.** `sendChatTurn` reads context, calls the model for
   seconds, then upserts unconditionally. A restore landing mid-flight is
   overwritten with no conflict and no message: the user arrives at the tailor
