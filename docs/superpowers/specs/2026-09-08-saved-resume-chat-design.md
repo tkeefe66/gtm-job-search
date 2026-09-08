@@ -1,13 +1,20 @@
 # Editing a saved résumé: reproducible rows, checkpoint-then-restore
 
+**Revision 2**, after two independent reviews of revision 1. Revision 1 was
+wrong in four ways that would have shipped as data loss or as a document the
+user never had; the corrections are recorded inline at each point rather than
+in a trailing section, because each one changes the design rather than only its
+prose. What survived unchanged: the `content jsonb` column, the
+checkpoint-then-restore shape, and the affordance matrix.
+
 ## Why
 
-The résumé chat (`docs/superpowers/specs/2026-09-07-resume-chat-design.md`) lives
-on the tailor screen and only there. `ChatPanel` mounts inside `TailorPanel`
-(`components/resume/TailorPanel.tsx:243`), and `app/resume/page.tsx:30` renders
-`TailorPanel` only when the URL carries a `jobId`. Open a saved résumé —
-`/resume?savedId=…` — and there is no chat, because `savedId` wins over `jobId`
-at `app/resume/page.tsx:22` and routes to `SavedResumeScreen` instead.
+The résumé chat (`docs/superpowers/specs/2026-09-07-resume-chat-design.md`)
+lives on the tailor screen and only there. `ChatPanel` mounts inside
+`TailorPanel` (`components/resume/TailorPanel.tsx:243`), and `app/resume/page.tsx`
+renders `TailorPanel` (`:94`) only when the URL carries a `jobId` — `savedId`
+wins at `:23` and routes to `SavedResumePanel` instead. Open a saved résumé and
+there is no chat.
 
 That is not an oversight in the routing. A saved row **cannot** be chatted at as
 it stands, for two independent reasons.
@@ -15,47 +22,49 @@ it stands, for two independent reasons.
 **It has no selection.** `saved_resumes` (migration 016, plus `page_margin` from
 020) stores `html`, `design_version`, `content_hash`, `page_margin`, and the
 identity snapshot `role_title` / `company`. It does not store `{themes,
-selection, overrides}`; only `tailored_resumes` does. Every chat operation is a
-SELECTION operation — `set_taper`, `set_compress_after`, `set_positioning`,
-`set_bullets` all re-derive the document from the career record
-(`lib/resume-ops.ts:461-486`). Against a row holding only rendered HTML there is
-nothing for them to operate on.
+selection, overrides}`; only `tailored_resumes` does. The chat's operations are
+selection operations — `set_taper` (`lib/resume-ops.ts:461`), `set_compress_after`
+(`:480`), `set_positioning` (`:454`), `add_bullet` (`:407`), `drop_bullet`
+(`:416`), `swap_bullet` (`:424`) — every one writes into a `ResumeOverrides`
+draft that `effectiveDocument` (`lib/effective-document.ts:19-45`) later folds
+into a document. Against a row holding only rendered HTML there is nothing for
+them to write into.
 
-**Re-rendering one is forbidden.** The archive's whole point is that a saved row
-is mounted as stored and never passed back through `renderBody`, because
+> Revision 1 named a `set_bullets` operation that does not exist, and said these
+> ops "re-derive the document," which `effectiveDocument` does, not they. The
+> load-bearing point is unchanged.
+
+**Re-rendering a saved row is forbidden.** The archive's point is that a saved
+row is mounted as stored and never passed back through `renderBody`, because
 re-rendering applies today's career record and today's selection rules to a
-document the user committed to as final. That rule is recorded in CLAUDE.md and
-in `2026-09-07-saved-resumes-design.md`, and this spec does not weaken it: no
-path here ever re-renders an existing saved row. It creates new ones.
+document the user committed to as final. Nothing in this spec re-renders an
+existing saved row. It creates new ones — but see "Restore is itself a
+re-render" below, which revision 1 missed entirely.
 
-**And there is no undo, anywhere.** Verified by grep across `lib/resume-ops.ts`,
+**And there is no undo, anywhere.** Verified across `lib/resume-ops.ts`,
 `app/actions/resume-chat.ts` and `components/resume/ChatPanel.tsx`: no undo, no
-revert, no snapshot. `resume_chats` (019) stores the conversation but no per-turn
-document state, and `tailored_resumes` is a bare upsert — every chat turn and
-every Regenerate overwrites the one draft row for that job with no history. A
-user who chats three turns and dislikes the result today has nothing to go back
-to. This gap predates the current work and is the reason the first version of
-this design was rejected: it proposed restoring a saved row straight into that
-single draft, which would have added a second way to destroy unsaved work.
+revert, no snapshot. `resume_chats` (019) stores the conversation but no
+per-turn document state, and `tailored_resumes` is a bare upsert — every chat
+turn (`resume-chat.ts:567`, `:778`) and every Regenerate (`resume.ts:234`)
+overwrites the one draft row with no history. A user who chats three turns and
+dislikes the result has nothing to go back to. This gap predates the feature and
+is why revision 1's first shape — restore straight into that single draft — was
+rejected.
 
 ## Goals
 
-- The chat reachable from a saved résumé, operating on that row's actual
-  selection rather than on whatever the draft happens to hold.
-- Editing a saved version never destroys anything, including the current draft.
+- The chat reachable from a saved résumé, operating on that row's own selection.
+- Editing a saved version never destroys anything.
 - "I did XYZ and want to revert" answerable without a new history mechanism.
 - Rows saved before this change degrade honestly and say what they cannot do.
 
 ## Non-goals
 
-- **Draft branching.** One live draft per job stays the model. You can move
-  between directions through the archive; you cannot hold two live drafts side
-  by side and compare them. Real branching is a larger feature and nothing here
-  forecloses it.
-- **Re-rendering an existing saved row.** Never. The row is frozen.
-- **Making hand edits re-editable.** See "What restore cannot do" below.
-- **Changing retention.** Checkpoints expire at 60 days like every other saved
-  row (`lib/resume-retention.ts`).
+- **Draft branching.** One live draft per job. You can move between directions
+  through the archive; you cannot hold two live drafts side by side.
+- **Re-rendering an existing saved row.** Never.
+- **Making hand edits re-editable.**
+- **Optimistic concurrency on `tailored_resumes`.** See Risks.
 
 ## Design
 
@@ -67,172 +76,295 @@ single draft, which would have added a second way to destroy unsaved work.
 alter table saved_resumes add column if not exists content jsonb;
 ```
 
-Nullable, no default, deliberately. A row written before this migration is then
-DISTINGUISHABLE from one written with an empty selection — the same reason
-`posting` is nullable (CLAUDE.md: "a row predating it is distinguishable from one
-nothing was found for") and the same reason `page_margin` is. A default of `'{}'`
-would erase that difference and make every historical row claim to be
-reproducible.
+Nullable, no default, deliberately: a row written before this migration stays
+DISTINGUISHABLE from one written with an empty selection, the same reason
+`posting` and `page_margin` are nullable. A default of `'{}'` would make every
+historical row claim to be reproducible.
 
-An `ALTER` on an existing table inherits its RLS and its `app_rw` grant —
-migration 009's column-list revoke is `users`-only and a table-level grant covers
-columns added later, which `012_watchlist_signal.sql` and `020` both record. So
-no new policy and no new grant.
+An `ALTER` inherits the table's RLS and its `app_rw` grant — migration 009's
+column-list revoke is `users`-only and a table-level grant covers columns added
+later, recorded in `012_watchlist_signal.sql` and in `020`. No new policy, no new
+grant.
 
-`content` carries **the same shape as `tailored_resumes.content`**:
-`{themes, selection, overrides}`. One shape, one type, nothing to drift. Two
-details are load-bearing:
+`content` carries `{themes, selection, overrides}`, matching what
+`tailored_resumes.content` holds today (`resume-chat.ts:568`, `:779`). Note this
+is a MAXIMUM shape, not an invariant: Regenerate writes only `{themes, selection}`
+(`resume.ts:234`), so a freshly regenerated draft has no `overrides` key and
+readers must default it to `{}`. (CLAUDE.md and migration 016 both still describe
+`tailored_resumes.content` as `{themes, selection}`; that is stale and worth a
+separate correction.)
 
-- It stores the **base** selection, not the effective one. `loadResumeContext`
-  returns both (`app/actions/resume.ts:303-312`) precisely because the merged
-  view cannot be un-merged. Storing the effective selection would re-apply every
-  override on top of a selection that already has them folded in.
-- `overrides` travels with it. `pageMargin` lives in `ResumeOverrides` AND in its
-  own column (020, because the `<doc-page margin>` attribute sits outside the
-  captured `innerHTML`). Both are written; the column stays the one the saved
-  screen renders from, and the copy inside `content` is what a restore seeds the
-  draft with.
+It stores the **base** selection, never the effective one. `loadResumeContext`
+returns both (`app/actions/resume.ts:302-312`) precisely because the merged view
+cannot be un-merged; storing the effective selection would re-apply every
+override on top of a selection that already has them folded in.
 
-`SaveResumeInput` gains `content` as a **required** field. Optional would mean a
-future call site silently writes another unreproducible row, and this repo's
-habit for exactly that hazard is a structural guard rather than a convention —
-`INGEST_EXEMPT_COLUMNS` is the precedent. `saveResume`'s insert list and both
-read queries (`app/actions/saved-resumes.ts:82`, `:121`, `:141`) gain the column;
-the tenant id stays `rawQuery`'s third argument at every one, unchanged.
+#### `content` is not a client input
+
+> **Revision 1 was wrong here, and the error was self-concealing.** It made
+> `content` a required field on `SaveResumeInput` — an input populated by the
+> client. But `app/resume/page.tsx:96` passes `initialSelection={resumeContext.selection}`,
+> the EFFECTIVE selection, and discards `baseSelection`; `TailorPanel`'s state is
+> then updated from `sendChatTurn`'s `doc.selection`, also effective. So the
+> natural implementation would have written effective-selection-plus-overrides —
+> exactly the double-apply corruption the spec's own round-trip test existed to
+> catch. That test could not have caught it: it asserts on `saveResume`'s inputs,
+> and the wrong value is supplied upstream in a component, and `components/**` is
+> outside vitest's include list.
+
+`content` is therefore read **server-side**, never accepted from the caller.
+Two entry points, because the two Save buttons mean genuinely different things
+and revision 1 conflated them:
+
+- **`saveResumeFromDraft({ jobId, html, pageMargin, label? })`** — the tailor
+  screen's Save (`TailorPanel.tsx:106`). Reads `tailored_resumes` for that job
+  inside the action and stores what it finds as `content`.
+- **`saveResumeAsNewVersion({ fromSavedId, html, pageMargin, label? })`** — the
+  archive screen's "Save as new version" (`SavedResumePanel.tsx:48`). Copies the
+  SOURCE row's `content` forward, which is `null` for a pre-021 row. It must not
+  reach for the draft: that button captures the frozen row's DOM, so attaching
+  the draft's selection would produce a row whose `html` and `content` describe
+  different documents with nothing recording which is authoritative.
+
+Both funnel into one private insert. Splitting the action is what makes the build
+find every call site with a correct answer available at each — which the
+"required field" approach could not do, since `SavedResumePanel` has no selection
+to pass. Revision 1 cited `INGEST_EXEMPT_COLUMNS` as precedent for that required
+field; the analogy was wrong. `INGEST_EXEMPT_COLUMNS` is a RUNTIME structural
+guard with a test that captures `addJob`'s real argument
+(`lib/ingest-roles.test.ts:436-458`), not a compile-time signature.
+
+A pre-existing bug this flow inherits: `saveAsNew` passes
+`jobId: resume.jobId as string`, which is `null` for an orphaned row, and
+`saved-resumes.ts:63`'s `job_id = $2` never matches under SQL null semantics — so
+the duplicate check is silently inert for those rows. Out of scope to fix here,
+recorded so it is not mistaken for something this change introduced.
+
+#### Read paths
+
+`getSavedResume` (`saved-resumes.ts:141`) selects `content`.
+
+`listSavedResumes` (`:121`) selects **`content is not null as has_content`**, not
+`content`.
+
+> Revision 1 said both queries "gain the column." That would have shipped every
+> document's full selection, `overrides.text` (arbitrary rewritten bullet text)
+> and `overrides.design` for every live row in the tenant on one page load —
+> the same mistake `lib/types.ts` already documents having avoided for `html`
+> ("at up to 512 KB per row it would make the archive list ship every document
+> in the tenant"). The affordance needs a boolean, so the query returns a
+> boolean.
 
 ### Part 2 — Checkpoint, then restore
 
-The archive is already a version history: many rows per job, each a frozen point,
-bounded by retention. It simply has not been used as one, because saving is
-manual and restoring would clobber. Closing both makes revert fall out with no
-new table.
+The archive is already a version history: many rows per job, each frozen,
+bounded by retention. It has not been used as one because saving is manual and
+restoring would clobber. Closing both makes revert fall out with no new table.
 
-"Edit this version" on a saved row S does three things, in order:
+**One action, `restoreSavedVersion(savedId)`**, taking `savedId` and nothing
+else. It reads the saved row tenant-scoped and derives `job_id` from it.
 
-1. **Checkpoint the current draft.** Render `tailored_resumes.content` through
-   `renderBody` on the server and write the result as a saved row labelled
-   `Checkpoint · <date>`. This is a NEW row built from a live selection, not a
-   re-render of an existing saved row, so the archive's never-re-render rule is
-   untouched. The existing `content_hash` duplicate check
-   (`app/actions/saved-resumes.ts:57-77`) does real work here: a draft identical
-   to a live saved row writes nothing, so browsing the archive does not
-   accumulate junk.
+> Revision 1 left the input unstated. If the button passed `jobId` — it is in the
+> URL and in client state — an arbitrary `jobId` would reach the
+> `tailored_resumes` upsert. RLS checks `tenant_id`, and the FK to `jobs`
+> bypasses row security by design (migration 016's own comment says so), so a
+> caller could create a row in their own tenant keyed to another tenant's job.
+> No cross-tenant read, but a write keyed by an unowned identifier, and trivially
+> avoided.
 
-   Rendering server-side rather than capturing a DOM is not a compromise here,
-   because there is no DOM to capture: this runs from `/resume?savedId=…`, where
-   no tailor screen is mounted. It is also complete, because a draft's hand
-   edits never reach the database by typing — `tailored_resumes` holds
-   `{themes, selection, overrides}` and nothing else, and `useResumeCapture`
-   runs only on Save. So the server render IS the draft's full persisted state.
-2. **Restore S.** Upsert S's `content` into `tailored_resumes` for that job.
-3. **Navigate** to `/resume?jobId=…`, the existing tailor screen, with the chat.
+The action, in order, aborting on any failure:
 
-Reverting is then the same button on an earlier row — the checkpoint written in
-step 1, or any deliberate Save. Every state the user has had is reachable, and
-the only bound is the 60-day window.
+**1. Render the current draft.** The full pipeline, named explicitly because
+"render `content` through `renderBody`" is ambiguous and revision 1's reading of
+it was wrong:
 
-A one-level `previous jsonb` column on `tailored_resumes` was considered as a
-cheaper undo and rejected: one level only, and it does nothing for "revert to
-what I saved last week," which the checkpoint approach answers for free.
+```
+readAllSettingsResult → careerOverlayFrom → effectiveCareer(career, overlay, overrides.text)
+  → effectiveDocument(...) → renderBody(doc.career, doc.selection, { rootStyle: styleAttributeFor(overrides.design) })
+```
 
-### Part 3 — What restore cannot do
+plus `overrides.pageMargin` carried into the insert the way `TailorPanel:112`
+does. This is `loadResumeContext` and `ResumeDocument` combined.
 
-Save captures `docPageEl.innerHTML` from the live DOM
-(`components/resume/useResumeCapture.ts`), so a saved row can hold hand edits
-that no selection reproduces. A restore rebuilds from the selection, so those
-edits do not come back **editable**.
+> Revision 1 said "render `tailored_resumes.content` through `renderBody`", which
+> read literally means `renderBody(shippedCareer, content.selection)` — silently
+> dropping overlay bullets, text overrides, `compressAfter` (applied onto
+> `career.rules`, not passed as a render option), taper, lead, and the
+> design-token `rootStyle`. The checkpoint would have been a document the user
+> never had, while the spec claimed it "IS the draft's full persisted state."
 
-The row being restored keeps its own edits — it is frozen and nothing here
-writes to it — so they remain viewable, printable and downloadable as a
-document. Only their re-editability is gone, and the confirm says exactly that.
+Rendering server-side rather than capturing a DOM is correct here, not a
+compromise: this runs from `/resume?savedId=…` where no tailor screen is
+mounted, and a draft's hand edits never reach the database by typing —
+`tailored_resumes` holds `{themes, selection, overrides}` and nothing else, and
+`useResumeCapture` runs only on Save (its only two call sites are the two Save
+handlers, `TailorPanel.tsx:105` and `SavedResumePanel.tsx:43`).
 
-An earlier draft of this spec claimed the step-1 checkpoint also preserves the
-CURRENT DRAFT's hand edits. That was wrong, and the correction matters because
-it would have promised the user something the code cannot do. A draft's hand
-edits live only in an open tailor screen's DOM and reach the database only
-through Save; `tailored_resumes` never holds them. From `/resume?savedId=…`
-there is no such DOM, so there are no unpersisted edits at risk and none for a
-checkpoint to capture. The one residual case is a tailor screen left open in
-another tab with untyped-through edits — restoring does not reach into that tab,
-and its edits die on its next reload exactly as they do today (CLAUDE.md records
-reload discarding them). That is a pre-existing property of the draft screen, not
-something this change introduces.
+**2. Write the checkpoint**, labelled `Checkpoint · <date>`, with
+`role_title` / `company` taken from **the saved row S's own snapshot**. Those
+columns are `NOT NULL`, and no job read has happened on this screen; borrowing
+S's identity is correct only because the checkpoint and S share a `job_id`, which
+is why the action derives `job_id` from S rather than accepting it.
 
-The confirm states this **every time**, rather than detecting it. Re-rendering
-the restored selection and comparing hashes against `content_hash` was
-considered: it would also fire on `DESIGN_VERSION` drift and on sanitizer
-changes, so a mismatch means "cannot reproduce this exactly" rather than "hand
-edits present". Since that is the sentence being shown either way, the check buys
-nothing and is not built.
+**Suppression rule.** Skip the checkpoint only when the draft's `content` equals
+the newest live saved row's `content`, and never when that row's `content` is
+null.
+
+> Revision 1 said the existing `content_hash` check would suppress duplicates.
+> That is a hash of HTML, and it opens a data-loss path: if the newest live row R
+> predates 021 (or came from `saveAsNew`, or carries hand edits) and the rendered
+> draft happens to hash-match R, no checkpoint is written, the restore overwrites
+> `tailored_resumes`, and the draft's selection now exists nowhere — R has
+> `content = null`, so R itself reports `draftOnly`. HTML equality also does not
+> imply selection equality: `page_margin` lives OUTSIDE `docPageEl.innerHTML`
+> (migration 020's entire reason), so a draft differing only in
+> `overrides.pageMargin` hashes identically and would lose the margin. Comparing
+> `content` rather than `html` fixes both. Revision 1's assertion that "every
+> state the user has had is reachable" was false as written.
+
+**3. Restore.** Upsert S's `content` into `tailored_resumes`. Proceeds **only**
+if step 2 returned `{id}` or `{duplicateOf}`; any `{error}` aborts and reports,
+writing nothing. `sanitizeResumeHtml` can legitimately refuse the render
+(`MAX_HTML_BYTES` 512 KB, the `.rsm` root check) and the insert can fail like any
+write — revision 1 described the steps as ordered but not as conditional, which
+would destroy the draft with no checkpoint.
+
+**4. Append a marker turn to `resume_chats`** recording the restore, then
+navigate.
+
+> Revision 1 ignored `resume_chats` entirely, and this is the gap most likely to
+> produce confusing behaviour on day one, given the feature exists to put the
+> chat in front of saved rows. The thread is per `(tenant, job)` and
+> `sendChatTurn` passes the FULL prior thread into `buildChatPrompt`
+> (`resume-chat.ts:363`). After restoring V1 the thread still holds the turns
+> that produced V2, so the model is told it already made changes the restored
+> document does not contain. Worse, `acceptProposedBullets`
+> (`resume-chat.ts:712-718`) resolves ids against every proposal the thread has
+> ever carried, so a proposal from the discarded direction stays accept-able
+> against the restored draft. A marker turn is the cheapest honest fix: the
+> thread stays a continuous log, and the model is told the base changed. Clearing
+> the thread was considered and rejected — it destroys the reasoning that
+> produced both versions, which is the thing the user is moving between.
+
+### Part 3 — Restore is itself a re-render, and the confirm must say so
+
+Restoring rebuilds from `content.selection` against **today's** career record,
+today's overlay, and today's `DESIGN_VERSION`. That is the same operation the
+archive forbids for saved rows, applied legitimately to a new draft rather than
+to a frozen row — but the user-visible consequence is real and revision 1's
+confirm text mentioned only hand edits.
+
+Concretely: `render.js` resolves each selected id against the role's bullets and
+drops unknown ids silently, and **drops the whole role when nothing survives**.
+Delete an overlay bullet (`propose_career_bullet` / `acceptProposedBullets` write
+them, and nothing prevents their later removal), restore a version that selected
+it, and a role can vanish with no message.
+
+So the confirm states two things, every time, rather than detecting either:
+
+1. This rebuilds the document from its selection against the current career
+   record, and may differ from what you saved.
+2. Hand edits in the saved version do not come back editable. The row itself is
+   frozen and untouched, so they remain viewable, printable and downloadable.
+
+Detection was considered — re-render the restored selection and compare against
+`content_hash` — and rejected: it also fires on `DESIGN_VERSION` drift and
+sanitizer changes, so a mismatch means "cannot reproduce this exactly," which is
+the sentence being shown either way.
+
+> Revision 1 also claimed the step-2 checkpoint preserves the CURRENT DRAFT's
+> hand edits. It cannot: a draft's hand edits live only in an open tailor DOM.
+> The residual case is a tailor screen open in another tab, whose edits die on
+> its next reload exactly as they do today. Separately, the saved screen mounts
+> its frozen HTML `contentEditable` (`SavedResumePanel.tsx:158-163`), so clicking
+> "Edit this version" navigates away and discards uncaptured edits made THERE —
+> the confirm should mention it if any are pending.
+
+`design_version` is not part of `content` and is not restored. The checkpoint
+stamps the current `DESIGN_VERSION`, correctly, since it is a fresh render. A
+restored draft therefore carries no "saved against an earlier document design"
+notice — that string exists only in `SavedResumePanel`. Known gap, not fixed
+here.
 
 ### Part 4 — The affordance
 
-One pure function, `savedEditAffordance(row)` in `lib/saved-edit-affordance.ts`,
-returning a discriminated union. It is a pure function for the reason
-`signInBody`, `enrichGate` and `compRescoreOffer` are: a server component's JSX
-is reachable from no test in this repo, so a branch written as a ternary in the
-component is green under a suite that cannot see it.
+One pure function, `savedEditAffordance({ hasContent, jobId })` in
+`lib/saved-edit-affordance.ts`, returning a discriminated union — pure for the
+reason `signInBody` (`lib/auth-policy.ts:246`), `enrichGate`
+(`lib/enrich-scope.ts:89`) and `compRescoreOffer` (`lib/rescore-progress.ts:123`)
+are: a server component's JSX is reachable from no test in this repo, so a branch
+written as a ternary is green under a suite that cannot see it.
 
-| `content` | `job_id` | result | rendered as |
+| `hasContent` | `job_id` | result | rendered as |
 |---|---|---|---|
-| present | present | `restore` | **Edit this version →** |
-| null | present | `draftOnly` | **Open the current draft →**, noting it may differ from this document |
+| true | present | `restore` | **Edit this version →** |
+| false | present | `draftOnly` | **Open the current draft →**, noting it may differ |
 | either | null | `unavailable` | no button, "the tracked role this came from was deleted" |
 
-`draftOnly` is the honest-degradation case the user chose over hiding the button:
-a row saved before this migration has no selection to restore, so the button
-opens the current draft and says that it may not match what is on screen. It is
-the same shape as the `unread` warning on a tailored résumé — the document is not
-withheld, but it does not pretend either.
+`draftOnly` navigates only. It writes no checkpoint and restores nothing, so it
+is safe — worth stating, because an implementer could reasonably route it through
+`restoreSavedVersion` and write a pointless row.
 
-`unavailable` follows from `job_id uuid references jobs(id) on delete set null`
-(migration 016): an archived résumé outlives the tracked role, which is why
-`role_title` and `company` are snapshotted onto the row. With no job there is no
-draft to restore into and no tailor screen to open.
+`unavailable` follows from `job_id ... on delete set null` (016): an archived
+résumé outlives its role. For such a row the whole chat feature is permanently
+unreachable, not merely the button — `tailored_resumes.job_id` and
+`resume_chats.job_id` are both `NOT NULL`, so neither row can exist.
 
 ## Deploy order
 
-1. Apply `021` to production. Additive and nullable, so the running build is
-   unaffected by it.
+1. Apply `021`. Additive and nullable; the running build is unaffected.
 2. Deploy the code. Rows saved from that point carry `content`; earlier rows
-   report `draftOnly` forever, which is correct — nothing backfills them. A
-   backfill from the current draft was rejected: it would claim a document was
-   built from a selection that may not have produced it.
+   report `draftOnly` forever. Nothing backfills them — a backfill from the
+   current draft would claim a document was built from a selection that may not
+   have produced it.
 
 ## Testing
 
 Pure logic, vitest, no database:
 
-- `savedEditAffordance` — one test per row of the matrix above. The `null job_id`
-  case must be asserted with `content` PRESENT as well as absent, since
-  `unavailable` has to win over `restore`; a fixture that only ever pairs a null
-  job with null content cannot tell the two orderings apart.
-- Round-trip: what `saveResume` writes as `content` is the shape
-  `loadResumeContext` reads back — a guard against the base/effective confusion
-  in Part 1, which is invisible until a restored draft renders with its overrides
-  applied twice.
-- The checkpoint decision: a draft identical to the newest live saved row writes
-  no checkpoint; a differing one does. The boundary is `content_hash` equality,
-  and the test needs both sides of it, not just the differing case.
-- A restore with NO draft row yet (`tailored_resumes` empty for that job — a
-  résumé saved, then the draft never regenerated) writes no checkpoint and
-  restores normally. Absent is not the same as identical, and the two reach the
-  same "no checkpoint" outcome by different routes.
+- `savedEditAffordance` — one test per row of the matrix. The null-`job_id` case
+  must be asserted with `hasContent` TRUE as well as false, since `unavailable`
+  has to win over `restore`; a fixture pairing a null job only with absent
+  content cannot tell the two orderings apart.
+- **The checkpoint render pipeline** — render a known `content` through the
+  checkpoint path and assert byte-equality against
+  `renderBody(effectiveDocument(...), { rootStyle })`. This is the test that
+  bites on revision 1's two worst errors at once: the dropped overrides, and the
+  base-vs-effective confusion. Without it both are invisible until a restored
+  draft renders wrong.
+- The suppression rule: a draft whose `content` equals the newest live row's
+  writes no checkpoint; one that differs writes one; and a newest row with
+  `content = null` **always** writes one. Three cases, because the third is the
+  data-loss path and is not implied by the first two.
+- A restore with no `tailored_resumes` row yet writes no checkpoint and restores
+  normally. Absent is not identical, and the two reach the same outcome by
+  different routes.
 
-Not covered by tests, and stated so it is not mistaken for covered: the actual
-upsert, the navigation, and the confirm dialog. Those are verified by using the
-feature.
+Not covered, stated so it is not mistaken for covered: the upsert, the
+navigation, the confirm dialog, and the marker turn's effect on model behaviour.
 
 ## Risks
 
-- **Checkpoint noise.** Auto rows share the archive with deliberate Saves. The
-  `Checkpoint · <date>` label is what keeps them distinguishable; if the list
-  still reads as cluttered in use, grouping or de-emphasis in
-  `lib/saved-resume-grouping.ts` is the place to fix it, not suppression of the
-  checkpoint itself.
-- **A revert target can age out.** Checkpoints expire at 60 days like everything
-  else. This is the storage promise the app already makes rather than a new
-  hazard, but a user who expects an indefinite history will be surprised.
-- **`content` required is a breaking change to `SaveResumeInput`.** Intentional —
-  the build is the gate that finds every call site. `npm run build` typechecks at
-  ES5 and is the verification step (CLAUDE.md).
+- **Restoring puts an indefinitely-held draft on a 60-day clock.**
+  `tailored_resumes` has no expiry; `saved_resumes` rows expire at 60 days and are
+  swept by the cron purge, the opportunistic purge in `listSavedResumes`, and the
+  `LIVE_PREDICATE` filter on reads. After a restore, the pre-restore draft's only
+  copy is a checkpoint row, and ninety days later it is gone. Revision 1 called
+  this "the storage promise the app already makes rather than a new hazard" —
+  that was wrong, and it is the one risk here that silently loses user work.
+  Either the UI says so plainly, or checkpoints are exempted from retention.
+  **Unresolved; needs a decision before implementation.**
+- **No optimistic concurrency.** `sendChatTurn` reads context, calls the model for
+  seconds, then upserts unconditionally. A restore landing mid-flight is
+  overwritten with no conflict and no message: the user arrives at the tailor
+  screen showing the old draft plus one chat op, with a checkpoint row implying a
+  restore that did not survive. Double-clicking "Edit this version" likewise
+  writes a checkpoint of the just-restored content. Accepted limitation unless a
+  `generated_at` guard is added to the restore upsert.
+- **Checkpoint noise.** Auto rows share the archive with deliberate Saves; the
+  label is what distinguishes them. There is no cap on saved rows per job and each
+  carries a full HTML document. If it reads cluttered,
+  `lib/saved-resume-grouping.ts` is where to fix it.
+- **Two cards, one document.** After a restore the archive shows both the
+  checkpoint and S, and the draft is a copy of S. "One live draft per job" holds
+  mechanically but is not what the user sees.
