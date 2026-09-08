@@ -109,22 +109,61 @@ manual intake is complete coverage for an hour's work.
 crawl's dedupe. It ingests through `ingestRoles` like everything else, so the dedupe
 is free; the gate needs a decision.
 
-### Step 2 — Measure the numbers that decide whether Step 3 happens at all
+### Step 2 — MEASURED 2026-09-07, and it reorders the rest
 
-Revision 1 gated on board coverage. That is necessary and not sufficient. Four
-numbers, none yet measured:
+| Question | Answer |
+|---|---|
+| JD coverage on rows scored 4 or 5 | **3 of 58** |
+| JD coverage on rows moved off New | **9 of 41** |
+| Rows by source | Role Search **133**, Crawl 32, Discover 30 |
+| Unread AND open, by source | Role Search **46**, Crawl 12, Discover 1 |
+| Links: employer ATS vs aggregator | 57 vs **76** |
+| Watchlist companies with a READ slug already stored | 6 of 13 |
 
-1. **JD coverage over rows that MATTER** — `fit_score >= 4`, or status moved off
-   `New`, or carrying a `tailored_resumes` row. Coverage over all 195 rows is a
-   number nobody experiences; most inventory exists because search is cheap.
-2. **Unread rows by `jobs.source`** (`Crawl` / `Role Search` / `Discover`). Step 3
-   changes ONLY the crawl. The unread hosts are dominated by aggregators, which
-   points at role search, not careers-page crawling — if so, Step 3 does not address
-   the population this document measured.
-3. **Board resolution split: READ slug vs GUESSED slug**, per vendor. This decides
-   the safety of Step 3, not just its reach (see below).
-4. **Board size distribution** at resolved companies, against the 300s Railway edge
-   timeout and a measured 91.2s worst-case crawl.
+Two conclusions, both against revision 2's plan:
+
+1. **The coverage problem is real where it counts.** Review's strongest objection was
+   that coverage over all 195 rows is a number nobody experiences, and that the rate
+   over rows the user actually engaged with might be fine. It is not: 5% of the rows
+   scored 4-or-better carry a JD, and 22% of the rows the user has moved. The work is
+   justified on the rows that matter, not just on inventory.
+
+2. **Board enumeration in the CRAWL addresses the minority.** Role Search made 133 of
+   195 rows and owns 46 of the 59 unread-open rows; the crawl owns 12. Revision 2 put
+   crawl enumeration at the centre. Measured, it is the smallest of the three
+   populations, and the reviewer who predicted exactly this was right.
+
+The unread-open rows by host are `indeed.com` 13, `openai.com` 12, `ziprecruiter.com`
+6, `corningjobs.corning.com` 5, `linkedin.com` 3, `builtin.com` 3 — i.e. almost
+entirely the hosts that block automated readers. That is the population Step 1
+reaches and no amount of sourcing cleverness does.
+
+### Step 3 — Verify at ROLE SEARCH intake (the 133-row path)
+
+The rebuild proper, and it belongs here rather than at the crawl because this is
+where four fifths of the table comes from. Today a search hit is stored as whatever
+link ranked. Instead, for each hit, before the row is written:
+
+1. Resolve to the employer's own posting where possible — `classifyJobLink` plus
+   `resolveEmployerLink` for an aggregator link, exactly as `upgradeLink` already
+   does at ingest.
+2. Read the JD through `readPosting` (page, then board API).
+3. Take the employer's own name from the read (`hiringOrganizationFrom`, Greenhouse
+   `company_name`) rather than the model's transcription.
+4. Store the row with its JD, or store it marked unread with the reason — never
+   silently as though it were verified.
+
+`ingestRoles` already does steps 1-3 for up to `MAX_INGEST_READS` roles per run. What
+this step changes is the BUDGET and the ORDERING for the search path: a role-search
+run that finds 20 roles currently reads 6 of them. Raising that for a user-initiated
+search (which has no cron timeout to respect, unlike the crawl) is most of the work.
+
+### Step 4 — Board ENUMERATION for tracked companies (the 12-row path)
+
+Kept, because a tracked company is exactly where a board pays off repeatedly, and
+because 6 of 13 watchlist companies already have a READ slug stored — no guessing
+needed for those. But it is last now, and its safety rules stand unchanged from
+revision 2:
 
 ### What survives: the two discovery surfaces, with verification added
 
@@ -151,7 +190,7 @@ change to each is a verification step, not a replacement:
 Stated as a rule: **search decides WHAT to look at; boards and the posting itself
 decide WHAT IS TRUE about it.** Nothing in Step 3 may reduce what the app can find.
 
-### Step 3 — Board ENUMERATION, only if the numbers support it
+#### Step 4's detail
 
 Note the narrowing: reading a JD off a board API already ships (`fetchPostingBody`,
 used by `readPosting` at ingest and enrich). What this step adds is **enumeration** —
