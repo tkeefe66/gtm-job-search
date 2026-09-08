@@ -20,7 +20,7 @@
  *
  * NO /u FLAG AND NO \p{...} IN THIS FILE. tsconfig declares no target, so the
  * build typechecks at ES5 and either passes vitest then fails `npm run build`
- * (lib/resume-sanitize.ts:27 carries the same warning).
+ * (lib/resume-sanitize.ts:28 carries the same warning).
  */
 
 interface TokenSpec {
@@ -129,7 +129,7 @@ const PAGE_MARGIN_RE = new RegExp("^[0-9]+(\\.[0-9]+)?(" + PAGE_MARGIN.units.joi
 
 /**
  * The page margin is NOT a token. It is the `margin` attribute on <doc-page>
- * (ResumeDocument.tsx:76), which doc-page.js maps to its own --doc-page-margin
+ * (ResumeDocument.tsx:85), which doc-page.js maps to its own --doc-page-margin
  * on an ANCESTOR of .rsm — unreachable from an inline override on .rsm under
  * any spelling. Its bounds are in whatever unit was given, so mm and px are
  * converted to inches before the range check.

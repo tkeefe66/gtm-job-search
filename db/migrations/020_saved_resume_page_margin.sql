@@ -1,5 +1,5 @@
 -- The page margin is the `margin` attribute on <doc-page>
--- (components/resume/ResumeDocument.tsx:76), which lives OUTSIDE the
+-- (components/resume/ResumeDocument.tsx:85), which lives OUTSIDE the
 -- docPageEl.innerHTML that useResumeCapture serializes — so unlike the design
 -- token overrides, which ride along on the .rsm root, it is not captured and
 -- must be stored on the row. A margin that looks right in the draft and

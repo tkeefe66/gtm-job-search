@@ -5,8 +5,8 @@
  * deliberate: renderBody runs on the CLIENT, from a vendored file, and
  * app/resume/page.tsx used to hand it the record imported statically from
  * content/resume.json. Any override the server knew about and that record did
- * not would silently fail to render — render.js:145 resolves ids against the
- * record and .filter(Boolean) drops what it cannot find, and :146 drops the
+ * not would silently fail to render — render.js:172 resolves ids against the
+ * record and .filter(Boolean) drops what it cannot find, and :173 drops the
  * whole ROLE when nothing survives. So the server merges once, up front, and
  * selectBullets, renderBody and coverage all operate on the result.
  *

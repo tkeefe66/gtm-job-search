@@ -2,8 +2,8 @@
 // The allowlist is derived from THREE sources, not one. An earlier design took
 // it from renderBody's literal tag output, which is wrong twice:
 //
-//  1. render.js does not escape bullet text (:155), role title (:149) or the
-//     <b> interpolations (:161,:173), and content/resume.json carries 22
+//  1. render.js does not escape bullet text (:182), role title (:176) or the
+//     <b> interpolations (:188,:200), and content/resume.json carries 22
 //     <strong> tags. A list without `strong` silently strips every bold run
 //     from every archived résumé.
 //  2. What gets saved is contentEditable output, not renderer output. Enter
@@ -11,7 +11,7 @@
 //     user's edits with no message — likelier than the <img onerror> paste
 //     this module is built for.
 //
-// The `style` exception is real too: render.js:169 emits
+// The `style` exception is real too: render.js:196 emits
 // style="margin-bottom:0" on the last section on every render, and stripping it
 // restores a bottom margin that at a page boundary is one page versus two.
 import sanitizeHtml from "sanitize-html";

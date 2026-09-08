@@ -58,7 +58,7 @@ export default function ChatPanel({
 }: {
   jobId: string;
   /** Mirrors TailorPanel's own `dirty` state. A chat turn re-renders the
-   *  document from React state, and ResumeDocument.tsx:68-73 is explicit that
+   *  document from React state, and ResumeDocument.tsx:80-83 is explicit that
    *  re-setting dangerouslySetInnerHTML discards unsaved hand edits — this is
    *  the one thing standing between that and a silent loss. */
   dirty: boolean;

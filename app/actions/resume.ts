@@ -293,7 +293,7 @@ export async function getTailoredResume(jobId: string): Promise<{
  *
  * The career record must not be imported statically by the page any more: an
  * overlay bullet or a text override the server scored would not exist in the
- * client's copy, and render.js:145-146 drops unknown ids silently and the whole
+ * client's copy, and render.js:172-173 drops unknown ids silently and the whole
  * role when nothing survives.
  */
 export async function loadResumeContext(jobId: string): Promise<{

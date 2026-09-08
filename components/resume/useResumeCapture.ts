@@ -8,7 +8,7 @@
  *
  *  1. It captures docPageEl.innerHTML, NOT the .rsm div's innerHTML.
  *     document.css:5 scopes the entire design to `.rsm`, and that wrapper is
- *     emitted by renderBody (render.js:127). One level deeper loses the root
+ *     emitted by renderBody (render.js:154). One level deeper loses the root
  *     every selector hangs off and the saved résumé renders as unstyled text.
  *  2. It removes the on-screen page guides first. rsm-page-guides.js appends
  *     them INSIDE the .rsm element (:138) while their styles go to

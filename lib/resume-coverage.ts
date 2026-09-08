@@ -3,7 +3,7 @@
  *
  * `coverage()` in the vendored render.js audits the whole POOL: selectBullets
  * fills `bullets` for every role (render.js:41) while renderBody renders only
- * roles.slice(0, compressAfter) (render.js:117-119). Measured on the shipped
+ * roles.slice(0, compressAfter) (render.js:135-136). Measured on the shipped
  * record with themes systems/data/ops that is 23 selected against 16 rendered,
  * strength 0.870 against 0.813, and six of ten roles listed for `systems` being
  * compressed one-line rows carrying no bullets at all. A panel that claims to
