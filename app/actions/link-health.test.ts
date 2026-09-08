@@ -407,3 +407,45 @@ describe("a row that ends up closed is never also listed as undecided", () => {
     expect(report.unclear).toHaveLength(1);
   });
 });
+
+// The cleanup side of the same finding: 15 rows already stored whose "posting"
+// is a job-board query or whose company is a description. Check links can clear
+// them because they are decidable without a network call at all — there is no
+// posting to check.
+describe("rows that were never postings are closed", () => {
+  test("a job-board search page is closed and counted", async () => {
+    h.jobs = [job({ job_url: "https://www.indeed.com/q-npi-manager-jobs.html" })];
+
+    const report = await repairJobLinks();
+
+    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(report.closedNotAPosting).toBe(1);
+  });
+
+  test("a placeholder company is closed too", async () => {
+    h.jobs = [job({ company: "Confidential (via CSG Talent)" })];
+
+    const report = await repairJobLinks();
+
+    expect(report.closedNotAPosting).toBe(1);
+  });
+
+  // Decidable with no request at all — so it must not spend one, and must run
+  // before every other check.
+  test("neither the board nor the page is consulted for one", async () => {
+    h.jobs = [job({ job_url: "https://www.indeed.com/q-npi-manager-jobs.html" })];
+
+    await repairJobLinks();
+
+    expect(vi.mocked(checkJobUrl)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchPage)).not.toHaveBeenCalled();
+  });
+
+  test("a real posting is not touched by this rule", async () => {
+    h.jobs = [job({ job_url: "https://www.indeed.com/viewjob?jk=abc" })];
+
+    const report = await repairJobLinks();
+
+    expect(report.closedNotAPosting).toBe(0);
+  });
+});

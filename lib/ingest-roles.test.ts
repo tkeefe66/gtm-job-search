@@ -739,3 +739,49 @@ describe("a caller may raise or lower how many postings one ingest reads", () =>
     expect((insertedRow().posting as { enrichedAt?: string }).enrichedAt).toBeTruthy();
   });
 });
+
+// Found in production 2026-09-07: 15 rows whose "posting" was a job board's
+// SEARCH page, and companies like "Confidential (via CSG Talent)". They scored
+// 2-4 and sat in the open pipeline looking like work, and no sourcing
+// improvement could ever reach them — there is no posting behind a query.
+describe("a search page is not a role, and a description is not an employer", () => {
+  test("a role whose link is a job-board query is never stored", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    const res = await ingestRoles({
+      ...OPTS,
+      roles: [{ ...ROLE, job_url: "https://www.indeed.com/q-npi-manager-jobs.html" }],
+    });
+
+    expect(vi.mocked(addJob)).not.toHaveBeenCalled();
+    expect(res.added).toEqual([]);
+  });
+
+  test("a placeholder company is never stored", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, company: "Confidential (via CSG Talent)", roles: [ROLE] });
+
+    expect(vi.mocked(addJob)).not.toHaveBeenCalled();
+  });
+
+  // The rejection must not cost a read or a score — those are the two things
+  // that spend money, and a row that will not be stored must spend neither.
+  test("a rejected role costs no read and no score", async () => {
+    await ingestRoles({
+      ...OPTS,
+      roles: [{ ...ROLE, job_url: "https://www.ziprecruiter.com/Jobs/Industrial-Coatings" }],
+    });
+
+    expect(vi.mocked(readPosting)).not.toHaveBeenCalled();
+    expect(vi.mocked(scoreFit)).not.toHaveBeenCalled();
+  });
+
+  test("a real role at a real company is unaffected", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    const res = await ingestRoles(OPTS);
+
+    expect(res.added).toEqual([ROLE]);
+  });
+});

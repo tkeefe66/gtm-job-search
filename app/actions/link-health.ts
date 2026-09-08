@@ -11,6 +11,7 @@ import { relinkPatch } from "@/lib/relink";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { bucketFor } from "@/lib/job-statuses";
 import { deadPostingMarker } from "@/lib/dead-posting";
+import { notAPosting } from "@/lib/not-a-posting";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import type { UnclearReason } from "@/lib/link-report";
 import type { Job } from "@/lib/types";
@@ -85,6 +86,13 @@ export interface LinkRepairReport {
    */
   closedRemoved: number;
   /**
+   * Rows that were never postings: a job board's SEARCH page stored as a
+   * posting, or a company that is a description rather than an employer. Its
+   * own counter because it is not a posting that DIED — it never existed, and
+   * the fix is at ingest (which now refuses them) rather than in link health.
+   */
+  closedNotAPosting: number;
+  /**
    * Every row this pass could not decide, with the reason on each. Three live
    * here (see UnclearReason): several postings could be this role, the board
    * lists nothing at all, or no employer board was found to check against.
@@ -106,6 +114,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     closedUnlisted: 0,
     closedAbsent: 0,
     closedRemoved: 0,
+    closedNotAPosting: 0,
     unclear: [],
   };
 
@@ -151,6 +160,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
       if (r.closedUnlisted) report.closedUnlisted++;
       if (r.closedAbsent) report.closedAbsent++;
       if (r.closedRemoved) report.closedRemoved++;
+      if (r.closedNotAPosting) report.closedNotAPosting++;
       // Not `if (r.unclear)` alone: a check that runs AFTER repairOne's board
       // lookup can close a row the lookup had already set aside as
       // undecidable. Listing it would offer the user a decision that has
@@ -169,7 +179,8 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
     `repairJobLinks: checked ${report.checked}, relinked ${report.relinked}, ` +
       `closed ${report.closed} (404) + ${report.closedUnlisted} (unlisted) + ` +
       `${report.closedAbsent} (gone from its own board) + ` +
-      `${report.closedRemoved} (page says removed), ` +
+      `${report.closedRemoved} (page says removed) + ` +
+      `${report.closedNotAPosting} (never a posting), ` +
       `unclear ${report.unclear.length} ` +
       `(${report.unclear.filter((r) => r.reason === "unresolved").length} of them unresolved), ` +
       `${report.closedAbsent} of those found by a slug read from the link`
@@ -186,7 +197,13 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
  * undecided" is what says so.
  */
 function wasClosed(out: RepairOutcome): boolean {
-  return !!(out.closed || out.closedUnlisted || out.closedAbsent || out.closedRemoved);
+  return !!(
+    out.closed ||
+    out.closedUnlisted ||
+    out.closedAbsent ||
+    out.closedRemoved ||
+    out.closedNotAPosting
+  );
 }
 
 interface RepairOutcome {
@@ -202,12 +219,32 @@ interface RepairOutcome {
   closedAbsent?: boolean;
   /** The page itself said the posting is gone, whatever its status code was. */
   closedRemoved?: boolean;
+  /** There was never a posting here — see lib/not-a-posting.ts. */
+  closedNotAPosting?: boolean;
 }
 
 async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   const url = job.job_url as string;
   const out: RepairOutcome = {};
   let liveUrl = url;
+
+  // First, and with no network call: a job-board SEARCH page and a placeholder
+  // company are decidable from the row alone. Everything below this spends a
+  // request, and there is nothing here to spend it on.
+  const bogus = notAPosting(url, job.company);
+  if (bogus !== null) {
+    const failure = describeWriteFailure(
+      (await updateJob(job.id, { status: "Posting Closed" })).error,
+      `close ${job.company} / ${job.role_title}`
+    );
+    if (failure === undefined) {
+      out.closedNotAPosting = true;
+      console.log(`repairJobLinks: ${job.company} / ${job.role_title} — ${bogus}, closed`);
+    } else {
+      console.error(`repairJobLinks: ${failure}`);
+    }
+    return out;
+  }
 
   const kind = classifyJobLink(url);
 

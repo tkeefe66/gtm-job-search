@@ -607,6 +607,7 @@ export default function RolesTable({
         closedUnlisted: 0,
         closedAbsent: 0,
         closedRemoved: 0,
+        closedNotAPosting: 0,
         unclear: [],
         error: describeWriteFailure(
           err instanceof Error ? err.message : String(err),
@@ -903,6 +904,8 @@ export default function RolesTable({
                     ` Closed ${linkReport.closedAbsent} whose own board no longer carries the posting.`}
                   {linkReport.closedRemoved > 0 &&
                     ` Closed ${linkReport.closedRemoved} whose page says the job was removed.`}
+                  {linkReport.closedNotAPosting > 0 &&
+                    ` Closed ${linkReport.closedNotAPosting} that were never postings — a job-board search page, or no named employer.`}
                   {/* Stated in the SAME sentence as the closures. Left to the
                       disclosure below on its own, "Closed 2" and "Show the 3"
                       read as a contradiction — which is exactly how it was
@@ -919,6 +922,7 @@ export default function RolesTable({
                     linkReport.closed === 0 &&
                     linkReport.closedAbsent === 0 &&
                     linkReport.closedRemoved === 0 &&
+                    linkReport.closedNotAPosting === 0 &&
                     linkReport.closedUnlisted === 0 &&
                     linkReport.unclear.length === 0 &&
                     " Everything checked out."}

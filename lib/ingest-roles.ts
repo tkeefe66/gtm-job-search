@@ -9,6 +9,7 @@ import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/res
 import type { BoardCache } from "@/lib/resolve-job-link";
 import { postingDetailFrom } from "@/lib/posting-detail";
 import { betterCompanyName } from "@/lib/company-name";
+import { notAPosting } from "@/lib/not-a-posting";
 import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
 import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
 import { describeWriteFailure } from "@/lib/write-failure";
@@ -151,6 +152,18 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   const fresh: Role[] = [];
 
   for (const role of roles) {
+    // Rejected before anything is spent on them: a job board's SEARCH page is
+    // not a posting and a description is not an employer, so there is nothing
+    // to read, verify or apply to. Found in production as 15 stored rows that
+    // had been scored and were sitting in the open pipeline. See
+    // lib/not-a-posting.ts for why both checks are narrow.
+    const bogus = notAPosting(role.job_url, company);
+    if (bogus !== null) {
+      console.log(
+        `ingestRoles(${company}): skipping "${role.role_title}" — ${bogus} (${role.job_url || "no link"})`
+      );
+      continue;
+    }
     const isKnown =
       knownKeys.has(normalizeRoleKey(company, role.role_title)) ||
       (!!role.job_url && knownUrls.has(role.job_url));
