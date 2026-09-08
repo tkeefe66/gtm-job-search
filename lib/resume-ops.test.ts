@@ -67,6 +67,42 @@ describe("applyOperations", () => {
     expect(res.overrides).toEqual({});
   });
 
+  // I2: `applied` counts OPERATIONS, not changes. A caller that re-renders on
+  // it discards the user's unsaved hand edits for a turn that changed nothing.
+  it("reports changedDocument false for operations that change no document", () => {
+    const rule = run([{ op: "request_rule_change", description: "two-column header" }]);
+    expect(rule.applied!.length).toBe(1);
+    expect(rule.changedDocument).toBe(false);
+
+    const proposal = run([
+      { op: "propose_career_bullet", roleId: "principal", text: "Did a thing", themes: ["systems"] },
+    ]);
+    expect(proposal.applied!.length).toBe(1);
+    expect(proposal.changedDocument).toBe(false);
+
+    expect(run([]).changedDocument).toBe(false);
+    expect(run([{ op: "add_bullet", roleId: "principal", bulletId: "voc" }]).changedDocument).toBe(true);
+    // Mixed: one operation that changes the document is enough.
+    expect(
+      run([
+        { op: "request_rule_change", description: "two-column header" },
+        { op: "add_bullet", roleId: "principal", bulletId: "voc" },
+      ]).changedDocument
+    ).toBe(true);
+  });
+
+  // C1b: render.js honours opts.lead at role index 0 alone, and
+  // lib/effective-document.ts reorders that one role. A lead named on any
+  // other role would validate, bill and report success while changing
+  // nothing — the class of dishonesty the wiring pass exists to end.
+  it("refuses a lead bullet on any role but the most recent", () => {
+    const res = run([{ op: "set_lead", roleId: "principal", bulletId: "voc" }]);
+    expect(res.error).toContain(CAREER.roles[0].id);
+    const ok = run([{ op: "set_lead", roleId: CAREER.roles[0].id, bulletId: CAREER.roles[0].bullets[2].id }]);
+    expect(ok.error).toBeUndefined();
+    expect(ok.overrides!.selection!.lead).toBe(CAREER.roles[0].bullets[2].id);
+  });
+
   it("namespaces a proposed career bullet id", () => {
     const res = run([{ op: "propose_career_bullet", roleId: "principal", text: "Did a thing", themes: ["systems"] }]);
     expect(res.overlayAdds![0].id.indexOf("ov-")).toBe(0);

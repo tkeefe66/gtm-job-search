@@ -259,11 +259,16 @@ describe("buildChatPrompt", () => {
   });
 
   // Fix round 1, finding 5: set_lead's prose must describe the validator's
-  // actual check (bulletInPool — any bullet in the role's pool), not imply a
-  // stricter "already selected" requirement it doesn't enforce.
-  test("set_lead's description does not claim the bullet must already be selected", () => {
+  // actual check (bulletInPool — any bullet in the pool), not imply a
+  // stricter "already selected" requirement it doesn't enforce. Final review
+  // C1b added the other half: the validator also refuses a lead on any role
+  // but the most recent, because render.js honours opts.lead at role index 0
+  // alone, so a lead named anywhere else would validate, bill and report
+  // success while changing nothing.
+  test("set_lead's description matches the validator on both halves", () => {
     const { system } = buildChatPrompt(FIXTURE_INPUT);
-    expect(system).toContain("- set_lead: make one bullet from a role's pool the lead bullet");
+    expect(system).toContain("- set_lead: make one bullet from the most recent role's pool");
+    expect(system).toContain("it does not need to be selected already");
     expect(system).not.toContain("already-selected bullet");
   });
 

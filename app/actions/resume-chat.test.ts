@@ -65,6 +65,9 @@ vi.mock("@/app/actions/resume", () => ({
     career: CAREER,
     themes: ["systems"],
     selection: SELECTION,
+    // The stored, unmerged base — sendChatTurn writes it back unchanged
+    // unless the turn re-derives it, which only set_themes does.
+    baseSelection: SELECTION,
     overrides: {},
     coverage: COVERAGE,
     warnings: [],
@@ -78,10 +81,12 @@ vi.mock("@/app/actions/resume", () => ({
 const h = vi.hoisted(() => {
   const state = {
     tailoredResumesUpsertCalled: false,
+    tailoredResumesUpsertPayload: null as Record<string, unknown> | null,
     tailoredResumesShouldFail: false,
     chatMessagesWritten: null as unknown,
     chatWriteShouldFail: false,
     storedThreadMessages: null as unknown,
+    tailoredRow: null as unknown,
   };
   function makeBuilder(table: string) {
     const b: Record<string, unknown> = {};
@@ -94,6 +99,9 @@ const h = vi.hoisted(() => {
           error: null,
         });
       }
+      if (table === "tailored_resumes") {
+        return Promise.resolve({ data: state.tailoredRow, error: null });
+      }
       // resume_chats: whatever the test set up, or no thread yet.
       return Promise.resolve({
         data: state.storedThreadMessages ? { messages: state.storedThreadMessages } : null,
@@ -103,6 +111,7 @@ const h = vi.hoisted(() => {
     b.upsert = (payload: Record<string, unknown>) => {
       if (table === "tailored_resumes") {
         state.tailoredResumesUpsertCalled = true;
+        state.tailoredResumesUpsertPayload = payload;
         if (state.tailoredResumesShouldFail) {
           return Promise.resolve({ data: null, error: { message: "insert failed" } });
         }
@@ -140,15 +149,22 @@ vi.mock("@/lib/settings-store", () => ({
   writeCareerOverlay: (overlay: unknown) => writeCareerOverlay(overlay),
 }));
 
+import { effectiveDocument } from "@/lib/effective-document";
+import { selectBullets } from "@/lib/resume-render/render";
+import shippedCareer from "@/lib/resume-render/content/resume.json";
+import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import type { ResumeOverrides } from "@/lib/resume-overrides";
 import { acceptProposedBullets, sendChatTurn } from "./resume-chat";
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.state.tailoredResumesUpsertCalled = false;
+  h.state.tailoredResumesUpsertPayload = null;
   h.state.tailoredResumesShouldFail = false;
   h.state.chatMessagesWritten = null;
   h.state.chatWriteShouldFail = false;
   h.state.storedThreadMessages = null;
+  h.state.tailoredRow = null;
   writeCareerOverlay.mockResolvedValue({});
   readAllSettingsResult.mockResolvedValue({ rows: [], error: undefined });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -368,5 +384,136 @@ describe("acceptProposedBullets", () => {
     expect(res.error).not.toBe("");
     expect(res.error).toContain("Could not load your career overlay");
     expect(writeCareerOverlay).not.toHaveBeenCalled();
+  });
+});
+
+// The five operations the final pre-merge review found inert. Each test below
+// asserts the OUTCOME — what a renderer would draw, or what the stored row
+// says — never the override object, which is exactly what per-task review
+// asserted while all five changed nothing.
+describe("sendChatTurn: the wiring the final review found missing", () => {
+  test("C1d set_themes re-derives the stored base, so the row is self-consistent", async () => {
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "More data-focused now.",
+        operations: [{ op: "set_themes", themes: ["data"] }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "make this more data-focused");
+
+    expect(res.error).toBeUndefined();
+    // The document actually moved: the data bullet now leads the role, and
+    // list order IS render order.
+    expect(res.selection).toEqual({ positioningId: "operator", bullets: { principal: ["p-b1", "p-b0"] } });
+
+    const content = (h.state.tailoredResumesUpsertPayload as { content: Record<string, unknown> }).content;
+    expect(content.themes).toEqual(["data"]);
+    // Not the old selection beside the new themes — that mismatch was
+    // reproduced on every later page load and fed to the next turn's prompt.
+    expect(content.selection).toEqual({ positioningId: "operator", bullets: { principal: ["p-b1", "p-b0"] } });
+    // And the row renders back to exactly what this turn reported.
+    const reloaded = effectiveDocument(
+      CAREER as unknown as CareerRecord,
+      content.selection as ResumeSelection,
+      content.themes as string[],
+      content.overrides as ResumeOverrides
+    );
+    expect(reloaded.selection).toEqual(res.selection);
+  });
+
+  test("C1e request_rule_change is recorded on the stored assistant message", async () => {
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "That needs a CSS rule, so I've noted it.",
+        operations: [{ op: "request_rule_change", description: "make the header two columns" }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "make the header two columns");
+
+    expect(res.error).toBeUndefined();
+    expect(h.state.chatMessagesWritten).toEqual([
+      { role: "user", text: "make the header two columns" },
+      {
+        role: "assistant",
+        text: "That needs a CSS rule, so I've noted it.",
+        ruleRequests: ["make the header two columns"],
+      },
+    ]);
+    // I2: it ran, but it changed nothing — a caller that re-renders on this
+    // discards the user's unsaved hand edits for a turn with no effect.
+    expect(res.applied).toEqual(["requested: make the header two columns"]);
+    expect(res.changedDocument).toBe(false);
+  });
+
+  test("set_text changes the record the turn hands back, not only the stored row", async () => {
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "Tightened.",
+        operations: [{ op: "set_text", target: "bullet:principal:p-b0", text: "Rebuilt the pipeline end to end." }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "tighten that bullet");
+
+    expect(res.error).toBeUndefined();
+    expect(res.changedDocument).toBe(true);
+    const bullet = res.career!.roles[0].bullets.filter((b) => b.id === "p-b0")[0];
+    expect(bullet.text).toBe("Rebuilt the pipeline end to end.");
+    expect(bullet.edited).toBe(true);
+  });
+
+  test("a document-changing operation reports changedDocument", async () => {
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({
+        reply: "Added it.",
+        operations: [{ op: "add_bullet", roleId: "principal", bulletId: "p-b1" }],
+      }),
+      stopReason: "end_turn",
+    });
+
+    const res = await sendChatTurn("job-1", "add the reporting bullet too");
+    expect(res.changedDocument).toBe(true);
+  });
+});
+
+// I5: before this, Accept wrote the overlay, the chip vanished, and nothing
+// changed on screen or after a reload — the new ov-* id was in the record's
+// pool but in no selection, so render.js drew it nowhere.
+describe("acceptProposedBullets places the accepted bullet on the page", () => {
+  test("the id lands in the stored override and in the returned selection", async () => {
+    const proposal = {
+      id: "ov-abc123",
+      roleId: "principal",
+      text: "Shipped the thing.",
+      themes: ["systems"],
+    };
+    h.state.storedThreadMessages = [
+      { role: "assistant", text: "How about this:", proposals: [proposal] },
+    ];
+    const shipped = shippedCareer as unknown as CareerRecord;
+    const storedSelection = selectBullets(shipped, { themes: ["systems"] });
+    h.state.tailoredRow = {
+      content: { themes: ["systems"], selection: storedSelection, overrides: {} },
+    };
+
+    const res = await acceptProposedBullets("job-1", ["ov-abc123"]);
+
+    expect(res.error).toBeUndefined();
+    expect(writeCareerOverlay).toHaveBeenCalledWith([proposal]);
+    const content = (h.state.tailoredResumesUpsertPayload as { content: Record<string, unknown> }).content;
+    const overrides = content.overrides as ResumeOverrides;
+    expect(overrides.selection!.bullets!["principal"]).toContain("ov-abc123");
+    // The base is written back untouched — placement is an override.
+    expect(content.selection).toEqual(storedSelection);
+    // And it is on the page the caller re-renders.
+    expect(res.selection!.bullets["principal"]).toContain("ov-abc123");
+    expect(res.career!.roles.filter((r) => r.id === "principal")[0].bullets.some((b) => b.id === "ov-abc123")).toBe(
+      true
+    );
   });
 });

@@ -36,6 +36,17 @@ export interface ApplyResult {
   overlayAdds?: OverlayBullet[];
   ruleRequests?: string[];
   applied?: string[];
+  /**
+   * Whether this turn changed the DOCUMENT, as opposed to merely running an
+   * operation. `applied` conflates the two: `request_rule_change` and
+   * `propose_career_bullet` both push a line into it while the rendered
+   * document is byte-identical afterwards. A caller that re-renders on
+   * `applied.length > 0` therefore re-sets dangerouslySetInnerHTML — which
+   * discards the user's unsaved contentEditable hand edits — for a turn that
+   * changed nothing. Decided HERE, next to the operations themselves, rather
+   * than by pattern-matching the transcript strings in the client.
+   */
+  changedDocument?: boolean;
   error?: string;
 }
 
@@ -187,11 +198,26 @@ function validateOperation(
       return invalidThemeId(vocabulary, op.themes);
     }
     case "add_bullet":
-    case "drop_bullet":
+    case "drop_bullet": {
+      const role = findRole(career, op.roleId);
+      if (!role) return roleError(op.roleId);
+      if (!bulletInPool(role, op.bulletId)) return bulletPoolError(op.bulletId, role);
+      return undefined;
+    }
     case "set_lead": {
       const role = findRole(career, op.roleId);
       if (!role) return roleError(op.roleId);
       if (!bulletInPool(role, op.bulletId)) return bulletPoolError(op.bulletId, role);
+      // The lead bullet is the FIRST role's first line and nothing else:
+      // render.js:73-79 honours opts.lead only at role index 0, and
+      // lib/effective-document.ts's withLead reorders that one role. A lead
+      // named on any other role would validate, bill, and be reported as
+      // applied while changing nothing — the exact class of dishonesty the
+      // whole wiring pass exists to end — so it is refused with the reason.
+      const first = career.roles[0];
+      if (first && role.id !== first.id) {
+        return 'The lead bullet has to come from "' + first.id + '", the most recent role.';
+      }
       return undefined;
     }
     case "swap_bullet": {
@@ -358,8 +384,20 @@ export function applyOperations(
   const ruleRequests: string[] = [];
   const applied: string[] = [];
   const takenOverlayIds: Record<string, true> = {};
+  // Every operation except these two changes what renders. `reset_design` is
+  // deliberately on the changing side even when there was nothing to reset —
+  // it writes the overrides object, and a caller re-rendering an unchanged
+  // document is harmless where the reverse is not.
+  const NO_DOCUMENT_CHANGE: Record<string, true> = {
+    request_rule_change: true,
+    propose_career_bullet: true,
+  };
+  let changedDocument = false;
 
   ops.forEach((op) => {
+    // hasOwnProperty, not a bare bracket read: this file's own convention for
+    // every lookup on a plain object keyed by model-supplied text.
+    if (!Object.prototype.hasOwnProperty.call(NO_DOCUMENT_CHANGE, op.op)) changedDocument = true;
     switch (op.op) {
       case "set_themes": {
         themes = (op.themes as string[]).slice();
@@ -489,5 +527,6 @@ export function applyOperations(
     overlayAdds: overlayAdds.length ? overlayAdds : undefined,
     ruleRequests: ruleRequests.length ? ruleRequests : undefined,
     applied,
+    changedDocument,
   };
 }

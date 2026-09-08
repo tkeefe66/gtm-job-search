@@ -194,11 +194,13 @@ const OPERATION_DESCRIPTIONS: Record<string, string> = {
   add_bullet: "add one bullet from a role's pool to the current selection.",
   drop_bullet: "remove one bullet from the current selection.",
   swap_bullet: "replace one selected bullet with another from the same role's pool.",
-  // Matches validateOperation's actual check: set_lead uses the same
-  // bulletInPool test as add_bullet (any bullet in the role's pool,
-  // selected or not) — the prose must describe the validator, not the
-  // other way around.
-  set_lead: "make one bullet from a role's pool the lead bullet — it does not need to be selected already.",
+  // Matches validateOperation's actual check: set_lead takes any bullet in
+  // the pool, selected or not, but ONLY from the most recent role — the lead
+  // bullet is the first rendered line and render.js honours opts.lead at
+  // role index 0 alone. The prose must describe the validator, not the other
+  // way around.
+  set_lead:
+    "make one bullet from the most recent role's pool the first line of the résumé — it does not need to be selected already.",
   set_positioning: "switch to a different positioning variant from the career record.",
   set_taper: "set how many bullets render per role, most senior role first.",
   set_compress_after: "compress roles after the n-th into one-line rows.",

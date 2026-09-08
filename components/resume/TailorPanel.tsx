@@ -149,10 +149,18 @@ export default function TailorPanel({
   // just mirrors resume.ts's tailor() success path and marks the document
   // dirty, since the change has not gone through Save yet.
   function onChatApplied(next: {
+    career: CareerRecord;
     selection: ResumeSelection;
     overrides: ResumeOverrides;
     coverage: CoverageReport;
   }) {
+    // The CAREER moves too, and it has to: a set_text edit changes a bullet's
+    // words and a set_compress_after changes rules.compressAfter, both on the
+    // record rather than in the selection. Without this the server stored the
+    // edit correctly and the document on screen did not change until a
+    // reload — the user asked to tighten a bullet, was told it was done, and
+    // read the old wording.
+    setCareer(next.career);
     setSelection(next.selection);
     setOverrides(next.overrides);
     setCoverage(next.coverage);

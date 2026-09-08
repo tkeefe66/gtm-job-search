@@ -8,7 +8,7 @@ import {
   type StoredChatMessage,
 } from "@/app/actions/resume-chat";
 import type { ResumeOverrides } from "@/app/actions/resume";
-import type { ResumeSelection } from "@/lib/resume-render/render";
+import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
 import type { CoverageReport } from "@/lib/resume-coverage";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
@@ -29,6 +29,7 @@ interface TurnMeta {
 }
 
 interface AppliedDocument {
+  career: CareerRecord;
   selection: ResumeSelection;
   overrides: ResumeOverrides;
   coverage: CoverageReport;
@@ -61,9 +62,13 @@ export default function ChatPanel({
    *  re-setting dangerouslySetInnerHTML discards unsaved hand edits — this is
    *  the one thing standing between that and a silent loss. */
   dirty: boolean;
-  /** Fires only when a turn actually changed the document (`applied.length >
-   *  0`). A pure question must not reach this — it would mark the document
-   *  dirty (and re-render it) for a turn that changed nothing. */
+  /** Fires only when a turn actually changed the document
+   *  (`res.changedDocument`, decided in lib/resume-ops.ts). A pure question —
+   *  or a turn whose only operation was a rule-change request or a bullet
+   *  proposal — must not reach this: it would mark the document dirty and
+   *  re-render it, discarding the user's unsaved hand edits, for a turn that
+   *  changed nothing. `applied.length > 0` is NOT that signal; it counts
+   *  operations, not changes. */
   onApplied: (next: AppliedDocument) => void;
 }) {
   const [messages, setMessages] = useState<StoredChatMessage[]>([]);
@@ -140,11 +145,19 @@ export default function ChatPanel({
         }));
       }
 
-      // The honest "did this turn change the document" signal. A rejected or
-      // errored turn always returns `applied: []`, so this can never fire for
-      // either — nothing on screen changes for those, matching requirement 3.
-      if (res.applied.length > 0 && res.selection && res.coverage) {
-        onApplied({ selection: res.selection, overrides: res.overrides, coverage: res.coverage });
+      // The honest "did this turn change the document" signal, decided
+      // server-side in lib/resume-ops.ts. A rejected or errored turn always
+      // returns `changedDocument: false`, so this can never fire for either —
+      // nothing on screen changes for those, matching requirement 3 — and
+      // neither does a turn whose only operations were a rule-change request
+      // or a bullet proposal.
+      if (res.changedDocument && res.career && res.selection && res.coverage) {
+        onApplied({
+          career: res.career,
+          selection: res.selection,
+          overrides: res.overrides,
+          coverage: res.coverage,
+        });
       }
     });
   }
@@ -159,6 +172,18 @@ export default function ChatPanel({
       if (res.error !== undefined) {
         setError(res.error || UNDESCRIBED_DB_ERROR);
         return;
+      }
+      // The accepted bullet is placed on the page, not merely filed in the
+      // career record — otherwise Accept removes a button and changes nothing
+      // else, on screen or after a reload. The action returns the same shape
+      // a chat turn does, so it lands through the same path.
+      if (res.career && res.selection && res.overrides && res.coverage) {
+        onApplied({
+          career: res.career,
+          selection: res.selection,
+          overrides: res.overrides,
+          coverage: res.coverage,
+        });
       }
       // Accepted bullets land in the career overlay, not on this thread.
       // Drop the id from this message's proposals so the button it belonged
@@ -205,6 +230,17 @@ export default function ChatPanel({
                   <ul className="mt-1 list-disc pl-4 text-xs text-ink/60">
                     {meta.applied.map((a, j) => (
                       <li key={j}>{a}</li>
+                    ))}
+                  </ul>
+                )}
+
+                {m.role === "assistant" && m.ruleRequests && m.ruleRequests.length > 0 && (
+                  /* Persisted on the message, so it survives a reload — the
+                     whole point of request_rule_change is a record someone
+                     can act on later. */
+                  <ul className="mt-1 list-disc pl-4 text-xs text-ink/60">
+                    {m.ruleRequests.map((r, j) => (
+                      <li key={j}>Rule change requested: {r}</li>
                     ))}
                   </ul>
                 )}

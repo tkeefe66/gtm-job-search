@@ -9,7 +9,7 @@ import { hasPostingBeenRead, type PostingDetail } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { buildThemePrompt, type JobSummaryFields } from "@/lib/resume-prompt";
 import { effectiveCareer } from "@/lib/effective-career";
-import { effectiveSelection } from "@/lib/effective-selection";
+import { effectiveDocument } from "@/lib/effective-document";
 import { coverageReport, type CoverageReport } from "@/lib/resume-coverage";
 import { careerOverlayFrom, readAllSettingsResult } from "@/lib/settings-store";
 import type { ResumeOverrides } from "@/lib/resume-overrides";
@@ -299,7 +299,16 @@ export async function getTailoredResume(jobId: string): Promise<{
 export async function loadResumeContext(jobId: string): Promise<{
   career?: CareerRecord;
   themes: string[];
+  /** The EFFECTIVE selection — the stored base with every override applied. */
   selection: ResumeSelection | null;
+  /**
+   * The stored, UNMERGED base. Returned because app/actions/resume-chat.ts
+   * has to write it back unchanged (or replace it wholesale when a turn
+   * changes the themes) — deriving it from `selection` is impossible once
+   * overrides have been folded in, and re-reading the row there would be a
+   * second query for a value this call already has.
+   */
+  baseSelection: ResumeSelection | null;
   overrides: ResumeOverrides;
   coverage: CoverageReport | null;
   warnings: string[];
@@ -308,13 +317,36 @@ export async function loadResumeContext(jobId: string): Promise<{
   await requireResumeAdmin();
   const rowsResult = await readAllSettingsResult();
   if (rowsResult.error !== undefined) {
-    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: rowsResult.error };
+    // readAllSettingsResult is a TRANSPORT — it returns the driver's message
+    // verbatim, empty string included (an unreachable dual-stack host rejects
+    // with an AggregateError whose message is ""). The consumer here is a
+    // SERVER COMPONENT (app/resume/page.tsx) that prints this raw with no
+    // `|| UNDESCRIBED_DB_ERROR` fallback of its own, so an undescribed error
+    // renders as an empty amber paragraph and no document. Presence detection
+    // is unaffected: describeWriteFailure returns string | undefined.
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      coverage: null,
+      warnings: [],
+      baseSelection: null,
+      error: describeWriteFailure(rowsResult.error, "load your settings"),
+    };
   }
   const overlay = careerOverlayFrom(rowsResult.rows);
 
   const stored = await getTailoredResume(jobId);
   if (stored.error !== undefined) {
-    return { themes: [], selection: null, overrides: {}, coverage: null, warnings: [], error: stored.error };
+    return {
+      themes: [],
+      selection: null,
+      baseSelection: null,
+      overrides: {},
+      coverage: null,
+      warnings: [],
+      error: stored.error,
+    };
   }
 
   const overrides = stored.overrides;
@@ -323,22 +355,28 @@ export async function loadResumeContext(jobId: string): Promise<{
     overlay,
     overrides.text || {}
   );
-  // Base plus this job's bullet-level/positioning overrides — ONE definition,
-  // shared with app/actions/resume-chat.ts's sendChatTurn, in
-  // lib/effective-selection.ts. Without this, a page reload after a
-  // bullet-level chat edit (add_bullet, drop_bullet, swap_bullet,
-  // set_positioning) would show the STALE unmerged selection and coverage
-  // computed from it — the exact document the chat turn just changed would
-  // revert on refresh until the next turn or a Regenerate.
-  const selection = stored.selection ? effectiveSelection(stored.selection, overrides.selection) : null;
-  const coverage = selection
-    ? coverageReport(merged, stored.themes, selection, themeVocabulary as ThemeVocabulary)
+  // Base plus every override this job carries — ONE definition, shared with
+  // app/actions/resume-chat.ts's sendChatTurn, in lib/effective-document.ts.
+  // Without this, a page reload after a chat edit would show the STALE
+  // unmerged selection and coverage computed from it — the exact document the
+  // chat turn just changed would revert on refresh until the next turn or a
+  // Regenerate — and taper/lead/compressAfter would reach no renderer at all.
+  const doc = stored.selection
+    ? effectiveDocument(merged, stored.selection, stored.themes, overrides)
+    : null;
+  const coverage = doc
+    ? coverageReport(doc.career, stored.themes, doc.selection, themeVocabulary as ThemeVocabulary)
     : null;
 
   return {
-    career: merged,
+    // doc.career, not `merged`: a set_compress_after override is applied to
+    // the RECORD (rules.compressAfter), which is what renderBody and
+    // coverageReport's renderedRoles both read. Returning the unshaped record
+    // would render a document the coverage panel does not describe.
+    career: doc ? doc.career : merged,
     themes: stored.themes,
-    selection,
+    selection: doc ? doc.selection : null,
+    baseSelection: stored.selection,
     overrides,
     coverage,
     warnings,

@@ -17,12 +17,14 @@
 // actions need it, and "use server" forbids non-async exports, so the
 // import direction would become load-bearing for a function that is not.
 //
-// `lead`/`taper`/`compressAfter` are NOT folded in: `ResumeSelection` has no
-// fields for them (only `positioningId` and `bullets`), so those overrides
-// stay exactly where lib/resume-ops.ts's applyOperations already puts them,
-// in `overrides.selection` — wiring them into rendering is a later task's
-// job, the same way `overrides.design`/`overrides.pageMargin` are consumed
-// outside `ResumeSelection` today.
+// `lead`/`taper`/`compressAfter` are NOT folded in HERE: `ResumeSelection`
+// has no fields for them (only `positioningId` and `bullets`), and two of the
+// three cannot be expressed as a merge at all — a taper has to re-run
+// selectBullets and compressAfter belongs on the career record. They are
+// applied one layer up, in lib/effective-document.ts, which calls this
+// function as its merge step. Nothing should call this directly to build a
+// document: effectiveDocument is the entry point, and it is what both
+// loadResumeContext and sendChatTurn use.
 //
 // `tailored_resumes.content.selection` always stores the UNMERGED base —
 // this function's result is never what gets persisted there, only what gets

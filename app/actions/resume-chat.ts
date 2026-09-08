@@ -31,9 +31,12 @@ import {
   type OverlayBullet,
 } from "@/lib/settings-store";
 import { loadResumeContext, type ResumeOverrides } from "@/app/actions/resume";
-import { effectiveSelection } from "@/lib/effective-selection";
+import { effectiveDocument } from "@/lib/effective-document";
+import { effectiveCareer } from "@/lib/effective-career";
+import { selectBullets } from "@/lib/resume-render/render";
 import type { PostingDetail } from "@/lib/posting-detail";
-import type { ResumeSelection, ThemeVocabulary } from "@/lib/resume-render/render";
+import type { CareerRecord, ResumeSelection, ThemeVocabulary } from "@/lib/resume-render/render";
+import shippedCareer from "@/lib/resume-render/content/resume.json";
 import themeVocabularyJson from "@/lib/resume-render/content/themes.json";
 
 const themeVocabulary = themeVocabularyJson as ThemeVocabulary;
@@ -48,6 +51,17 @@ const themeVocabulary = themeVocabularyJson as ThemeVocabulary;
  */
 export interface StoredChatMessage extends ChatMessage {
   proposals?: OverlayBullet[];
+  /**
+   * `request_rule_change`'s record. The spec's whole reason for that
+   * operation is that a layout change needing a CSS RULE "is recorded in the
+   * thread so it can become a real repo change with a build, a fixture diff
+   * and a DESIGN_VERSION bump" — until this field existed, applyOperations
+   * collected the descriptions and sendChatTurn dropped them on the floor,
+   * leaving the only trace in session-only client state that a reload
+   * discarded. The one operation whose entire purpose is to capture something
+   * for later captured nothing.
+   */
+  ruleRequests?: string[];
 }
 
 const TRUNCATED_REPLY =
@@ -60,7 +74,23 @@ const SAVE_FAILED_REPLY = "Could not save that change — try again.";
 interface TurnResult {
   reply: string;
   applied: string[];
+  /**
+   * Whether the DOCUMENT changed, from lib/resume-ops.ts's own decision — not
+   * `applied.length > 0`, which is true for a rule-change request or a bullet
+   * proposal that changed nothing. The client re-renders on this, and a
+   * re-render discards the user's unsaved hand edits.
+   */
+  changedDocument: boolean;
   rejected?: string;
+  /**
+   * The record the returned `selection` is meant to render against: the
+   * overlay and this job's text overrides merged in, and rules.compressAfter
+   * carrying a set_compress_after override. Returned rather than left to the
+   * client's existing copy because a set_text edit and a compress-after
+   * change are BOTH record changes — without this, the server stored them
+   * correctly and the document on screen did not move until a reload.
+   */
+  career: CareerRecord | null;
   selection: ResumeSelection | null;
   overrides: ResumeOverrides;
   coverage: CoverageReport | null;
@@ -107,6 +137,10 @@ function sanitizeStoredMessages(value: unknown): StoredChatMessage[] {
     if (o.role !== "user" && o.role !== "assistant") continue;
     if (typeof o.text !== "string") continue;
     const msg: StoredChatMessage = { role: o.role, text: o.text };
+    if (Array.isArray(o.ruleRequests)) {
+      const requests = o.ruleRequests.filter((r): r is string => typeof r === "string" && r !== "");
+      if (requests.length > 0) msg.ruleRequests = requests;
+    }
     if (Array.isArray(o.proposals)) {
       const proposals = o.proposals.filter(isOverlayBulletShape);
       if (proposals.length > 0) msg.proposals = proposals;
@@ -249,6 +283,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: null,
       overrides: {},
       coverage: null,
@@ -263,6 +299,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: null,
       overrides: {},
       coverage: null,
@@ -274,6 +312,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: null,
       overrides: {},
       coverage: null,
@@ -287,6 +327,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: null,
       overrides: {},
       coverage: null,
@@ -303,6 +345,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: context.selection,
       overrides: context.overrides,
       coverage: context.coverage,
@@ -311,13 +355,15 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     };
   }
 
+  // `career` and `selection` here are ALREADY the effective document:
+  // loadResumeContext runs effectiveDocument, so the record carries this
+  // job's text overrides and any compress-after override, and the selection
+  // carries taper/lead/per-role overrides. That is what the model is shown,
+  // what operations validate against, and what a rejected turn returns
+  // unchanged.
   const career = context.career;
-  const selection = context.selection;
+  const currentSelection = context.selection;
   const overrides = context.overrides;
-  // What is actually on the page right now, prior overrides included — see
-  // lib/effective-selection.ts's own doc for why this differs from the base
-  // `selection`.
-  const currentSelection = effectiveSelection(selection, overrides.selection);
 
   const messagesForPrompt: ChatMessage[] = [...priorMessages, { role: "user", text: message }];
 
@@ -325,7 +371,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     career,
     vocabulary: themeVocabulary,
     themes: context.themes,
-    selection,
+    selection: currentSelection,
     overrides,
     coverage: context.coverage,
     requirements: jobRes.job.requirements,
@@ -348,6 +394,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: currentSelection,
       overrides,
       coverage: context.coverage,
@@ -359,6 +407,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: "",
       applied: [],
+      changedDocument: false,
+      career: null,
       selection: currentSelection,
       overrides,
       coverage: context.coverage,
@@ -382,6 +432,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: failed,
       applied: [],
+      changedDocument: false,
+      career: null,
       rejected: failed,
       selection: currentSelection,
       overrides,
@@ -406,6 +458,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: TRUNCATED_REPLY,
       applied: [],
+      changedDocument: false,
+      career: null,
       rejected: TRUNCATED_REPLY,
       selection: currentSelection,
       overrides,
@@ -427,6 +481,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: UNREADABLE_REPLY,
       applied: [],
+      changedDocument: false,
+      career: null,
       rejected: UNREADABLE_REPLY,
       selection: currentSelection,
       overrides,
@@ -448,6 +504,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: result.error,
       applied: [],
+      changedDocument: false,
+      career: null,
       rejected: result.error,
       selection: currentSelection,
       overrides,
@@ -464,9 +522,37 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
   const newOverrides = result.overrides!;
   const newThemes = result.themes ?? context.themes;
 
+  // The record the new document renders against. effectiveCareer is run a
+  // SECOND time, over the already-merged record from loadResumeContext with
+  // no overlay and this turn's full text map: the overlay bullets are already
+  // folded into `career` (so passing them again would duplicate them), and
+  // re-applying a text override that was already applied is a no-op because
+  // sanitizeBulletText is idempotent — verified in the final review's
+  // three-boundary trace. Merging from the shipped record instead would need
+  // a second settings read for the overlay on every turn.
+  const { career: newCareer } = effectiveCareer(career, [], newOverrides.text || {});
+
+  // set_themes re-derives the BASE selection, and the new base is what gets
+  // stored. Without this the row keeps the themes the user just asked for
+  // beside the selection the OLD themes produced — a document nobody asked
+  // for, described by a coverage panel computed from the new themes, and
+  // reproduced identically on every later page load. Overrides still layer on
+  // top below, so a bullet the user picked by hand survives a theme change.
+  // `|| currentSelection` is unreachable: a context with a non-null effective
+  // selection always carries the base it was derived from, and this path
+  // already returned early when the selection was null. It is here so the
+  // type narrows without a cast.
+  const newBase =
+    result.themes !== undefined
+      ? selectBullets(newCareer, { themes: newThemes })
+      : context.baseSelection || currentSelection;
+
   const assistantMessage: StoredChatMessage = { role: "assistant", text: parsed.reply };
   if (result.overlayAdds && result.overlayAdds.length > 0) {
     assistantMessage.proposals = result.overlayAdds;
+  }
+  if (result.ruleRequests && result.ruleRequests.length > 0) {
+    assistantMessage.ruleRequests = result.ruleRequests;
   }
   const updated: StoredChatMessage[] = [...priorMessages, { role: "user", text: message }, assistantMessage];
 
@@ -479,7 +565,7 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
       .forTenant(actor.tenantId)
       .from("tailored_resumes")
       .upsert(
-        { job_id: jobId, content: { themes: newThemes, selection, overrides: newOverrides } },
+        { job_id: jobId, content: { themes: newThemes, selection: newBase, overrides: newOverrides } },
         { onConflict: "tenant_id,job_id" }
       );
     saveError = describeWriteFailure(error?.message, "save that tailored resume");
@@ -507,6 +593,8 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     return {
       reply: SAVE_FAILED_REPLY,
       applied: [],
+      changedDocument: false,
+      career: null,
       rejected: SAVE_FAILED_REPLY,
       selection: currentSelection,
       overrides,
@@ -516,15 +604,17 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
     };
   }
 
-  // The new effective selection — base plus this turn's bullet/positioning
-  // overrides — is what a caller renders and what coverage is recomputed
-  // against. Never stored: tailored_resumes.content.selection above kept the
-  // unmerged base.
-  const finalSelection = effectiveSelection(selection, newOverrides.selection);
+  // The new effective document — the stored base plus this turn's overrides,
+  // re-derived through the SAME function loadResumeContext uses, so what this
+  // turn reports and what the next reload renders cannot differ. Never
+  // stored: tailored_resumes.content.selection above kept the unmerged base.
+  const doc = effectiveDocument(newCareer, newBase, newThemes, newOverrides);
 
   // Coverage is recomputed here and never stored — tailored_resumes keeps
   // only what makes the document; the coverage panel is a read-time report.
-  const coverage = coverageReport(career, newThemes, finalSelection, themeVocabulary);
+  // Computed from doc.career/doc.selection rather than the pre-turn record,
+  // so a set_themes turn can never describe a document that does not exist.
+  const coverage = coverageReport(doc.career, newThemes, doc.selection, themeVocabulary);
 
   // The document already saved successfully above — a failure of THIS write
   // (appending the turn to resume_chats) must not be reported as `error`:
@@ -539,7 +629,9 @@ export async function sendChatTurn(jobId: string, message: string): Promise<Turn
   return {
     reply: parsed.reply,
     applied: result.applied ?? [],
-    selection: finalSelection,
+    changedDocument: result.changedDocument === true,
+    career: doc.career,
+    selection: doc.selection,
     overrides: newOverrides,
     coverage,
     messages: updated,
@@ -552,7 +644,62 @@ export async function loadChatThread(jobId: string): Promise<{ messages: StoredC
   return readThread(actor.tenantId, jobId);
 }
 
-export async function acceptProposedBullets(jobId: string, ids: string[]): Promise<{ error?: string }> {
+/** The tailored_resumes row as stored, read directly rather than through
+ *  app/actions/resume.ts's getTailoredResume: acceptProposedBullets needs the
+ *  UNMERGED base to write back, and importing another "use server" module's
+ *  export for it would make this file's import graph load-bearing for a
+ *  single query shape. Repairs the row rather than trusting it — a row
+ *  written before `overrides` existed has no such key. */
+async function readTailoredRow(
+  tenantId: string,
+  jobId: string
+): Promise<{ themes: string[]; selection: ResumeSelection | null; overrides: ResumeOverrides; error?: string }> {
+  const { data, error } = await supabase
+    .forTenant(tenantId)
+    .from("tailored_resumes")
+    .select("content")
+    .eq("job_id", jobId)
+    .maybeSingle();
+  if (error) {
+    console.error("resume-chat readTailoredRow error:", error);
+    return {
+      themes: [],
+      selection: null,
+      overrides: {},
+      error: describeWriteFailure(error.message, "load that tailored resume"),
+    };
+  }
+  const content = (data as { content?: unknown } | null)?.content as
+    | { themes?: unknown; selection?: unknown; overrides?: unknown }
+    | undefined;
+  if (!content || !content.selection || typeof content.selection !== "object") {
+    return { themes: [], selection: null, overrides: {} };
+  }
+  return {
+    themes: Array.isArray(content.themes) ? (content.themes as string[]) : [],
+    selection: content.selection as ResumeSelection,
+    overrides: (content.overrides as ResumeOverrides) || {},
+  };
+}
+
+/**
+ * The accepted bullet is written to the career overlay AND placed on the
+ * page. Placing it is the difference between the feature working and the
+ * user clicking Accept, watching the button vanish, and seeing nothing change
+ * anywhere — before this, the new `ov-*` id was in the record's pool but in
+ * no selection, so render.js drew it nowhere, on this screen or after a
+ * reload, until some later turn happened to add_bullet it.
+ */
+export async function acceptProposedBullets(
+  jobId: string,
+  ids: string[]
+): Promise<{
+  career?: CareerRecord;
+  selection?: ResumeSelection;
+  overrides?: ResumeOverrides;
+  coverage?: CoverageReport;
+  error?: string;
+}> {
   const actor = await requireResumeAdmin();
 
   const threadRes = await readThread(actor.tenantId, jobId);
@@ -590,6 +737,56 @@ export async function acceptProposedBullets(jobId: string, ids: string[]): Promi
   const toAdd = requested.filter((id) => !existingIds.has(id)).map((id) => byId.get(id) as OverlayBullet);
   if (toAdd.length === 0) return {};
 
-  const writeRes = await writeCareerOverlay(overlay.concat(toAdd));
-  return { error: describeWriteFailure(writeRes.error, "save the accepted bullet") };
+  const nextOverlay = overlay.concat(toAdd);
+  const writeRes = await writeCareerOverlay(nextOverlay);
+  const overlayError = describeWriteFailure(writeRes.error, "save the accepted bullet");
+  if (overlayError !== undefined) return { error: overlayError };
+
+  // The bullet is in the record now; put it on the page. A failure from here
+  // on is reported, but the accept itself already landed — which is why the
+  // overlay write is what gates `error` above.
+  const stored = await readTailoredRow(actor.tenantId, jobId);
+  if (stored.error !== undefined) return { error: stored.error };
+  // Nothing tailored yet (or a row too old to read): the bullet is in the
+  // pool and the next Tailor will consider it. Nothing to place.
+  if (!stored.selection) return {};
+
+  const { career: merged } = effectiveCareer(
+    shippedCareer as CareerRecord,
+    nextOverlay,
+    stored.overrides.text || {}
+  );
+  const before = effectiveDocument(merged, stored.selection, stored.themes, stored.overrides);
+
+  // Absolute lists, appended to what is on the page right now — the same
+  // shape lib/resume-ops.ts's add_bullet writes, so nothing downstream can
+  // tell the two apart.
+  const nextOverrides: ResumeOverrides = {
+    ...stored.overrides,
+    selection: { ...(stored.overrides.selection || {}), bullets: { ...(stored.overrides.selection?.bullets || {}) } },
+  };
+  toAdd.forEach((b) => {
+    const current = nextOverrides.selection!.bullets![b.roleId] || before.selection.bullets[b.roleId] || [];
+    if (current.indexOf(b.id) === -1) {
+      nextOverrides.selection!.bullets![b.roleId] = current.concat([b.id]);
+    }
+  });
+
+  const { error: saveError } = await supabase
+    .forTenant(actor.tenantId)
+    .from("tailored_resumes")
+    .upsert(
+      { job_id: jobId, content: { themes: stored.themes, selection: stored.selection, overrides: nextOverrides } },
+      { onConflict: "tenant_id,job_id" }
+    );
+  const described = describeWriteFailure(saveError?.message, "place the accepted bullet on the page");
+  if (described !== undefined) return { error: described };
+
+  const after = effectiveDocument(merged, stored.selection, stored.themes, nextOverrides);
+  return {
+    career: after.career,
+    selection: after.selection,
+    overrides: nextOverrides,
+    coverage: coverageReport(after.career, stored.themes, after.selection, themeVocabulary),
+  };
 }
