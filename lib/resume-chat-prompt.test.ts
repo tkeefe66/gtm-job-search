@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildChatPrompt, type ChatMessage, type ChatPromptInput } from "./resume-chat-prompt";
 import { OPERATION_SCHEMA } from "./resume-ops";
 import { DESIGN_TOKENS } from "./resume-design-tokens";
-import type { CareerRecord, ResumeSelection } from "./resume-render/render";
+import type { CareerRecord, ResumeSelection, ThemeVocabulary } from "./resume-render/render";
 import type { ResumeOverrides } from "./resume-overrides";
 import type { CoverageReport } from "./resume-coverage";
 
@@ -51,18 +51,37 @@ const CAREER: CareerRecord = {
   rules: { taper: [3, 2], themes: ["systems", "data"], compressAfter: null },
 };
 
+// "leadership" is never tagged on any bullet in CAREER — deliberately, so the
+// vocabulary test can prove a theme with zero pool support is still
+// discoverable from the vocabulary block, not just from bullet tags.
+const VOCABULARY: ThemeVocabulary = {
+  themes: [
+    { id: "systems", label: "Building — A.I. and automation", covers: "", jdSignals: ["automation", "systems design"], evidence: "" },
+    { id: "data", label: "Data & analytics", covers: "", jdSignals: ["SQL", "dashboards"], evidence: "" },
+    { id: "leadership", label: "Leadership & scale", covers: "", jdSignals: ["team building", "P&L"], evidence: "" },
+  ],
+  derivation: { method: "manual", examples: [] },
+  knownGaps: { note: "", absent: [] },
+  evidenceNote: "",
+};
+
 const SELECTION: ResumeSelection = {
   positioningId: "operator",
   bullets: { principal: ["p-b0", "p-b1"], manager: ["m-b0"] },
 };
 
+// The manager bullets DISAGREE between SELECTION (m-b0) and OVERRIDES (none)
+// on purpose — a fixture where the two sources agree cannot demonstrate that
+// the model was told how to resolve them, and an empty override array is
+// itself the case that used to render a dangling "Bullets override, manager: "
+// label with nothing after the colon.
 const OVERRIDES: ResumeOverrides = {
   selection: {
     lead: "p-b0",
     positioning: "operator",
     taper: [3, 2],
     compressAfter: 1,
-    bullets: { manager: ["m-b0"] },
+    bullets: { manager: [] },
   },
   text: { "bullet:principal:p-b0": "Edited text for that bullet." },
   design: { "--rail": "110px" },
@@ -76,7 +95,9 @@ const COVERAGE: CoverageReport = {
   ],
   gaps: ["leadership"],
   unknown: ["nonsense-theme"],
-  strength: 0.82,
+  // Deliberately not a round number: proves coverageBlock actually rounds
+  // rather than happening to already match a two-decimal fixture value.
+  strength: 0.8214285714285714,
   overlayBullets: 1,
   editedBullets: 1,
 };
@@ -89,6 +110,7 @@ const MESSAGES: ChatMessage[] = [
 
 const FIXTURE_INPUT: ChatPromptInput = {
   career: CAREER,
+  vocabulary: VOCABULARY,
   themes: ["systems", "data"],
   selection: SELECTION,
   overrides: OVERRIDES,
@@ -186,5 +208,70 @@ describe("buildChatPrompt", () => {
     const { prompt } = buildChatPrompt({ ...FIXTURE_INPUT, messages: [] });
     expect(prompt).not.toContain("User:");
     expect(prompt).not.toContain("Assistant:");
+  });
+
+  // Fix round 1, finding (a): a theme added to the vocabulary before any
+  // bullet is tagged for it must still be discoverable — the bullet index's
+  // theme tags are not a substitute for the vocabulary block. Rendered in
+  // the SAME shape as lib/resume-prompt.ts's sibling vocabularyBlock.
+  test("every theme in the vocabulary is rendered, in the sibling prompt's id (label): jdSignals shape", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    for (const t of VOCABULARY.themes) {
+      expect(system).toContain(`${t.id} (${t.label}): ${t.jdSignals.join(", ")}`);
+    }
+    // "leadership" has zero bullets tagged for it in CAREER — its only
+    // possible source in the prompt is the vocabulary block itself.
+    expect(system).toContain("leadership (Leadership & scale): team building, P&L");
+  });
+
+  // Fix round 1, finding (b): the forward-only check ("every real op name
+  // appears somewhere") stayed green even when OPERATION_DESCRIPTIONS was
+  // missing an entry, because operationCatalogueBlock falls back to "" and
+  // the bare name still appears. This asserts the reverse: every accepted
+  // op renders with an actual, non-empty description line.
+  test("every accepted operation renders with a non-empty description", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    for (const name of operationNamesFromSchema()) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp("^- " + escaped + ": .+$", "m");
+      expect(system).toMatch(re);
+    }
+  });
+
+  // Fix round 1, finding 3: an empty override array is meaningful (this role
+  // now shows no bullets) and must not render as a dangling empty label.
+  test("an empty override bullet list renders (none), not a dangling empty label", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    expect(system).toContain("Bullets override, manager: (none)");
+    expect(system).not.toMatch(/Bullets override, manager: $/m);
+  });
+
+  // Fix round 1, finding 4: CURRENT SELECTION and CURRENT OVERRIDES disagree
+  // on "manager" in this fixture (selection: m-b0, override: none) — the
+  // prompt must say in words which one governs.
+  test("the system prompt states that overrides win over the selection where they disagree", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    expect(system).toContain("CURRENT OVERRIDES wins");
+    // The two blocks actually disagree in this fixture, or the statement
+    // above would be untested prose rather than a demonstrated rule.
+    expect(system).toContain("manager: m-b0");
+    expect(system).toContain("Bullets override, manager: (none)");
+  });
+
+  // Fix round 1, finding 5: set_lead's prose must describe the validator's
+  // actual check (bulletInPool — any bullet in the role's pool), not imply a
+  // stricter "already selected" requirement it doesn't enforce.
+  test("set_lead's description does not claim the bullet must already be selected", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    expect(system).toContain("- set_lead: make one bullet from a role's pool the lead bullet");
+    expect(system).not.toContain("already-selected bullet");
+  });
+
+  // Fix round 1, finding 6: strength renders to two decimal places, not the
+  // full floating-point value.
+  test("coverage strength renders rounded to two decimal places", () => {
+    const { system } = buildChatPrompt(FIXTURE_INPUT);
+    expect(system).toContain("Strength: 0.82");
+    expect(system).not.toContain("0.8214285714285714");
   });
 });

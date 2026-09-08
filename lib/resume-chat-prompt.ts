@@ -12,14 +12,15 @@
 // model as a posting that stated no preferences at all, not one that has
 // none recorded.
 //
-// buildChatPrompt's inputs deliberately do NOT include the full
-// ThemeVocabulary (id/label/jdSignals/evidence): that catalogue is static
-// and career-specific to this app's one checked-in record, and nothing here
-// needs the model to invent theme ids — `themes` is the currently ACTIVE
-// theme list, the same list `set_themes` replaces wholesale, and the bullet
-// index below carries each bullet's own theme tags. That's enough for the
-// model to reason about coverage and reordering without reproducing the
-// vocabulary's descriptive text a second time.
+// `vocabulary` renders in the SAME shape lib/resume-prompt.ts:46-49's
+// vocabularyBlock already uses for the sibling theme-derivation prompt —
+// `id (label): jdSignal, jdSignal, …` — deliberately, not a different
+// format. Fix round 1 found the bullet index's bare theme tags plus 80-char
+// previews an insufficient substitute: a theme added to themes.json before
+// any bullet is tagged for it would be genuinely unreachable with no signal
+// it exists, and even an active id like "systems" doesn't say what it means
+// ("Building — A.I. and automation" is the label, not the id) without the
+// vocabulary's own descriptive text.
 //
 // The bullet index carries ids, themes and a TRUNCATED preview of each
 // bullet's text — never the full record. A 12-role record with ~60 bullets
@@ -32,7 +33,12 @@
 // lib/__fixtures__/resume-chat-prompt.txt — the RENDERED prompt, not the
 // builder, so a change to what the model is actually told shows up as a
 // diff even if every unit test around the builder still passes.
-import type { CareerRecord, ResumeRole, ResumeSelection } from "@/lib/resume-render/render";
+import type {
+  CareerRecord,
+  ResumeRole,
+  ResumeSelection,
+  ThemeVocabulary,
+} from "@/lib/resume-render/render";
 import type { ResumeOverrides } from "@/lib/resume-overrides";
 import type { CoverageReport } from "@/lib/resume-coverage";
 import { OPERATION_SCHEMA } from "@/lib/resume-ops";
@@ -45,6 +51,7 @@ export interface ChatMessage {
 
 export interface ChatPromptInput {
   career: CareerRecord;
+  vocabulary: ThemeVocabulary;
   themes: string[];
   selection: ResumeSelection;
   overrides: ResumeOverrides;
@@ -63,6 +70,15 @@ export interface ChatPromptInput {
 function optionalList(label: string, values: string[]): string {
   if (values.length === 0) return "";
   return `\n${label}: ${values.join("; ")}`;
+}
+
+/** Same shape and same source of truth as lib/resume-prompt.ts:46-49's
+ *  vocabularyBlock — do not invent a different rendering here; matching the
+ *  sibling prompt is the point. */
+function vocabularyBlock(vocabulary: ThemeVocabulary): string {
+  return vocabulary.themes
+    .map((t) => `- ${t.id} (${t.label}): ${t.jdSignals.join(", ")}`)
+    .join("\n");
 }
 
 const BULLET_PREVIEW_CHARS = 80;
@@ -109,7 +125,12 @@ function overridesBlock(overrides: ResumeOverrides): string {
     if (sel.compressAfter != null) lines.push(`Compress after: ${sel.compressAfter}`);
     if (sel.bullets) {
       Object.keys(sel.bullets).forEach((roleId) => {
-        lines.push(`Bullets override, ${roleId}: ${sel.bullets![roleId].join(", ")}`);
+        // An empty array here is MEANINGFUL — it says this role now shows no
+        // bullets, which is different from the role having no override at
+        // all — so it renders "(none)" rather than a dangling empty label
+        // ("Bullets override, manager: " with nothing after the colon).
+        const ids = sel.bullets![roleId];
+        lines.push(`Bullets override, ${roleId}: ${ids.length ? ids.join(", ") : "(none)"}`);
       });
     }
   }
@@ -132,7 +153,7 @@ function coverageBlock(coverage: CoverageReport): string {
     const beyond = t.poolBeyondRendered > 0 ? `, ${t.poolBeyondRendered} more in compressed roles` : "";
     return `- ${t.theme}: ${t.support} (selected ${t.selected} of ${t.pool} in the pool${beyond})`;
   });
-  const strength = coverage.strength == null ? "n/a" : String(coverage.strength);
+  const strength = coverage.strength == null ? "n/a" : coverage.strength.toFixed(2);
   const lines = [
     ...themeLines,
     `Strength: ${strength}`,
@@ -173,7 +194,11 @@ const OPERATION_DESCRIPTIONS: Record<string, string> = {
   add_bullet: "add one bullet from a role's pool to the current selection.",
   drop_bullet: "remove one bullet from the current selection.",
   swap_bullet: "replace one selected bullet with another from the same role's pool.",
-  set_lead: "make one already-selected bullet the lead bullet.",
+  // Matches validateOperation's actual check: set_lead uses the same
+  // bulletInPool test as add_bullet (any bullet in the role's pool,
+  // selected or not) — the prose must describe the validator, not the
+  // other way around.
+  set_lead: "make one bullet from a role's pool the lead bullet — it does not need to be selected already.",
   set_positioning: "switch to a different positioning variant from the career record.",
   set_taper: "set how many bullets render per role, most senior role first.",
   set_compress_after: "compress roles after the n-th into one-line rows.",
@@ -211,6 +236,9 @@ const INVARIANT = `You may reorder and retune the document freely. You may not i
 export function buildChatPrompt(input: ChatPromptInput): { system: string; prompt: string } {
   const system = `You are editing one tailored résumé through a fixed set of document operations. You never write résumé prose or CSS directly — every change to the document happens through one of the operations below, and the document itself is rendered deterministically from the resulting selection and overrides, never from anything you write out.
 
+THEME VOCABULARY
+${vocabularyBlock(input.vocabulary)}
+
 THEMES CURRENTLY DRIVING SELECTION
 ${input.themes.length ? input.themes.join(", ") : "(none set)"}
 
@@ -221,6 +249,7 @@ CURRENT SELECTION
 ${selectionBlock(input.career, input.selection)}
 
 CURRENT OVERRIDES
+Wherever this section names a role or field also shown in CURRENT SELECTION above, CURRENT OVERRIDES wins — it is what has already been layered on top of that selection.
 ${overridesBlock(input.overrides)}
 
 COVERAGE REPORT
