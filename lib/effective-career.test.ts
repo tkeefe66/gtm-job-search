@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { effectiveCareer } from "@/lib/effective-career";
+import { selectBullets } from "@/lib/resume-render/render";
 import type { CareerRecord } from "@/lib/resume-render/render";
 
 const SHIPPED = {
@@ -11,6 +12,41 @@ const SHIPPED = {
   ],
   advisory: [], education: [],
   rules: { taper: [4], themes: ["ops", "systems"], compressAfter: null },
+} as unknown as CareerRecord;
+
+// Only for the duplicate-slot test below — a role with a second, non-anchor
+// bullet, so an id collision that ISN'T on the anchor can be simulated too.
+const SHIPPED_TWO_BULLETS = {
+  ...SHIPPED,
+  roles: [
+    {
+      id: "r1",
+      title: "R1",
+      org: "Org",
+      dates: "2020 – Present",
+      bullets: [
+        { id: "b1", priority: 1, themes: [], text: "shipped anchor bullet" },
+        { id: "b2", priority: 2, themes: [], text: "shipped second bullet" },
+      ],
+    },
+  ],
+} as unknown as CareerRecord;
+
+// Only for the cross-role id test below — a second role whose own bullet id
+// ("b2") is unrelated, so the collision check must not confuse "same id
+// anywhere in the record" with "same id in the role the overlay targets".
+const SHIPPED_TWO_ROLES = {
+  ...SHIPPED,
+  roles: [
+    SHIPPED.roles[0],
+    {
+      id: "r2",
+      title: "R2",
+      org: "Org2",
+      dates: "2018 – 2020",
+      bullets: [{ id: "b2", priority: 1, themes: ["ops"], text: "other role's bullet" }],
+    },
+  ],
 } as unknown as CareerRecord;
 
 describe("effectiveCareer", () => {
@@ -67,5 +103,57 @@ describe("effectiveCareer", () => {
   it("ignores a text override naming a bullet that does not exist", () => {
     const { warnings } = effectiveCareer(SHIPPED, [], { "bullet:r1:nope": "x" });
     expect(warnings.join(" ")).toContain("nope");
+  });
+
+  it("drops an overlay bullet whose id collides with a record bullet in the same role, and warns", () => {
+    const { career, warnings } = effectiveCareer(SHIPPED, [
+      { id: "b1", roleId: "r1", text: "colliding overlay text", themes: [] },
+    ], {});
+    // The collider was dropped, not appended: count and content are unchanged
+    // from the shipped role, not silently duplicated-but-unreachable.
+    expect(career.roles[0].bullets).toHaveLength(1);
+    expect(career.roles[0].bullets[0].text).toBe("shipped bullet");
+    expect(warnings.join(" ")).toContain("b1");
+  });
+
+  it("keeps the priority-1 anchor selectable when a colliding overlay bullet targets its id", () => {
+    // Named by the review finding as "the compounding case": selectBullets'
+    // anchor pool-exclusion filter (role.bullets.filter(b => b.id !==
+    // anchor.id)) strips every bullet sharing the anchor's id, not just the
+    // anchor object. Dropping the collider before it ever reaches the record
+    // means the anchor is never at risk of that filter misfiring.
+    const { career } = effectiveCareer(SHIPPED, [
+      { id: "b1", roleId: "r1", text: "colliding overlay text", themes: [] },
+    ], {});
+    const selection = selectBullets(career);
+    expect(selection.bullets.r1).toContain("b1");
+  });
+
+  it("prevents a non-anchor id collision from rendering the same bullet twice in one role", () => {
+    // The sharper version of the compounding case, verified by hand-tracing
+    // selectBullets against render.js: an anchor-id collision is self-healing
+    // (the anchor is unconditionally re-added regardless of pool exclusion),
+    // but a collision on a NON-anchor bullet is not — pool exclusion only
+    // strips entries matching the ANCHOR's id, so an undropped overlay
+    // duplicate of "b2" would sit in the pool alongside the real "b2" and
+    // both could be selected, producing ["b1","b2","b2"] — a duplicate id
+    // that renderBody's role.bullets.filter(b => b.id === id)[0] resolves to
+    // the same original bullet twice, wasting a bullet slot on a repeated
+    // line instead of dropping it. Dropping the collider up front removes the
+    // duplicate id before selectBullets ever sees it.
+    const { career } = effectiveCareer(SHIPPED_TWO_BULLETS, [
+      { id: "b2", roleId: "r1", text: "colliding overlay text", themes: [] },
+    ], {});
+    const selection = selectBullets(career);
+    expect(selection.bullets.r1).toEqual(["b1", "b2"]);
+    expect(new Set(selection.bullets.r1).size).toBe(selection.bullets.r1.length);
+  });
+
+  it("does not treat an overlay id colliding with a bullet in a DIFFERENT role as a collision", () => {
+    const { career, warnings } = effectiveCareer(SHIPPED_TWO_ROLES, [
+      { id: "b1", roleId: "r2", text: "same id as r1's bullet, but targets r2", themes: [] },
+    ], {});
+    expect(career.roles[1].bullets.map((b) => b.id)).toEqual(["b2", "b1"]);
+    expect(warnings).toHaveLength(0);
   });
 });
