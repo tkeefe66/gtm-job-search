@@ -907,7 +907,7 @@ export default function RolesTable({
                   {linkReport.relinked > 0 &&
                     ` Relinked ${linkReport.relinked} to the employer's own posting.`}
                   {linkReport.closed > 0 &&
-                    ` Closed ${linkReport.closed} whose posting returned a 404.`}
+                    ` Closed ${linkReport.closed} whose link is dead — a 404, or a redirect to the careers listing.`}
                   {linkReport.closedUnlisted > 0 &&
                     ` Closed ${linkReport.closedUnlisted} the employer's own board no longer lists.`}
                   {linkReport.closedAbsent > 0 &&
