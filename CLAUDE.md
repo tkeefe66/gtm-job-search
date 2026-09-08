@@ -526,7 +526,13 @@ and never expiring. (Regenerate itself writes only `{themes, selection}`, so
 `overrides` is a MAXIMUM shape, not an invariant: every reader must default the
 absent key to `{}`.) `saved_resumes` (migration 016) is the ARCHIVE — one row per
 explicit Save, many per job, holding frozen sanitized HTML that is mounted as
-stored and **never re-rendered through `renderBody`**, because re-rendering would
+stored and **never re-rendered through `renderBody`**. Consequence worth knowing
+BEFORE filing a bug: a saved row legitimately looks stale against the current
+design, and the older it is the more it will. On 2026-09-08 a row saved the day
+before still showed the tagline the design sync had removed, at a
+`/resume?savedId=…` URL, and that was read as the removal not having shipped.
+Check `render.js` and the render fixture, not a saved row, when asking whether a
+design change is live. Re-rendering would
 silently apply today's career record and today's selection rules to a document the
 user saved as final. "Save as new version" on a saved résumé writes a NEW row and
 never overwrites the one open. `job_id` is `ON DELETE SET NULL`, so an archived
@@ -675,7 +681,12 @@ jumping the WHOLE role to the next page and stranding 300-400px of blank
 space instead of the small orphaned-header gap the rule meant to prevent.
 Replaced with `break-after:avoid` on the role head/org plus
 `break-before:avoid` on the first bullet, so the header can never be
-stranded alone but later bullets can flow onto the next page.
+stranded alone but later bullets can flow onto the next page. **That pass
+did not actually fix the reported defect, and this file credited it with
+doing so for a day.** The rule that decided where the document broke was one
+line ABOVE it — `.rsm-section{break-inside:avoid}`, untouched since the
+original port and never disputed, so it survived the re-sync unread. See the
+section-fragmentation paragraph below.
 `.rsm-bullets` switched from `display:flex;flex-direction:column` to plain
 block flow (`margin-top` instead of flex `gap`) — `doc-page.js`'s own usage
 docs explicitly warn that flex/grid containers don't fragment cleanly across
@@ -716,7 +727,31 @@ fragment across print pages) both stay, as does `--rail` at 132px.
 One NEW divergence the sync forced: the source's separator class is bare `sep`,
 and `lib/resume-sanitize.ts` allows only `/^rsm(-[a-z0-9-]+)?$/`, so it is
 stripped from every SAVED résumé while looking correct in the draft. Renamed to
-`rsm-sep` here; push that upstream so the next sync does not reintroduce it.
+`rsm-sep` here, and PUSHED UPSTREAM 2026-09-08 — to `_repo-sync/tokens/document.css`
+and `_repo-sync/render.js` BOTH, since the CSS selects on the name render.js emits
+and a rename in one alone leaves the separators untinted. No longer a divergence.
+
+**`break-inside:avoid` on a box TALLER than a page causes the blank page it looks
+like it prevents, and `.rsm-section` was that box.** The printed résumé put the
+masthead and summary alone on page 1 and started Professional Experience on page 2,
+leaving ~700px of white — the defect the 2026-09-07 role pass was thought to have
+fixed. The engine does not keep an over-tall box whole: it pushes it to the next page,
+finds it still does not fit, and fragments it there anyway, so the only thing the rule
+buys is the gap above the push. At twelve roles that section is three pages tall.
+`.rsm-section:has(.rsm-role){break-inside:auto}` exempts the one section whose height
+is unbounded; Advisory and Education stay unsplittable, which is what the source's
+rail-label argument actually protects — its concern was a two-row section stranded
+from its label, not a three-page one. The rail label does not repeat on the
+continuation page, correctly: it labels the section, not the page. **Measure this
+class of defect, never read it** — `renderResume` to a file, headless Chrome
+`--print-to-pdf`, then `pdftotext`/`pdftoppm`; no vitest test can lay out a page.
+Before and after: 4 pages to 3, page 1 full. Corroboration that the CSS and not the
+estimator was wrong: `rsm-page-guides.js` had been offering breaks between roles
+inside that section since it was written, so the on-screen guide and the print output
+had silently disagreed the whole time. Pushed upstream with the `rsm-sep` rename.
+`lib/resume-print-breaks.test.ts` resolves the CASCADE rather than grepping for a
+string, so a re-sync that restores the rule fails as loudly as one that blanket-removes
+it.
 
 **Removing the tagline made `set_text`'s `positioning` target inert**, so it was
 removed rather than left to validate, bill, report success and change no pixel —
@@ -728,7 +763,8 @@ statement now, it is the only clearable slot, and the house-style rule
 be silently reverted** — check `git log` on `public/resume-design/tokens/` and
 `lib/resume-render/render.js` before trusting a fresh port. Any change under
 `tokens/` also requires bumping `DESIGN_VERSION` (`lib/resume-download.ts`) by
-hand; the sync took it to `2026-09-08b`.
+hand; the sync took it to `2026-09-08b`, and the section-fragmentation fix below
+took it to `2026-09-08c`.
 
 **`public/resume-design/page-guides.js` (the vendored on-screen page-break
 overlay) is not loaded — `components/resume/ResumeDocument.tsx` loads
