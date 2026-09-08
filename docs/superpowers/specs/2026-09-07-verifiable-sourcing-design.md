@@ -1,7 +1,13 @@
 # Verifiable sourcing: the job description is the product
 
 Date: 2026-09-07
-Status: DRAFT, revision 2. Revision 1 was reviewed by two independent agents and
+Status: IMPLEMENTED 2026-09-07 (revision 3). Steps 0-4 all shipped the same night;
+what the build changed about the design is recorded at the end. **Several figures in
+revision 2 were WRONG and are corrected below: they came from direct database
+queries that bypassed the tenant scoping the app enforces, so two users' data was
+reported as one.**
+
+Revision 2 was reviewed by two independent agents; Revision 1 was reviewed by two independent agents and
 several of its central claims were WRONG; see "What review changed" at the end,
 which is kept rather than deleted because each error's reasoning constrains the
 next one. Numbers were measured against production on 2026-09-07 and are cited
@@ -17,15 +23,25 @@ link resolves" — it is **"we hold this posting's own words, and we use them."*
 
 Both halves matter, and revision 1 missed the second one entirely.
 
-## Measured state (2026-09-07)
+## Measured state (2026-09-07), CORRECTED for tenant scoping
 
-| | |
-|---|---|
-| Rows in `jobs` | 195 |
-| Visible (not `never_live`) | 123 |
-| Rows whose JD has ever been read | **18** |
-| Rows scored | 161 — i.e. 143 scored with no JD |
-| Rows whose JD reaches résumé tailoring | **0** |
+The first numbers here counted two tenants' rows as one, because `railway run psql`
+sees every row while the app sees one tenant's. The corrected figures for the tenant
+this work was aimed at:
+
+| | reported | actual |
+|---|---|---|
+| Rows in `jobs` | 195 | **147** |
+| Rows whose JD had been read | 18 | **20** |
+| Open rows | — | **24** |
+| Scored 4+ carrying a JD | 3 of 58 | **4 of 36** |
+| Rows whose JD reached résumé tailoring | 0 | **0** ✓ |
+
+The conclusion survives the correction — coverage on the rows that matter was ~11%,
+and the résumé finding was exact — but the 15 "junk rows" that prompted
+`lib/not-a-posting.ts` belonged to the OTHER tenant. The guard is still right (it
+protects both accounts at ingest) and was still built for a real defect; it was not
+this user's defect. **Any future measurement here must scope by `tenant_id`.**
 
 That last line is the finding that reorders this whole document. `loadJobForTenant`
 (`app/actions/resume.ts:43`) selects eight columns and `posting` is not among them,
@@ -368,3 +384,43 @@ change.
   discovery is the surface that would have been silently lost: a board cannot be
   asked which companies are hiring, so By Role is the only way roles at untracked
   companies are ever found. Now stated as its own section and a non-goal.
+
+## What the BUILD changed (revision 3)
+
+Recorded because each correction was found by running the thing, not by reasoning
+about it — which is the argument for probing before shipping, not after.
+
+- **Title matching by substring found NOTHING.** Measured against a real 89-posting
+  board: users configure phrases ("Director of Revenue Operations") and boards publish
+  titles ("Marketing Platform Operations Manager"). `rolesFromBoard` now matches when
+  every meaningful word of some configured title appears in the board's, seniority
+  words dropped. After the fix: Anthropic 10 of 588, Databricks 3 of 870, Baseten 5 of
+  88, Smartsheet 3 of 89.
+- **Corroboration must ask the BOARD, not a posting.** A company on a custom careers
+  domain publishes posting URLs no slug parses back out of, so the posting route
+  failed for exactly the boards most needing it. `fetchBoardIdentity` asks
+  `boards-api.greenhouse.io/v1/boards/<slug>` instead; Databricks refused by the first
+  route and passes by this one.
+- **`preRead` was gated behind the read budget**, so a caller handing over postings in
+  bulk lost every one past the sixth. Found by a test written for the new
+  `MAX_SEARCH_READS`.
+- **The fit cutoff had to be REVERSED for manual adds.** A pasted URL went through the
+  same pipeline as a search result, so the first manual add scored 2, filed itself,
+  and vanished. `chosenByUser` switches the cutoff off for that path only: the cutoff
+  exists to keep a search's output out of the table, and a link somebody pasted is a
+  decision the app must not overturn.
+- **Attaching a JD had to re-score.** Storing the posting without re-scoring left a
+  number computed from a job title next to the description that disproved it.
+- **Two signals the app already held said nothing.** An employer site that blocks us
+  AND a board that no longer lists the title is worth showing; `removalMarker` had
+  been flattening "could not read" into the same null as "read it, nothing said".
+
+## Still open
+
+- Board resolutions are not persisted, so every crawl re-resolves (free fetches, but
+  wasteful) — and `crawl_method` has no `board` value.
+- No alarm when a company that used to resolve a board stops resolving one. It falls
+  back to the HTML path, which succeeds, so nothing looks wrong except spend.
+- `fetchBoard` maps 429 and 5xx to the same null as 404, so one tenant's probe storm
+  silently degrades another's resolution.
+- `lib/cost-estimate.ts` still has no vocabulary for per-row non-search calls.

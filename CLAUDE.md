@@ -124,7 +124,11 @@ destination however the config is ordered: it is terminal, but it is a CLAIM tha
 posting is gone, and the link checker would act on it. A config with no terminal status
 files nothing rather than inventing a key. It applies at BOTH points where a score is
 written — `ingestRoles` and `rescoreAll` — because the rescore is where a row scored blind
-gets its fair hearing once a backfill has given it a posting. **The rubric itself is
+gets its fair hearing once a backfill has given it a posting. **A role the USER added is
+exempt** (`IngestOptions.chosenByUser`): the cutoff exists to keep a SEARCH's output from
+filling the table, and a URL somebody pasted is a decision the app must not silently
+overturn — the first manual add scored 2, filed itself, and vanished from the open list.
+Such a role is still scored, and the confirmation names the number. **The rubric itself is
 untouched:** telling the model to answer only 3–5 was considered and rejected, since it
 relabels weak roles rather than removing them and destroys the signal the cutoff needs.
 The three rescore queries also skip terminal rows entirely (`notTerminalSql` in
@@ -223,6 +227,60 @@ reason the other three stamps are not. A drained pass stamps BOTH markers: one
 `runRescorePass` re-scores every scored row through the same `scoreFit`, so stamping only
 the trigger that raised the prompt would bill a second identical pass for nothing. Design
 and the two places the spec was wrong: `docs/superpowers/specs/2026-09-07-posting-detail-design.md`.
+
+**Manual intake: `addRoleFromUrl` (`app/actions/add-role.ts`, "Add by URL" on `/roles`),
+URL first with paste as the FALLBACK.** The reason is identity, not convenience: pasted
+text carries no employer, no canonical link and no posting id, so it cannot be deduped,
+re-checked for liveness, or attributed without the user typing what the URL already knows.
+A URL feeds `readPosting` and `jobPostingFrom` (the page's schema.org JobPosting), so one
+paste yields the JD, the employer's own name and title, and — on an ATS deep link — a
+posting id `verifyPostingLink` can re-check forever. The paste box appears ONLY when the
+read failed, with the reason, and the row keeps the URL either way. This is the only
+mechanism in the app that reaches hosts which block automated readers in principle
+(Indeed, ZipRecruiter, LinkedIn, Workday tenants, openai.com), and measured 2026-09-07
+those hosts were almost the entire unread backlog. A URL for a role already tracked
+ATTACHES to that row — the posting, the corrected link (through `relinkPatch`, so nothing
+is lost) and a fresh score — rather than refusing as a duplicate, because the duplicate was
+never the point and the JD was.
+
+**The BOARD tier (`extractViaBoard` in `lib/crawler.ts`, `lib/board-source.ts`) sources a
+tracked company's roles from its own hiring board, and `boardTrust` is the whole safety
+story.** A guessed slug elsewhere in this codebase produces a bad LINK on a row that
+already exists; under enumeration it would CREATE rows — a stranger's postings under this
+company's name, live so they pass the URL check, then scored, billed and eligible to be
+auto-filed. So a slug READ out of an employer's own posting URL may source roles, and a
+GUESSED one only when the board itself names the employer and that name agrees under
+`companyIdentityKey`. Ask the BOARD for that name (`fetchBoardIdentity`), never a posting:
+a company on a custom careers domain publishes posting URLs no slug parses back out of, so
+the posting route failed for exactly the boards most needing it (measured: Databricks).
+Vendors publishing no name cannot corroborate a guess and are refused. **Closure is handled
+explicitly**: `seenTitles` feeds `titlesToClose`, so `runProvidesClosureEvidence` takes the
+board's provenance and returns false for a guessed slug AND for an EMPTY board — a vendor
+answering `{"jobs":[]}` is indistinguishable from a parser broken by a shape change, and
+two nights of that would close every crawl-sourced role at a company. Title filtering
+happens BEFORE ingest (`rolesFromBoard`) because `ingestRoles` fans out unbounded
+`Promise.all`s, and it matches on WORD SETS with seniority words dropped: substring
+matching a configured phrase ("Director of Revenue Operations") against a board's own
+titles ("Marketing Platform Operations Manager") was measured against a real 89-posting
+board and found NOTHING.
+
+**A job board's SEARCH page is not a role, and a description is not an employer**
+(`lib/not-a-posting.ts`). `indeed.com/q-…-jobs.html` names a query whose results change
+daily; `Confidential (via CSG Talent)` is a recruiter's discretion. Fifteen such rows were
+found stored and scored. Rejected at ingest before anything is spent, and closable by
+`repairJobLinks` first and with no network call, since they are decidable from the row
+alone. Both checks are narrow because a false positive closes a real role: matching is on
+the URL SHAPE rather than the host (all three serve real postings too), and a placeholder
+name must be the whole company or be followed by a qualifier — "Confidential Computing
+Inc" is a real employer.
+
+**`likely-closed` is the one `UnclearReason` built from TWO signals**: the employer's site
+refused to be read at all AND the board found for that company does not list the title.
+Either alone is worth nothing — a 403 is routine, a guessed board proves nothing — but
+together they were right eleven times out of eleven on 2026-09-07. Reported and led in the
+list, never auto-closed; the slug is still a guess. `removalMarker` therefore distinguishes
+"read it, nothing said" from "could not read it at all", a difference previously flattened
+to `null`, which is why half the evidence was invisible.
 
 **The Find Roles pipeline** (`findAndSaveRoles` in `app/actions/roles.ts`): one web-search call returns a JSON array of roles → the URL-verification and fit-scoring block lives in `lib/ingest-roles.ts` (shared with the crawler and role search below), which liveness-checks every `job_url` in parallel (`lib/verify-url.ts` — only definitive 404/410 counts as dead; 403s/timeouts pass through, job boards block bots), saves dead roles with status `"Posting Closed"` and skips fit-scoring for them, and saves live ones as `"New"`, `scoreFit`-ed in parallel. Results are also cached per-company in `discovered_roles` (cache-first unless `force`).
 
@@ -427,6 +485,16 @@ filters and `link-health.ts`. The column ships as `db/migrations/008_never_live.
 and NOT through `db/apply-schema.mjs`, which would re-create the `insights_cache`
 table that `006_drop_insights.sql` dropped. Design:
 `docs/superpowers/specs/2026-08-17-never-live-roles-design.md`.
+
+**The résumé prompt reads the posting.** `loadJobForTenant` selects `posting` and
+`buildThemePrompt` renders `requirements` / `niceToHaves` as their own lines — until
+2026-09-07 it selected eight columns, `posting` was not among them, and EVERY JD the app
+had ever read was invisible to the feature that needs it most. A role with no JD is not
+refused (the user can read the posting in a browser) but says so, on the row as a `no JD`
+chip and on the tailor screen; `hasPostingBeenRead` (`lib/posting-detail.ts`) is the one
+definition, shared with the enrich queue. The expanded row leads with **What the posting
+asks for**, above everything the app inferred, because the fit rationale is this app's
+opinion and only that block is the employer speaking.
 
 **Résumé tailoring** (`/resume`, admin-gated) turns a tracked role into a résumé
 selected from the checked-in career record — never freely generated text; see
