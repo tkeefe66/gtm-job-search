@@ -5,6 +5,7 @@ import { crawlQuotaVerdict } from "@/lib/crawl-quota";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { resolveCareersUrlWrite } from "@/lib/careers-url-precedence";
+import { readCompanyInput } from "@/lib/company-input";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL, crawlIntervalError } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
@@ -391,7 +392,14 @@ export async function getTrackedCompanies(): Promise<{
  * waiting for the next cron cycle.
  */
 export async function trackCompanyByName(
-  name: string
+  name: string,
+  /**
+   * The careers page to store alongside the new row. Supplied only by the
+   * confirm step the client shows when a URL was pasted into the name box —
+   * see the URL refusal below. Subject to resolveCareersUrlWrite's precedence
+   * like every other careers_url write: a URL already stored wins.
+   */
+  careersUrl?: string
 ): Promise<{ outcome?: CrawlOutcome; error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
@@ -405,6 +413,25 @@ export async function trackCompanyByName(
   const trimmed = name.trim();
   if (!trimmed) return { error: "Enter a company name." };
 
+  // A pasted careers URL is REFUSED, not silently accepted as the name. The
+  // name is an identity, not a label: it keys jobs, discovered_roles and
+  // crawl_runs, and it is what ingestRoles dedupes against, so a URL stored
+  // here becomes the employer for every role ever found there. (This is not a
+  // hypothetical — "https://cursor.com/careers" was tracked as a company.)
+  //
+  // The client offers a confirm step with a derived suggestion and calls back
+  // with a real name plus this URL. This server-side check is the backstop for
+  // the RPC being called directly, and it names the suggestion so the refusal
+  // is actionable rather than a scolding.
+  const parsedInput = readCompanyInput(trimmed);
+  if (parsedInput.kind === "url") {
+    return {
+      error: parsedInput.suggestion
+        ? `That's a careers page URL, not a company name. Track "${parsedInput.suggestion}" and this URL will be saved as its careers page.`
+        : `That's a careers page URL, not a company name. Enter the company's name — you can add the URL to its row afterwards.`,
+    };
+  }
+
   // Company identity is case-insensitive everywhere else in the tracking
   // pipeline (ingest-roles.ts's dedupe lookup is lower()-based), but the
   // watchlist's unique index is on raw text. Without this lookup, typing
@@ -414,10 +441,8 @@ export async function trackCompanyByName(
   // role would re-insert as a duplicate "New" job. Reusing the exact stored
   // string keeps it to one row. This is an upsert, like addToWatchlist —
   // "not found" is the normal first-time-tracking case, not an error.
-  const {
-    row: { company },
-    readFailed,
-  } = await resolveExistingCompany(trimmed);
+  const { row: existingRow, readFailed } = await resolveExistingCompany(trimmed);
+  const company = existingRow.company;
 
   // Refused rather than guessed. The watchlist's unique index is on RAW text,
   // so this lookup is the only thing that keeps "clay" from upserting a second
@@ -433,12 +458,34 @@ export async function trackCompanyByName(
     return { error: readFailureError(trimmed, "tracking") };
   }
 
+  // Same precedence every other careers_url write obeys: a URL already stored
+  // was very possibly typed by hand to rescue a broken crawl, and must not be
+  // clobbered by one pasted into the track box. `{ known: true }` is safe here
+  // only because the readFailed guard above already returned.
+  const pastedUrl = resolveCareersUrlWrite(
+    { known: true, url: existingRow.careers_url },
+    careersUrl ?? ""
+  );
+
   const { error } = await supabase.forTenant(await resolveTenantId()).from("watchlist").upsert(
     {
       company,
       source: "manual",
       tracking_enabled: true,
       consecutive_failures: 0,
+      // Spread, not a null: omitting the column leaves a stored URL alone,
+      // where writing undefined/null would erase it.
+      ...(pastedUrl !== undefined
+        ? {
+            careers_url: pastedUrl,
+            // A changed URL invalidates what the crawler learned about the old
+            // one — the same reset setCareersUrl performs, and the reason
+            // resolveCareersUrlWrite's defined return doubles as that signal.
+            crawl_method: null,
+            last_crawl_status: null,
+            last_crawl_error: null,
+          }
+        : {}),
     },
     { onConflict: "tenant_id,company" }
   );
@@ -467,6 +514,112 @@ export async function trackCompanyByName(
     };
   }
   return { outcome: budget.result! };
+}
+
+/**
+ * Rename a tracked company, carrying the name through every table keyed by it.
+ *
+ * The company NAME is this app's join key — there is no company id. It appears
+ * in four tables (`watchlist`, `jobs`, `discovered_roles`, `crawl_runs`), and
+ * ingestRoles dedupes new roles against `jobs.company`. So renaming the
+ * watchlist row alone is not a cosmetic half-measure, it is a corruption: the
+ * next crawl finds no existing rows under the new name and re-inserts every
+ * role the company already had as a fresh "New" duplicate, while the old rows
+ * sit under a name nothing will ever match again.
+ *
+ * All four updates therefore go out as ONE statement. Data-modifying CTEs
+ * commit or roll back together, which gets atomicity through the existing
+ * rawQuery without exporting a transaction helper — lib/supabase.ts keeps
+ * withTenant private on purpose, and a rename is exactly the "short block, no
+ * external call" shape its comment permits.
+ *
+ * What this deliberately will NOT do is merge. If the new name already belongs
+ * to a different tracked company, it refuses: `watchlist.company` is unique, so
+ * the write would fail anyway, but more importantly a merge would fuse two
+ * companies' role histories with no way back.
+ */
+export async function renameTrackedCompany(
+  from: string,
+  to: string
+): Promise<{ company?: string; error?: string }> {
+  // Session required. Server Actions are RPC endpoints addressed by an ID that
+  // ships in the client bundle, so a page-level check does not cover them.
+  await requireActor();
+
+  const nextName = to.trim();
+  if (!nextName) return { error: "Enter a company name." };
+
+  // The same refusal tracking makes, for the same reason: a URL is not a name,
+  // and this action exists largely to undo one that was stored as one.
+  const parsedInput = readCompanyInput(nextName);
+  if (parsedInput.kind === "url") {
+    return {
+      error: parsedInput.suggestion
+        ? `That's a URL, not a company name. Did you mean "${parsedInput.suggestion}"?`
+        : "That's a URL, not a company name.",
+    };
+  }
+
+  // Resolves the STORED casing and refuses on a failed read — the rename is a
+  // write against an existing row, so "could not look" must not be treated as
+  // "not found".
+  const target = await resolveWriteTarget(from);
+  if (target.error) return { error: target.error };
+
+  // Renaming to what it already is (or to a different casing of it) is not a
+  // merge — it is this row. Allowed, so "cursor" can be corrected to "Cursor".
+  const sameRow =
+    normalizeCompanyName(target.company) === normalizeCompanyName(nextName);
+  if (!sameRow) {
+    const collision = await resolveExistingCompany(nextName);
+    if (collision.readFailed) return { error: readFailureError(nextName, "renaming") };
+    if (collision.found) {
+      return {
+        error:
+          `"${collision.row.company}" is already on your watchlist. Renaming into it would ` +
+          `merge two companies' roles and crawl history, which cannot be undone — ` +
+          `rename to a different name, or stop tracking one of them.`,
+      };
+    }
+  }
+
+  const tenantId = await resolveTenantId();
+  // All four carry tenant_id (jobs/watchlist from migration 001, the other two
+  // from 002), so all four clauses are scoped by it as well as by RLS.
+  //
+  // Two tables named `company` are deliberately NOT here. `role_searches` has
+  // no company column at all — it is keyed by query family. `company_boards` is
+  // keyed by companyIdentityKey(company), a DERIVED value, so a rename orphans
+  // its row rather than mis-keying one: the next crawl re-resolves the board
+  // (time, not tokens — see db/migrations/018) and writes a fresh row, and the
+  // stale one becomes live again if the name is ever renamed back.
+  const { error } = await rawQuery(
+    `with w as (
+       update watchlist set company = $2 where tenant_id = $3 and company = $1
+     ), j as (
+       update jobs set company = $2 where tenant_id = $3 and company = $1
+     ), d as (
+       update discovered_roles set company = $2 where tenant_id = $3 and company = $1
+     )
+     update crawl_runs set company = $2 where tenant_id = $3 and company = $1`,
+    [target.company, nextName, tenantId],
+    tenantId
+  );
+
+  // Presence, not truthiness: an unreachable database reports an empty message,
+  // and `if (error)` would report a rename that never happened as done.
+  if (error !== null && error !== undefined) {
+    return {
+      error:
+        // `error.message`, not `error` — describeWriteFailure takes the driver's
+      // message, empty string included, and the empty case is the whole point:
+      // an unreachable dual-stack host rejects with an AggregateError whose
+      // message is "".
+      describeWriteFailure(error.message, `rename "${target.company}"`) ??
+        UNDESCRIBED_DB_ERROR,
+    };
+  }
+  return { company: nextName };
 }
 
 // setTracking, markChecked, setCareersUrl, and removeFromWatchlist all
