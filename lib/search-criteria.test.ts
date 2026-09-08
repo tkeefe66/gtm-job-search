@@ -34,6 +34,7 @@ import {
 } from "./search-criteria";
 import { rawQuery } from "@/lib/supabase";
 import { DEFAULT_PROFILE } from "@/lib/profile";
+import { ROLE_FIELDS } from "@/lib/types";
 import {
   DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
@@ -666,5 +667,45 @@ describe("the settings loaders", () => {
       domainBonus: DEFAULT_DOMAIN_BONUS,
     });
     err.mockRestore();
+  });
+});
+
+// Part 2 of docs/superpowers/specs/2026-09-07-posting-detail-design.md. This
+// assertion exists because the two prompt tests that render the schema
+// (lib/company-role-prompt.test.ts, lib/role-search-prompt.test.ts) rebuild
+// their expected text by CALLING roleExtractionSchema, so they go green on any
+// schema change and can never prove a field is asked for.
+describe("the extraction asks for the posting's own requirements", () => {
+  const schema = () =>
+    roleExtractionSchema(
+      DEFAULT_PROFILE.candidatePersona,
+      DEFAULT_PROFILE.buildingConcept,
+      DEFAULT_PROFILE.buildingUpside
+    );
+  const field = (name: string) =>
+    schema()
+      .split("\n- ")
+      .find((line) => line.startsWith(name));
+
+  test("requirements is asked for as an array", () => {
+    expect(field("requirements")).toContain("array of strings");
+  });
+
+  test("nice_to_haves is asked for separately from requirements", () => {
+    expect(field("nice_to_haves")).toContain("array of strings");
+  });
+
+  test("department is asked for, creating the column's missing producer", () => {
+    expect(field("department")).toBeDefined();
+  });
+
+  // ROLE_FIELDS is the itemFields list handed to lib/prose-salvage.ts, and its
+  // own comment records the failure mode: a missing name is not a type error,
+  // it just quietly stops being asked for. A live call on 2026-08-18 came back
+  // as {title,url,salary} for exactly this reason.
+  test("the salvage prompt asks for them too", () => {
+    expect(ROLE_FIELDS).toContain("requirements");
+    expect(ROLE_FIELDS).toContain("nice_to_haves");
+    expect(ROLE_FIELDS).toContain("department");
   });
 });

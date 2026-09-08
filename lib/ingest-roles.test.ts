@@ -426,3 +426,58 @@ describe("every column a rescore reads is written at ingest", () => {
     expect(required.filter((c) => !written.includes(c))).toEqual([]);
   });
 });
+
+// Part 2: the extraction's new fields reach the row. `department` is what
+// takes that column out of INGEST_EXEMPT_COLUMNS — ingest passed the literal
+// "" to scoreFit and wrote nothing, so the column had no producer at all.
+describe("ingest stores the posting's own words", () => {
+  const detailed: Role = {
+    ...ROLE,
+    requirements: ["5+ years running the stack", "SQL"],
+    nice_to_haves: ["Python"],
+    department: "Revenue Operations",
+  };
+
+  test("requirements and nice-to-haves are stored in the posting column", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, roles: [detailed] });
+
+    expect(insertedRow().posting).toEqual({
+      requirements: ["5+ years running the stack", "SQL"],
+      niceToHaves: ["Python"],
+    });
+  });
+
+  test("the department the posting names is stored on its own column", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, roles: [detailed] });
+
+    expect(insertedRow().department).toBe("Revenue Operations");
+  });
+
+  // Same drift this part's sibling fixes for key_skills: the column a rescore
+  // reads back must be the value the first score saw.
+  test("the stored department is the one scoreFit was given", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles({ ...OPTS, roles: [detailed] });
+
+    expect(vi.mocked(scoreFit).mock.calls[0][0].department).toBe("Revenue Operations");
+  });
+
+  // A model that omits them must still write a real value: `posting is null`
+  // is the backfill's "thin" predicate, so a row stored with undefined lists
+  // would be re-enriched forever, and `department: undefined` would leave the
+  // column with no producer again.
+  test("a response omitting them stores empty lists, not undefined", async () => {
+    h.addJobResult = { job: { id: "job-1" } };
+
+    await ingestRoles(OPTS);
+
+    expect(insertedRow().posting).toEqual({ requirements: [], niceToHaves: [] });
+    expect(insertedRow().department).toBeNull();
+    expect(vi.mocked(scoreFit).mock.calls[0][0].department).toBe("");
+  });
+});

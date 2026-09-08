@@ -7,6 +7,7 @@ import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { BoardCache } from "@/lib/resolve-job-link";
+import { postingDetailFrom } from "@/lib/posting-detail";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -157,6 +158,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       // wrong guess would land on a live stranger's posting (a 200) rather
       // than a 404 — a guess can produce a false "live", never a false "dead".
       const deadUrl = urlStatuses[i] === "dead";
+      // The column's only producer. Written once and read back by every
+      // rescore (lib/rescore-scope.ts), so the same value has to be what
+      // scoreFit is given below.
+      const department = (role.department ?? "").trim();
       const isDead = deadUrl || links[i].unlisted;
 
       const jobRes = await addJob({
@@ -187,6 +192,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         // where the first score saw the posting's own words.
         key_skills: role.description_summary || null,
         company_description: companyDescription,
+        department: department || null,
+        // A real value even when the model said nothing: `posting is null` is
+        // what the backfill reads as "thin", so storing undefined here would
+        // put the row back in the enrich queue on every run.
+        posting: postingDetailFrom(role),
         ic_flag: role.ic_flag ?? false,
         source,
       });
@@ -214,7 +224,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           company_description: companyDescription,
           key_skills: role.description_summary,
           fit_summary: role.fit_signal,
-          department: "",
+          department,
           location: role.location,
           // The posting's own words, unparsed. Scoring reads compensation as
           // context, not as a filter — the extraction prompt never sees it,

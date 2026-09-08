@@ -108,6 +108,16 @@ alter table jobs add column if not exists source_url text;
 -- database.
 alter table jobs add column if not exists never_live boolean not null default false;
 
+-- The posting's own words: requirements and nice-to-haves, for the decide and
+-- prep jobs the expanded row serves. Nullable with NO default — `posting is
+-- null` is the backfill's "thin" predicate, and a default would make every
+-- existing row look enriched.
+--
+-- Same rule as never_live above: this alter is here so a fresh install has the
+-- column, but an EXISTING database gets it from
+-- db/migrations/017_posting_detail.sql through db/migrate.mjs.
+alter table jobs add column if not exists posting jsonb;
+
 -- Tracking: watchlist rows are crawled on a recurring schedule until the user
 -- stops tracking them. Untracking sets tracking_enabled = false rather than
 -- deleting, so crawl history survives and the company does not resurface in

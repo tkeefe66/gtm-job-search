@@ -118,6 +118,17 @@ export function roleExtractionSchema(
     'seniority (string, one of: "VP/Head", "Director", "Senior Manager", "Manager/IC")',
     'salary_range (string, exact salary or range from the posting — e.g. "$160,000 - $210,000" — or empty string if not listed)',
     "description_summary (string, 1-2 sentences about the role)",
+    // The DECIDE half of the expanded row: "am I disqualified". Deliberately
+    // free of example vocabulary — an "e.g. Salesforce, Marketo" here is
+    // career-specific text in a prompt every tenant shares, which is what
+    // lib/career-neutrality.test.ts exists to catch and the kind it would miss.
+    "requirements (array of strings — what the posting states it requires, " +
+      "in the posting's own words, one per entry. Empty array if the posting " +
+      "does not say)",
+    "nice_to_haves (array of strings — preferences the posting states but does " +
+      "NOT require, one per entry. Empty array if the posting does not say)",
+    "department (string — the team or function the role sits in, as the posting " +
+      "names it, or empty string if not stated)",
     `fit_signal (string, 1 sentence on why a ${persona} might fit)`,
     `ic_flag (boolean — true when the role is an IC / hands-on practitioner role that centers on ${buildingConcept}, OR the function is early/nascent at this company and you would define it from scratch. False for standard leadership roles and for narrow IC roles at mature orgs with no ${buildingUpside})`,
   ].join("\n- ");

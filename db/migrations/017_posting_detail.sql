@@ -1,0 +1,24 @@
+-- db/migrations/017_posting_detail.sql
+-- What the posting itself says, for the two jobs the expanded role row serves:
+-- decide (apply or skip) and prep (feed the application, and the résumé builder
+-- downstream of both). See
+-- docs/superpowers/specs/2026-09-07-posting-detail-design.md.
+--
+-- NULLABLE WITH NO DEFAULT, deliberately. `posting is null` is literally the
+-- backfill's "thin" predicate; a `default '{}'` would make every pre-existing
+-- row look enriched and the backfill would skip the whole table.
+--
+-- jsonb rather than columns because these are the posting's own words — read
+-- for decide/prep, never a scoring input or a filter — and because the next
+-- field this needs is then not a migration.
+--
+-- Grants need no action: migration 009's column-list revoke is `users`-only,
+-- and migration 003's table-level grant to app_rw covers columns added later.
+-- Verified for migration 012; recorded here so it is not re-derived.
+--
+-- Run through db/migrate.mjs, NOT db/apply-schema.mjs, which would re-create
+-- the insights_cache table that 006_drop_insights.sql dropped. Migrate BEFORE
+-- pushing: the running code writes `posting` as soon as it deploys, and
+-- against a missing column every ingest write fails as a generic sentence
+-- about storage with no hint of the cause.
+alter table jobs add column if not exists posting jsonb;

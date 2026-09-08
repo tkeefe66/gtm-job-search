@@ -1,4 +1,5 @@
 import type { SystemStatusKey } from "@/lib/job-statuses";
+import type { PostingDetail } from "@/lib/posting-detail";
 
 /**
  * The statuses code reads and writes BY NAME. No longer the full list — the
@@ -70,6 +71,16 @@ export interface Role {
   description_summary: string;
   fit_signal: string;
   ic_flag: boolean;
+  /**
+   * The posting's own words, for the decide and prep jobs. OPTIONAL because
+   * nothing normalizes a model's role array — every path casts
+   * `parsed as Role[]` — so a response that omits them is the ordinary case,
+   * not an error. lib/posting-detail.ts is what turns them into stored values.
+   */
+  requirements?: string[];
+  nice_to_haves?: string[];
+  /** The team or function the posting names. The `department` column's producer. */
+  department?: string;
 }
 
 /**
@@ -88,6 +99,9 @@ export const ROLE_FIELDS = [
   "salary_range",
   "description_summary",
   "fit_signal",
+  "requirements",
+  "nice_to_haves",
+  "department",
 ] as const;
 
 /** RoleMatch is Role plus the company it belongs to. */
@@ -157,6 +171,14 @@ export interface Job {
    * column arrive without this key, which partitionNeverLive treats as false.
    */
   never_live: boolean;
+  /**
+   * What the posting itself says (lib/posting-detail.ts), or null for a row
+   * stored before the column existed and not yet backfilled. Read it as
+   * `job.posting ?? null` everywhere — getJobs and repairJobLinks both
+   * `select *` into Job, and the ES5 build does not catch a
+   * `job.posting.requirements` against a null.
+   */
+  posting: PostingDetail | null;
   added_date: string | null;
   applied_date: string | null;
   created_at: string;

@@ -53,8 +53,8 @@ export const SCORING_INPUT_COLUMNS = [
  * `arr`, `exit_signal` and `backer` come from the discovered-startup context
  * and are hand-entered through the InlineEdit at components/RolesTable.tsx —
  * ingest has no source for them, and they are inert in scoring by design
- * (lib/fit-agreement.ts). `department` is exempt only until the extraction
- * schema gains a producer for it; ingest passes the literal "" today.
+ * (lib/fit-agreement.ts). `department` left this set when the extraction
+ * schema gained a producer for it.
  *
  * Removing an entry here makes lib/ingest-roles.test.ts demand that ingest
  * write that column, which is the point: the exemption is a stated decision,
@@ -64,7 +64,6 @@ export const INGEST_EXEMPT_COLUMNS = [
   "arr",
   "exit_signal",
   "backer",
-  "department",
 ] as const;
 
 // The one definition of "has already been scored". Three queries below need
