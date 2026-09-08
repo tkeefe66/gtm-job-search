@@ -9,7 +9,9 @@ import { requireActor } from "@/lib/require-actor";
 import { NORMALIZED_COMPANY_SQL, normalizeCompanyName } from "@/lib/role-key";
 import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { updateJob } from "@/app/actions/jobs";
+import { getJobStatuses, updateJob } from "@/app/actions/jobs";
+import { scoreFit } from "@/app/actions/parse-role";
+import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
 import { describeWriteFailure } from "@/lib/write-failure";
 import type { Job } from "@/lib/types";
 import { loadCriteriaAndScoringInputs } from "@/lib/search-criteria";
@@ -188,8 +190,8 @@ async function attachToExisting(
   }
 
   const tenantId = await resolveTenantId();
-  const { data, error } = await rawQuery<{ id: string; source_url: string | null }>(
-    `select id, source_url from jobs
+  const { data, error } = await rawQuery<{ id: string; source_url: string | null; status: string }>(
+    `select id, source_url, status from jobs
       where tenant_id = $3 and ${NORMALIZED_COMPANY_SQL} = $1 and lower(role_title) = lower($2)
       order by created_at desc limit 1`,
     [normalizeCompanyName(identity.company), identity.roleTitle, tenantId],
@@ -206,6 +208,41 @@ async function attachToExisting(
   };
   if (read.department) patch.department = read.department;
   if (read.summary) patch.key_skills = read.summary;
+
+  // RE-SCORED here, not left to the rescore offer. The row's number was
+  // computed without the posting — that is why it was worth attaching one — and
+  // a stale score sitting on screen next to a description the app now holds is
+  // the defect this whole evening is about. One non-search call.
+  //
+  // The fit cutoff runs with it, because this is a place a score is WRITTEN and
+  // that is where the cutoff lives. A read role below the bar files itself, the
+  // same as at ingest.
+  const { fitInputs: inputs } = await loadCriteriaAndScoringInputs();
+  const scored = await scoreFit({
+    company: identity.company,
+    role_title: identity.roleTitle,
+    company_description: "",
+    key_skills: read.summary,
+    fit_summary: "",
+    department: read.department,
+    location: "",
+    salary_range: "",
+    fitInputs: inputs,
+  });
+  // scoreFit answers 0 when the call or the parse failed, and writing that
+  // would violate the 1-5 check and wipe a real score.
+  if (scored.score > 0) {
+    patch.fit_score = scored.score;
+    if (scored.rationale) patch.fit_summary = scored.rationale;
+    const statuses = (await getJobStatuses()).statuses;
+    const fileInto = autoFileStatus(statuses);
+    if (
+      fileInto !== null &&
+      shouldAutoFile({ score: scored.score, wasRead: true, status: row.status })
+    ) {
+      patch.status = fileInto;
+    }
+  }
 
   const failure = describeWriteFailure(
     (await updateJob(row.id, patch)).error,

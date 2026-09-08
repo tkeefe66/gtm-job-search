@@ -4,7 +4,8 @@ const h = vi.hoisted(() => ({
   onboardedAt: "2026-08-18T01:58:02Z" as string | null,
   read: { kind: "unreadable" } as Record<string, unknown>,
   ingest: { added: [{}], skipped: [], seenTitles: [] } as Record<string, unknown>,
-  existing: [] as { id: string; source_url: string | null }[],
+  existing: [] as { id: string; source_url: string | null; status?: string }[],
+  score: { score: 4, rationale: "fits" } as { score: number; rationale: string },
 }));
 
 vi.mock("@/lib/require-actor", () => ({
@@ -34,7 +35,16 @@ vi.mock("@/lib/supabase", () => ({
   },
   rawQuery: vi.fn(async () => ({ data: h.existing, error: null })),
 }));
-vi.mock("@/app/actions/jobs", () => ({ updateJob: vi.fn(async () => ({})) }));
+vi.mock("@/app/actions/jobs", () => ({
+  updateJob: vi.fn(async () => ({})),
+  getJobStatuses: vi.fn(async () => ({
+    statuses: [
+      { key: "New", label: "New", bucket: "active", hidden: false },
+      { key: "Not Interested", label: "Not Interested", bucket: "terminal", hidden: false },
+    ],
+  })),
+}));
+vi.mock("@/app/actions/parse-role", () => ({ scoreFit: vi.fn(async () => h.score) }));
 vi.mock("@/lib/tenant", () => ({ resolveTenantId: async () => "t1" }));
 vi.mock("@/lib/ingest-roles", () => ({
   ingestRoles: vi.fn(async () => h.ingest),
@@ -48,6 +58,7 @@ import { addRoleFromUrl } from "./add-role";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { readPosting, readPostingText } from "@/lib/posting-read";
 import { updateJob } from "@/app/actions/jobs";
+import { scoreFit } from "@/app/actions/parse-role";
 
 const READ = {
   kind: "read",
@@ -64,6 +75,7 @@ beforeEach(() => {
   h.read = { kind: "unreadable" };
   h.ingest = { added: [{}], skipped: [], seenTitles: [] };
   h.existing = [];
+  h.score = { score: 4, rationale: "fits" };
   vi.clearAllMocks();
 });
 
@@ -241,5 +253,53 @@ describe("a role you already have gets the description attached", () => {
     const res = await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
 
     expect(res.error).toContain("already");
+  });
+});
+
+// The gap that left a score of 1 on screen after the user supplied the JD: the
+// attach path stored the posting and never re-scored, so the row kept a number
+// computed from a job title and the fit cutoff — which only runs where a score
+// is written — never saw it.
+describe("attaching a description re-scores the row it belongs to", () => {
+  beforeEach(() => {
+    h.read = READ;
+    h.ingest = { added: [], skipped: [{}], seenTitles: [] };
+    h.existing = [{ id: "job-9", source_url: null, status: "New" }];
+  });
+
+  test("the row is scored against the posting that was just attached", async () => {
+    h.score = { score: 4, rationale: "fits" };
+
+    await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
+
+    const scored = vi.mocked(scoreFit).mock.calls[0][0];
+    expect(scored.key_skills).toBe(READ.summary);
+    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({ fit_score: 4 });
+  });
+
+  // Same rule as everywhere else a score is written: read, below the bar, and
+  // untouched by the user means filed rather than left in the pipeline.
+  test("a role that reads weak is filed, now that it was actually read", async () => {
+    h.score = { score: 1, rationale: "not close" };
+
+    await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
+
+    expect(vi.mocked(updateJob).mock.calls[0][1]).toMatchObject({
+      fit_score: 1,
+      status: "Not Interested",
+    });
+  });
+
+  // A failed score must not overwrite a real one with zero, and must not file
+  // anything: scoreFit returns 0 rather than throwing.
+  test("a failed score leaves the existing score alone", async () => {
+    h.score = { score: 0, rationale: "" };
+
+    await addRoleFromUrl({ url: "https://jobs.ashbyhq.com/openai/a389" });
+
+    const patch = vi.mocked(updateJob).mock.calls[0][1];
+    expect(patch).not.toHaveProperty("fit_score");
+    expect(patch).not.toHaveProperty("status");
+    expect(patch).toHaveProperty("posting");
   });
 });
