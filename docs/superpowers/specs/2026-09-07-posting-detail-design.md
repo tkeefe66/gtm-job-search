@@ -1,8 +1,13 @@
 # Posting detail: persist, extract, backfill
 
 Date: 2026-09-07
-Status: designed, not implemented. Revised after review — see "Corrections" at the end
-for what changed and why, since several of the first draft's claims were wrong.
+Status: IMPLEMENTED 2026-09-07, all four parts (28a5610, e391364, eb96520, 6054b89).
+Migration 017 is NOT yet applied to production and nothing is pushed — see "Deploy
+order" below, which is now an open action rather than a plan.
+
+Revised after review before implementation — see "Corrections" at the end for what
+changed and why, since several of the first draft's claims were wrong. Two further
+things this spec got wrong were only found by building it; see "Departures" at the end.
 
 ## Why
 
@@ -337,3 +342,46 @@ Recorded rather than deleted, because each one's reasoning constrains the next c
   `requireActorPage()`; the action needs its own onboarding check.
 - **The `"."` bug and the drift both affect all three ingest paths**, not just
   role-search.
+
+## Departures found during implementation
+
+Two of this spec's instructions were wrong and were not followed. Recorded rather
+than quietly fixed, because each one's reasoning constrains the next change.
+
+- **`classifyFetchOutcome` cannot judge a POSTING page**, so part 3 does not use it.
+  It delegates to `isJsShell`, whose second clause requires three job LINKS — the
+  right question for a careers LISTING, and one a single posting has no reason to
+  satisfy. Following the spec would have classified every real posting as a shell and
+  skipped the entire table while reporting a clean pass. `readPostingPage`
+  (`lib/page-extract.ts`) keeps only the length test, which is the half that actually
+  detects an unrendered SPA, and a test pins that a posting with plenty of text and no
+  job links is readable.
+
+- **The report types live in `lib/enrich-scope.ts`, not in the action.** The spec put
+  `EnrichReport` in `app/actions/enrich.ts`, but the banner that renders it is a client
+  component and the pass driver imports the type — the reason `lib/link-report.ts`
+  already gives for keeping `UnclearReason` out of the action: a type imported from a
+  `"use server"` module drags that module into the client graph.
+
+Two smaller decisions the spec left open, decided here:
+
+- **Paging is by CURSOR, not by a `passStartedAt` twin.** The rescore's timestamp works
+  because a re-scored row keeps matching the predicate; here an enriched row stops
+  matching `posting is null` but a BLOCKED one never does, so re-reading the thin set
+  would hand every later batch the same blocked rows — each costing another board
+  lookup — and the pass would never drain. `enrichBatch` orders by id and resumes after
+  the last row DECIDED, whatever its outcome.
+
+- **Enrichment FILLS `department` and `key_skills`, never overwrites them.** A column a
+  human edited, or an earlier ingest wrote, survives a backfill reading the page today.
+
+## Still open after implementation
+
+- **Migration 017 must be applied before the push.** See "Deploy order".
+- **Per-row spend has no vocabulary in `lib/cost-estimate.ts`** (a Risk above, unchanged):
+  the enrich banner reports counts, not dollars, so the user drives the paging without
+  seeing cumulative spend.
+- **The `fit_summary` feedback loop is untouched**, deliberately — see Non-goals.
+- **Extraction quality is still unverified against a real posting.** The first live run
+  is the test; if quality is poor the fallback is to narrow the ask, never to escalate
+  to search.
