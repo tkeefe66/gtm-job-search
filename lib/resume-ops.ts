@@ -157,6 +157,23 @@ function parseBulletTarget(target: unknown): { roleId: string; bulletId: string 
   return { roleId: parts[1], bulletId: parts[2] };
 }
 
+/**
+ * `selection.bullets` (render.js:40, `const bullets = {}`) is a PLAIN object
+ * literal keyed by role id, and `roleId` here can be the unvalidated role
+ * segment of a model-supplied `set_text` target — `parseBulletTarget` only
+ * checks the target's SHAPE, not that the role named in it is real. A bare
+ * `selection.bullets[roleId]` for a role id like "constructor", "toString",
+ * "hasOwnProperty" or "__proto__" resolves the INHERITED Object.prototype
+ * member instead of `undefined` — an object or function, which is truthy —
+ * so `|| []` never engages and the caller's `.indexOf` throws on a
+ * non-array. `Object.prototype.hasOwnProperty.call` is the guard: it asks
+ * whether the object OWNS that key, ignoring anything inherited, so every
+ * one of those four names correctly reads as "this role has no bullets"
+ * (an empty array) instead of crashing. */
+function bulletsFor(bulletsByRole: Record<string, string[]>, roleId: string): string[] {
+  return Object.prototype.hasOwnProperty.call(bulletsByRole, roleId) ? bulletsByRole[roleId] : [];
+}
+
 /** Validates one operation against the ORIGINAL, unmodified inputs — never
  *  against anything an earlier operation in the same turn produced. */
 function validateOperation(
@@ -212,7 +229,7 @@ function validateOperation(
       if (target !== "summary" && target !== "positioning") {
         const parsed = parseBulletTarget(target);
         if (!parsed) return '"' + String(target) + '" is not a valid text target.';
-        const onPage = (selection.bullets[parsed.roleId] || []).indexOf(parsed.bulletId) !== -1;
+        const onPage = bulletsFor(selection.bullets, parsed.roleId).indexOf(parsed.bulletId) !== -1;
         if (!onPage) {
           return '"' + target + '" is not on the page — it is not part of the current selection.';
         }
@@ -267,9 +284,21 @@ function cloneOverrides(overrides: ResumeOverrides): ResumeOverrides {
   };
 }
 
+/**
+ * `roleId` reaches here only after `validateOperation` has already matched
+ * it against a real `career.roles[].id` via `findRole`'s equality check, so
+ * in practice it can never be "constructor"/"toString"/etc. The
+ * `hasOwnProperty` guard is applied anyway rather than relying on that
+ * invariant holding forever: this function has no way to see whether its
+ * caller validated `roleId`, and a bare bracket read on either plain object
+ * below would reproduce exactly the Finding-1 crash if that ever changed.
+ */
 function bulletListFor(draft: ResumeOverrides, selection: ResumeSelection, roleId: string): string[] {
-  if (draft.selection?.bullets?.[roleId]) return draft.selection.bullets[roleId];
-  return (selection.bullets[roleId] || []).slice();
+  const draftBullets = draft.selection?.bullets;
+  if (draftBullets && Object.prototype.hasOwnProperty.call(draftBullets, roleId)) {
+    return draftBullets[roleId];
+  }
+  return bulletsFor(selection.bullets, roleId).slice();
 }
 
 function setBulletList(draft: ResumeOverrides, roleId: string, list: string[]): void {
@@ -305,6 +334,18 @@ export function applyOperations(
   // is applied yet, so a later operation can never be validated against an
   // earlier one's effect.
   for (const op of ops) {
+    // `ops` is typed as `Operation[]`, but it is really whatever JSON the
+    // model returned — a literal `null` (or any other non-object) element
+    // passes the type checker and then throws on `op.op` inside
+    // `validateOperation`'s `switch`. A string, a number, or an array
+    // already degrade cleanly (property access on them yields `undefined`,
+    // which the `default` case below reports), so only null/undefined
+    // actually need to be turned away here — but every non-object shape is
+    // rejected the same way for one clean error rather than three
+    // accidental ones.
+    if (typeof op !== "object" || op === null) {
+      return { error: '"' + String(op) + '" is not something I can read as an operation.' };
+    }
     const err = validateOperation(op, career, selection, vocabulary);
     if (err) return { error: err };
   }
@@ -346,6 +387,19 @@ export function applyOperations(
         const roleId = op.roleId as string;
         const outId = op.outId as string;
         const inId = op.inId as string;
+        if (outId === inId) {
+          // A no-op, not a reorder: list order IS render order (render.js
+          // renders a role's bullets in the order selection.bullets[roleId]
+          // lists them), and filter-then-push below would remove `outId`
+          // and re-append it at the END of the list — moving a bullet the
+          // model asked to "swap for itself" to a different position with
+          // no textual change to explain why. Treating it as a genuine
+          // no-op (leave the list untouched) is chosen over rejecting the
+          // operation outright, since naming the same bullet on both sides
+          // is a harmless, if pointless, request rather than a malformed one.
+          applied.push(outId + " is already in place on " + roleId + " — no change made");
+          break;
+        }
         const list = bulletListFor(draft, selection, roleId).filter((id) => id !== outId);
         if (list.indexOf(inId) === -1) list.push(inId);
         setBulletList(draft, roleId, list);

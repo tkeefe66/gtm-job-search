@@ -53,6 +53,20 @@ describe("parseTokenValue", () => {
   it("rejects a colour that is a function call other than oklch", () => {
     expect(parseTokenValue("--link", "image-set(x)").error).toBeDefined();
   });
+
+  // FINDING 2 (fix round 1): SPEC_BY_NAME used to be a plain `{}`, so
+  // SPEC_BY_NAME["constructor"] (etc.) resolved the INHERITED
+  // Object.prototype member — an object/function, which is truthy — and
+  // slipped past the `if (!spec)` allowlist check entirely. None of these
+  // three is in DESIGN_TOKENS; all three must be rejected the same way an
+  // unknown token is.
+  it("rejects names that only resolve via Object.prototype inheritance, not the allowlist", () => {
+    ["constructor", "toString", "hasOwnProperty", "__proto__"].forEach((name) => {
+      const result = parseTokenValue(name, "black");
+      expect(result.error).toContain("not adjustable");
+      expect(result.value).toBeUndefined();
+    });
+  });
 });
 
 describe("styleAttributeFor", () => {

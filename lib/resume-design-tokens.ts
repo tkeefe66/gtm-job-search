@@ -51,7 +51,16 @@ export const DESIGN_TOKENS: TokenSpec[] = [
   { name: "--link", kind: "color" },
 ];
 
-const SPEC_BY_NAME: Record<string, TokenSpec> = {};
+// Built with a NULL prototype, not `{}`. A plain object literal inherits
+// Object.prototype, so SPEC_BY_NAME["constructor"] (or "toString",
+// "hasOwnProperty", "__proto__", ...) would resolve to the inherited member
+// instead of `undefined` — an object/function, which is truthy — and fool
+// `parseTokenValue`'s `if (!spec)` allowlist check into treating a name
+// nothing in DESIGN_TOKENS declares as adjustable. Object.create(null) has
+// no prototype at all, so a bracket read of any name never in this map
+// returns plain `undefined`, exactly like a Map would, with no lookup-site
+// hasOwnProperty guard needed.
+const SPEC_BY_NAME: Record<string, TokenSpec> = Object.create(null);
 DESIGN_TOKENS.forEach((t) => {
   SPEC_BY_NAME[t.name] = t;
 });

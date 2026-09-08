@@ -75,4 +75,59 @@ describe("applyOperations", () => {
   it("rejects an unknown operation name", () => {
     expect(run([{ op: "delete_everything" }]).error).toContain("delete_everything");
   });
+
+  // FINDING 1 (fix round 1): selection.bullets is a plain object literal
+  // (render.js:40), so indexing it with an Object.prototype member name
+  // resolves the INHERITED value (truthy) instead of undefined, defeating
+  // `|| []` and throwing when `.indexOf` is called on a non-array. Every one
+  // of these must come back as a clean `{ error }`, not a thrown exception —
+  // and specifically the "not on the page" reason, since none of these
+  // names is ever an own key of selection.bullets.
+  it("rejects a set_text target whose role segment is an inherited Object.prototype name, without throwing", () => {
+    ["__proto__", "constructor", "toString", "hasOwnProperty"].forEach((name) => {
+      let res: ReturnType<typeof run> | undefined;
+      expect(() => {
+        res = run([{ op: "set_text", target: "bullet:" + name + ":x", text: "y" }]);
+      }).not.toThrow();
+      expect(res!.error).toContain("not on the page");
+    });
+  });
+
+  // A literal `null` element in `operations` must not throw on `op.op`.
+  // (A string/number/array element already degraded cleanly before this
+  // fix — only `null` reached the crash.)
+  it("rejects a null operation without throwing", () => {
+    let res: ReturnType<typeof applyOperations> | undefined;
+    expect(() => {
+      res = applyOperations([null] as unknown as Parameters<typeof applyOperations>[0], CAREER, SELECTION, {}, VOCAB);
+    }).not.toThrow();
+    expect(res!.error).toBeDefined();
+  });
+
+  // FINDING 2 (fix round 1): the same Object.prototype confusion in
+  // lib/resume-design-tokens.ts's SPEC_BY_NAME let these three names sail
+  // past the "is not adjustable" allowlist check and get written into
+  // overrides.design. Confirm the whole turn is rejected atomically instead.
+  it("rejects design token names that only resolve via Object.prototype inheritance", () => {
+    ["constructor", "toString", "hasOwnProperty"].forEach((name) => {
+      const res = run([{ op: "set_design_token", name, value: "black" }]);
+      expect(res.error).toContain("not adjustable");
+      expect(res.overrides).toBeUndefined();
+    });
+  });
+
+  // FINDING 3 (fix round 1): outId === inId used to filter the bullet out
+  // and push it back on, silently moving it to the end of the role's list —
+  // list order is render order. It must now be a genuine no-op.
+  it("makes swap_bullet a no-op, not a silent reorder, when outId equals inId", () => {
+    const roleId = "principal";
+    const before = SELECTION.bullets[roleId];
+    const bulletId = before[0];
+    const res = run([{ op: "swap_bullet", roleId, outId: bulletId, inId: bulletId }]);
+    expect(res.error).toBeUndefined();
+    // No selection.bullets override was written for this role at all — the
+    // list before the swap is exactly the list after it, and nothing
+    // needed to change to prove that.
+    expect(res.overrides!.selection?.bullets?.[roleId]).toBeUndefined();
+  });
 });
