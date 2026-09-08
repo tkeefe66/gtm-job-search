@@ -521,16 +521,76 @@ everything in this paragraph still describes the DRAFT screen between saves.
 
 **Saving a résumé is a SEPARATE table from tailoring one, and the distinction is
 the whole feature.** `tailored_resumes` is the working DRAFT — one row per
-(tenant, job), upserted by Regenerate, holding `{themes, selection}` and never
-expiring. `saved_resumes` (migration 016) is the ARCHIVE — one row per explicit
-Save, many per job, holding frozen sanitized HTML that is mounted as stored and
-**never re-rendered through `renderBody`**, because re-rendering would silently
-apply today's career record and today's selection rules to a document the user
-saved as final. "Save as new version" on a saved résumé writes a NEW row and
+(tenant, job), upserted by Regenerate, holding `{themes, selection, overrides}`
+and never expiring. (Regenerate itself writes only `{themes, selection}`, so
+`overrides` is a MAXIMUM shape, not an invariant: every reader must default the
+absent key to `{}`.) `saved_resumes` (migration 016) is the ARCHIVE — one row per
+explicit Save, many per job, holding frozen sanitized HTML that is mounted as
+stored and **never re-rendered through `renderBody`**, because re-rendering would
+silently apply today's career record and today's selection rules to a document the
+user saved as final. "Save as new version" on a saved résumé writes a NEW row and
 never overwrites the one open. `job_id` is `ON DELETE SET NULL`, so an archived
 résumé outlives the tracked role it came from; `role_title` and `company` are
 snapshotted onto the row for exactly that reason, which is why the draft screen
 withholds Save when it could not read the job rather than storing `""`.
+
+**A saved row also records HOW it was built (`content jsonb`, migration 021), and
+that is what makes it re-editable.** It holds the same `{themes, selection,
+overrides}` the draft does — the **BASE** selection, never the effective one:
+`loadResumeContext` returns both (`app/actions/resume.ts`) precisely because the
+merged view cannot be un-merged, and storing the effective selection would
+re-apply every override on the next `effectiveDocument` pass. `content` is
+therefore read SERVER-side and never accepted from a caller, which is why there
+are two save actions rather than one: `saveResumeFromDraft` reads
+`tailored_resumes` itself, while `saveResumeAsNewVersion` copies the SOURCE row's
+content forward and must never reach for the draft (that button captures a frozen
+row's DOM, so attaching the draft's selection would produce a row whose `html` and
+`content` describe different documents). The column is nullable with NO default so
+a pre-021 row stays distinguishable from one saved with an empty selection — the
+same rule `jobs.posting` and `page_margin` follow. `listSavedResumes` selects
+`(content is not null) as has_content`, a BOOLEAN, never the payload: the archive
+list renders every live row in the tenant, and `content` carries the full
+selection plus `overrides.text`, which is arbitrary rewritten bullet prose. That is
+the reason `html` is already excluded from the summary.
+
+**Editing a saved résumé CHECKPOINTS the draft it replaces, and the ordering is
+the safety property.** `restoreSavedVersion(savedId)` (`app/actions/`) renders the
+current draft via `renderDraftHtml` (`lib/draft-render.ts` — the one place
+`effectiveCareer` → `effectiveDocument` → `renderBody(doc.career, …, {rootStyle})`
+is composed outside the client), writes it to the archive as `kind = 'checkpoint'`,
+upserts the saved row's `content` over `tailored_resumes`, THEN demotes older
+checkpoints, then appends a marker turn to `resume_chats`. Every one of those
+orderings is load-bearing: a failed checkpoint insert must return before the
+upsert or the draft is destroyed with no copy, and the demotion must come AFTER a
+successful upsert or a failed restore still costs an earlier checkpoint its
+30-day window. It takes `savedId` and NOTHING else — RLS checks `tenant_id` but the
+FK to `jobs` bypasses row security, so a client-supplied `jobId` would let a caller
+key a row to another tenant's job. `markerSaveError` is returned SEPARATELY from
+`error` (the `TurnResult.transcriptSaveError` precedent): the restore has already
+committed, and a caller that offers a retry writes a second worthless checkpoint
+and demotes the real one. `restoreWouldChangeNothing` suppresses the checkpoint
+when the draft already equals the row being restored — without it, a back-navigate
+and a second click writes a junk checkpoint and drops the only copy of the original
+draft to 3 days. Note that restoring IS a re-render against today's record, which
+the archive forbids for saved rows and permits here only because it produces a new
+draft: `render.js` drops unknown bullet ids silently and drops a whole ROLE when
+none survive, so a deleted overlay bullet can make a role vanish. The confirm says
+so.
+
+**Retention is TIERED, and only the stamping knows about it.** 60 days for every
+deliberate Save (all of them, not just the newest), 30 for the newest checkpoint
+per job, 3 for superseded ones; the live `tailored_resumes` row never expires and
+is not a tier. `EXPIRED_PREDICATE` / `LIVE_PREDICATE` are unchanged — they compare
+`expires_at` against `now()` and nothing else, which is what keeps the
+complementary-pair test meaningful. Demotion is
+`least(expires_at, now() + interval …)`: an unconditional stamp would EXTEND a
+checkpoint already older than the new window, and the `kind = 'checkpoint'` filter
+is equally load-bearing or it demotes 60-day saves to 3. `kind` is a COLUMN rather
+than a match on the `Checkpoint · <date>` label, for the same reason `jobs.status`
+stores an immutable key: a label is presentation the user can type. Consequence
+worth knowing: restoring puts an indefinitely-held draft onto a clock, and deleting
+the newest checkpoint leaves the previous one at 3 days with nothing to re-promote
+it.
 
 **The résumé chat turns the tailored document into a conversation, and `effectiveCareer()` (`lib/effective-career.ts`) is the ONE record it and the renderer both see.** `app/resume/page.tsx` must never import `content/resume.json` for rendering: the client renderer is vendored (`render.js:172`), resolves an override's ids against whatever record it's handed, `.filter(Boolean)` drops what it can't find, and `:173` drops the whole ROLE when nothing survives — a server that merged overrides into one record while the client rendered the shipped one would fail exactly there, silently. `lib/effective-document.ts` is the other resolution that must stay singular: the ONLY place a stored override becomes a rendered document — it re-derives the selection through `selectBullets` (so `themes`, `taper`, `lead` and `positioning` reach the renderer at all), overrides `rules.compressAfter` on a freshly cloned record, and folds in the bullet-id overrides `lib/effective-selection.ts` resolves. Both `sendChatTurn` and `loadResumeContext` go through it, so a page reload shows the same document a chat turn just produced rather than the stale unmerged base. Its rule is "an own property in the override wins regardless of its value" — an empty `bullets[roleId]` array means "this role shows no bullets," not "no override, fall back to base."
 
@@ -570,8 +630,9 @@ UNESCAPED bullet path carrying `<strong>`, `contentEditable` adds `<br>`/`<b>`/
 `margin-bottom:0` on the last section whose loss is a page break. A checked-in
 fixture pins the shipped record's full render through the sanitizer.
 
-**Retention is 60 days and its two SQL comparisons live in ONE place.**
-`lib/resume-retention.ts` exports `EXPIRED_PREDICATE` (`<=`) and
+**Retention's two SQL comparisons live in ONE place** (the day counts are tiered —
+see the checkpoint paragraph above; this is about the comparisons, which the tiers
+did not change). `lib/resume-retention.ts` exports `EXPIRED_PREDICATE` (`<=`) and
 `LIVE_PREDICATE` (`>`) as strings, plus the `isExpired` JS twin, because the
 comparison is expressed in SQL at three call sites where no vitest test can
 execute it — retyping either operator is the `compFloor` `>`-not-`>=` hazard
@@ -584,8 +645,10 @@ expire, which is why it uses `listAllTenantIds` and not
 `listSavedResumes` (so an active user's retention survives the cron being
 down, which this file records happening for days unnoticed), and a
 `LIVE_PREDICATE` filter on both reads so an unpurged expired row is never
-shown. What 60 days does NOT cover: the non-expiring `tailored_resumes` draft
-row, Railway's own database backups, and any file the user has downloaded.
+shown. All three are kind-agnostic and purely predicate-driven, which is what
+let the tiers land without touching them. What retention does NOT cover: the
+non-expiring `tailored_resumes` draft row, Railway's own database backups, and
+any file the user has downloaded.
 
 **Every raw statement against `saved_resumes` passes the tenant id as
 `rawQuery`'s THIRD argument.** `runAsTenant` sets an AsyncLocalStorage value,

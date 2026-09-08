@@ -16,6 +16,8 @@ function row(over: Partial<SavedResumeSummary>): SavedResumeSummary {
     createdAt: "2026-09-01T00:00:00.000Z",
     expiresAt: "2026-10-31T00:00:00.000Z",
     pageMargin: null,
+    kind: "save",
+    hasContent: false,
     ...over,
   };
 }

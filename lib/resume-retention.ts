@@ -11,6 +11,14 @@
 
 export const RETENTION_DAYS = 60;
 
+/** The newest checkpoint for a job. Shorter than a deliberate Save because the
+ *  user did not choose to keep it — the app wrote it to protect their work. */
+export const CHECKPOINT_RETENTION_DAYS = 30;
+
+/** A checkpoint that a newer one has superseded. A checkpoint's real job is
+ *  "undo what I just did", which is a same-session need. */
+export const SUPERSEDED_CHECKPOINT_DAYS = 3;
+
 const COLUMN = "expires_at";
 const EXPIRED_OP = "<=";
 const LIVE_OP = ">";
@@ -23,8 +31,8 @@ export const LIVE_PREDICATE = COLUMN + " " + LIVE_OP + " now()";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-export function expiresAtFrom(now: Date): Date {
-  return new Date(now.getTime() + RETENTION_DAYS * MS_PER_DAY);
+export function expiresAtFrom(now: Date, days: number = RETENTION_DAYS): Date {
+  return new Date(now.getTime() + days * MS_PER_DAY);
 }
 
 /** The JS twin of EXPIRED_PREDICATE. Must agree with it — a test asserts so. */
