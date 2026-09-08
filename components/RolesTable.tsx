@@ -1506,29 +1506,11 @@ export default function RolesTable({
                     {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
                     {job.company_description && <Detail label="About company">{job.company_description}</Detail>}
                     {job.traction && <Detail label="Traction">{job.traction}</Detail>}
-                    <Detail label="Notes">
-                      <InlineEdit value={job.notes ?? ""} onSave={(v) => handleFieldSave(job.id, "notes", v)} placeholder="Add notes…" />
-                    </Detail>
                     <Detail label="Salary range">
                       <InlineEdit value={job.salary_range ?? ""} onSave={(v) => handleFieldSave(job.id, "salary_range", v)} placeholder="e.g. $200K–$280K" />
                     </Detail>
                     <Detail label="Department">
                       <InlineEdit value={job.department ?? ""} onSave={(v) => handleFieldSave(job.id, "department", v)} placeholder="e.g. Product" />
-                    </Detail>
-                    <Detail label="Stage">
-                      <InlineEdit value={job.stage ?? ""} onSave={(v) => handleFieldSave(job.id, "stage", v)} placeholder="e.g. Series B, PE-backed, Public" />
-                    </Detail>
-                    <Detail label="Backer">
-                      <InlineEdit value={job.backer ?? ""} onSave={(v) => handleFieldSave(job.id, "backer", v)} placeholder="e.g. Centerbridge Partners, a16z" />
-                    </Detail>
-                    <Detail label="ARR">
-                      <InlineEdit value={job.arr ?? ""} onSave={(v) => handleFieldSave(job.id, "arr", v)} placeholder="e.g. $380M+" />
-                    </Detail>
-                    <Detail label="Exit signal">
-                      <InlineEdit value={job.exit_signal ?? ""} onSave={(v) => handleFieldSave(job.id, "exit_signal", v)} placeholder="e.g. PE exit planned, IPO path" />
-                    </Detail>
-                    <Detail label="Industry">
-                      <InlineEdit value={job.category ?? ""} onSave={(v) => handleFieldSave(job.id, "category", v)} placeholder="e.g. AI Infra, FinTech, Dev Tools" />
                     </Detail>
                     <Detail label="Fit score">
                       <FitScore score={job.fit_score} onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))} />
