@@ -23,6 +23,17 @@
  */
 export const DESIGN_VERSION = "2026-08-28";
 
+/**
+ * The one definition of the default <doc-page> margin. `saved_resumes.page_margin`
+ * (Task 14) is null on every row that never overrode it, and a null there means
+ * "use this" — never "" and never a second hardcoded literal. Every renderer of a
+ * margin (ResumeDocument.tsx's draft, SavedResumePanel.tsx's archive screen, and
+ * buildDownloadHtml's standalone export below) imports this rather than repeating
+ * "0.68in", which is exactly how the download path drifted from the other two
+ * before this constant existed.
+ */
+export const DEFAULT_PAGE_MARGIN = "0.68in";
+
 /** Must equal styles.css's @import order. A test asserts it. */
 export const TOKEN_CSS_FILES = [
   "fonts.css",
@@ -46,6 +57,11 @@ export function buildDownloadHtml(args: {
   css: string;
   docPageJs: string;
   title: string;
+  /** Omit for the default. A saved résumé's own `pageMargin` column belongs here —
+   *  without it, a non-default margin reverts silently on download, the same
+   *  symptom Task 14 fixed on the draft and saved screens, reached through a
+   *  fourth surface. */
+  pageMargin?: string | null;
 }): string {
   return (
     "<!doctype html>\n" +
@@ -55,7 +71,9 @@ export function buildDownloadHtml(args: {
     "</title>\n<style>\n" +
     args.css +
     "\n</style>\n</head>\n<body>\n" +
-    '<doc-page margin="0.68in">' +
+    '<doc-page margin="' +
+    escapeHtml(args.pageMargin || DEFAULT_PAGE_MARGIN) +
+    '">' +
     args.markup +
     "</doc-page>\n<script>\n" +
     args.docPageJs +

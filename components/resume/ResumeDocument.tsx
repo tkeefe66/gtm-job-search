@@ -3,6 +3,7 @@
 import Script from "next/script";
 import { renderBody } from "@/lib/resume-render/render";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
+import { DEFAULT_PAGE_MARGIN } from "@/lib/resume-download";
 
 // `<doc-page>` is a custom element defined by /public/resume-design/doc-page.js
 // at runtime — not a React component. This augments JSX so TypeScript accepts
@@ -81,7 +82,7 @@ export default function ResumeDocument({
           saving is what makes an edit durable, and only then. */}
       <doc-page
         ref={docPageRef as React.RefObject<HTMLElement>}
-        margin={pageMargin || "0.68in"}
+        margin={pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning
         onInput={onEdit}

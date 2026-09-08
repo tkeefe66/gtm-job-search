@@ -6,9 +6,9 @@
 //
 // Also pins page_margin (Task 14): saveResume persists it, both reads
 // (listSavedResumes and getSavedResume) return it, and a null column reads
-// back as null here — the 0.68in DEFAULT is applied by the renderer
-// (SavedResumePanel's `resume.pageMargin || "0.68in"`), never invented at
-// this layer as "" or as a failure.
+// back as null here — the DEFAULT_PAGE_MARGIN default (lib/resume-download.ts)
+// is applied by the renderer (SavedResumePanel's `resume.pageMargin ||
+// DEFAULT_PAGE_MARGIN`), never invented at this layer as "" or as a failure.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 // isAdmin is toggled per-suite via this hoisted, mutable state rather than a

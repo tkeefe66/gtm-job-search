@@ -11,6 +11,7 @@ import {
   saveResume,
 } from "@/app/actions/saved-resumes";
 import {
+  DEFAULT_PAGE_MARGIN,
   DESIGN_VERSION,
   buildDownloadHtml,
   downloadFilename,
@@ -74,6 +75,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
         css: assets.css,
         docPageJs: assets.docPageJs,
         title: `Résumé — ${resume.roleTitle} at ${resume.company}`,
+        pageMargin: resume.pageMargin,
       });
       const url = URL.createObjectURL(new Blob([file], { type: "text/html" }));
       const a = document.createElement("a");
@@ -155,7 +157,7 @@ export default function SavedResumePanel({ resume }: { resume: SavedResume }) {
       `}</style>
       <doc-page
         ref={docPageRef as React.RefObject<HTMLElement>}
-        margin={resume.pageMargin || "0.68in"}
+        margin={resume.pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning
         dangerouslySetInnerHTML={{ __html: resume.html }}
