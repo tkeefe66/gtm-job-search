@@ -149,6 +149,44 @@ describe("effectiveCareer", () => {
     expect(new Set(selection.bullets.r1).size).toBe(selection.bullets.r1.length);
   });
 
+  // N2 (this fix wave's own regression, newly REACHABLE rather than newly
+  // written): set_text requires its target to be in the current selection,
+  // and an accepted overlay bullet was never in one until acceptProposedBullets
+  // started placing what it accepts. The edit was durable in the row and
+  // invisible after a reload, with no warning either — the target exists, so
+  // "refers to a bullet that no longer exists" never fired.
+  it("applies a text override to an OVERLAY bullet, not only to a record bullet", () => {
+    const overlay = [{ id: "ov-1", roleId: "r1", text: "Original overlay line.", themes: [] }];
+    const { career, warnings } = effectiveCareer(SHIPPED, overlay, {
+      "bullet:r1:ov-1": "Edited overlay line.",
+    });
+    const bullet = career.roles[0].bullets.filter((b) => b.id === "ov-1")[0];
+    expect(bullet.text).toBe("Edited overlay line.");
+    expect(bullet.edited).toBe(true);
+    expect(bullet.origin).toBe("overlay");
+    expect(warnings).toEqual([]);
+  });
+
+  it("sanitizes an overlay bullet's text override at this boundary too", () => {
+    const overlay = [{ id: "ov-1", roleId: "r1", text: "Original overlay line.", themes: [] }];
+    const { career } = effectiveCareer(SHIPPED, overlay, {
+      "bullet:r1:ov-1": "<img src=x onerror=alert(1)>ok",
+    });
+    const bullet = career.roles[0].bullets.filter((b) => b.id === "ov-1")[0];
+    expect(bullet.text).not.toContain("<img");
+  });
+
+  // N3: `taper` is user-settable through the chat now, so an edit reaching
+  // for .push() on what looks like a fresh record must not reach the
+  // process-wide content/resume.json import.
+  it("clones rules deeply enough that its arrays are not the shipped record's", () => {
+    const { career } = effectiveCareer(SHIPPED, [], {});
+    career.rules.taper.push(99);
+    career.rules.themes.push("invented");
+    expect(SHIPPED.rules.taper).toEqual([4]);
+    expect(SHIPPED.rules.themes).toEqual(["ops", "systems"]);
+  });
+
   it("does not treat an overlay id colliding with a bullet in a DIFFERENT role as a collision", () => {
     const { career, warnings } = effectiveCareer(SHIPPED_TWO_ROLES, [
       { id: "b1", roleId: "r2", text: "same id as r1's bullet, but targets r2", themes: [] },

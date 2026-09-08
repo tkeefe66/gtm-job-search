@@ -94,10 +94,16 @@ describe("C1c set_compress_after reaches the document AND the coverage panel", (
     expect(b.themes[0].pool).toBeLessThan(a.themes[0].pool);
   });
 
-  test("the shipped record is never mutated — rules.compressAfter is cloned", () => {
+  test("the shipped record is never mutated — rules is cloned, arrays included", () => {
     const original = RECORD.rules.compressAfter;
-    effectiveDocument(RECORD, base(), THEMES, { selection: { compressAfter: 1 } });
+    const taper = RECORD.rules.taper.slice();
+    const doc = effectiveDocument(RECORD, base(), THEMES, { selection: { compressAfter: 1 } });
     expect(RECORD.rules.compressAfter).toBe(original);
+    // N3: a shallow spread leaves rules.taper pointing at the process-wide
+    // import, and taper is user-settable through the chat.
+    doc.career.rules.taper.push(99);
+    doc.career.rules.themes.push("invented");
+    expect(RECORD.rules.taper).toEqual(taper);
   });
 });
 

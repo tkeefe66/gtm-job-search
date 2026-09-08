@@ -51,9 +51,11 @@
 // The alternative — a new renderBody option — would have to be duplicated
 // into coverage anyway and would put app-specific plumbing into a file whose
 // header forbids exactly that. The record returned here is FRESH, with a
-// fresh `rules` object: lib/effective-career.ts's top-level spread shares
-// `rules` with the process-wide content/resume.json import, so mutating it in
-// place would corrupt every later request in the process.
+// fresh `rules` object, ARRAYS INCLUDED: a spread alone leaves `rules.taper`
+// and `rules.themes` pointing at the process-wide content/resume.json import,
+// and taper is user-settable through the chat — a future edit reaching for
+// `.push()` would corrupt every later request in the process. Deep enough to
+// make the word "fresh" true, and no deeper.
 import { selectBullets } from "@/lib/resume-render/render";
 import { effectiveSelection } from "@/lib/effective-selection";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
@@ -106,9 +108,21 @@ export function effectiveDocument(
     selection = withLead(career, selection, sel.lead);
   }
 
+  // The arrays are copied too, not just the rules object: `taper` is
+  // user-settable through the chat now, and a caller handed a record built by
+  // anything but effectiveCareer would otherwise still share them with the
+  // process-wide content/resume.json import.
   const shaped =
     sel && sel.compressAfter != null
-      ? { ...career, rules: { ...career.rules, compressAfter: sel.compressAfter } }
+      ? {
+          ...career,
+          rules: {
+            ...career.rules,
+            taper: career.rules && career.rules.taper ? career.rules.taper.slice() : [],
+            themes: career.rules && career.rules.themes ? career.rules.themes.slice() : [],
+            compressAfter: sel.compressAfter,
+          },
+        }
       : career;
 
   return { career: shaped, selection };

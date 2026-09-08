@@ -48,6 +48,16 @@ export function effectiveCareer(
 
   const career: CareerRecord = {
     ...shipped,
+    // `rules` is cloned one level DEEPER than a spread: taper and themes are
+    // arrays, and `taper` is now user-settable through the chat, so an edit
+    // reaching for `.push()` on what looks like a fresh record would corrupt
+    // the process-wide content/resume.json import for every later request.
+    // Nothing does that today; the header above promises it cannot.
+    rules: {
+      ...shipped.rules,
+      taper: shipped.rules && shipped.rules.taper ? shipped.rules.taper.slice() : [],
+      themes: shipped.rules && shipped.rules.themes ? shipped.rules.themes.slice() : [],
+    },
     positioning: shipped.positioning.map((p) => ({ ...p })),
     roles: shipped.roles.map((role) => {
       const own = role.bullets.map((b) => {
@@ -98,12 +108,23 @@ export function effectiveCareer(
           }
           const safe = cleaned(o.text);
           if (safe === null) return null;
+          // An overlay bullet takes a text override exactly like a record
+          // bullet does. It used to be unreachable — set_text requires its
+          // target to be in the current selection, and an accepted overlay
+          // bullet was never in one — until acceptProposedBullets started
+          // PLACING what it accepts. Without this the turn showed the edit,
+          // a fresh merge showed the original, and the "refers to a bullet
+          // that no longer exists" warning did not fire either, because the
+          // target does exist. A silent revert on reload.
+          const override = text["bullet:" + role.id + ":" + o.id];
+          const edited = override === undefined ? null : cleaned(override);
           return {
             id: o.id,
             priority: o.priority == null ? 90 : o.priority,
             themes: o.themes,
-            text: safe,
+            text: edited === null ? safe : edited,
             origin: "overlay" as const,
+            edited: edited !== null,
           };
         })
         .filter((b): b is NonNullable<typeof b> => b !== null);
