@@ -96,32 +96,63 @@ export async function runEnrichPass(opts: {
   return { ...totals, batches, error };
 }
 
-const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+export interface EnrichStatRow {
+  label: string;
+  value: number;
+  /** Why this outcome happened, for the rows that are not wins. */
+  note?: string;
+}
 
 /**
- * One sentence describing what a pass did.
+ * The banner's results table.
  *
- * Composed here rather than in the banner's JSX for the reason
- * fitBrainRescoreOffer's comment records: wording hardcoded at the call site is
- * wording no test can see, and this one has to keep three outcomes distinct —
- * stored, read-but-empty, and never read at all. Folding the middle into the
- * first would make a systematic extraction failure look like a successful pass.
+ * Counts, not prose. The first version put five numbers in a sentence and then
+ * listed two dozen blocked rows underneath, so the two things the user actually
+ * needed — did it work, is it still going — were the hardest things on screen
+ * to find. Composed here rather than in JSX for the reason rescorePromptQuestion
+ * is: a table written in a component is a table no test in this repo can see.
+ *
+ * Zero is omitted except for "Stored", which always shows: a pass that stored
+ * nothing must say so rather than rendering an empty table.
  */
-export function summarizeEnrich(pass: EnrichPassResult): string {
-  const parts: string[] = [];
-  if (pass.enriched > 0) parts.push(`Read and stored ${plural(pass.enriched, "role")}.`);
-  if (pass.empty > 0)
-    parts.push(`${plural(pass.empty, "posting")} had nothing usable to store.`);
-  if (pass.relinked > 0)
-    parts.push(`Repaired ${plural(pass.relinked, "link")} on the way past.`);
-  if (pass.unreadable > 0)
-    parts.push(`${plural(pass.unreadable, "posting")} could not be read and were skipped.`);
-  if (pass.failed > 0) parts.push(`${plural(pass.failed, "role")} failed.`);
-  if (pass.blocked.length > 0)
-    parts.push(`${plural(pass.blocked.length, "role")} were left alone — see below.`);
-  if (parts.length === 0) parts.push("Nothing to read — every open role already has its posting stored.");
-  // Stated last and always, so a pass that stopped early (its batch budget, a
-  // spend ceiling) is never mistaken for one that finished.
-  if (pass.remaining > 0) parts.push(`${pass.remaining} still to do.`);
-  return parts.join(" ");
+export function enrichStatRows(pass: EnrichTotals): EnrichStatRow[] {
+  const rows: EnrichStatRow[] = [{ label: "Stored", value: pass.enriched }];
+  const add = (label: string, value: number, note?: string) => {
+    if (value > 0) rows.push({ label, value, note });
+  };
+  add("Nothing to store", pass.empty, "the page was read but said nothing usable");
+  add("Links repaired", pass.relinked);
+  add(
+    "Could not be read",
+    pass.unreadable,
+    "client-rendered postings, or a page that would not load"
+  );
+  add("Failed", pass.failed);
+  add(
+    "Left alone",
+    pass.blocked.length,
+    "reading these could have stored another posting's words"
+  );
+  add("Still to do", pass.remaining);
+  return rows;
 }
+
+/** How many rows a pass has DECIDED — every outcome, wins included. */
+function decided(pass: EnrichTotals): number {
+  return (
+    pass.enriched + pass.empty + pass.unreadable + pass.failed + pass.blocked.length
+  );
+}
+
+/**
+ * The line shown while a pass is still running.
+ *
+ * A disabled button reading "Reading postings…" is indistinguishable from a
+ * hung one, and a pass over sixty rows takes minutes. This says what has moved.
+ */
+export function enrichProgressLine(pass: EnrichTotals): string {
+  const done = decided(pass);
+  if (done === 0 && pass.remaining === 0) return "Starting…";
+  return `${done} read, ${pass.remaining} to go`;
+}
+

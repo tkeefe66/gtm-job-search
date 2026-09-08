@@ -1,6 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { MAX_ENRICH_BATCHES, runEnrichPass, summarizeEnrich } from "./enrich-pass";
+import {
+  MAX_ENRICH_BATCHES,
+  enrichProgressLine,
+  enrichStatRows,
+  runEnrichPass,
+} from "./enrich-pass";
 import type { EnrichPassResult } from "./enrich-pass";
 import type { EnrichReport } from "@/lib/enrich-scope";
 
@@ -132,35 +137,77 @@ const pass = (over: Partial<EnrichPassResult>): EnrichPassResult => ({
   ...over,
 });
 
-// The wording is out here for the reason fitBrainRescoreOffer's comment
-// records: a sentence composed at the call site is a sentence no test can see.
-describe("what the banner says", () => {
-  test("a clean pass says what it stored", () => {
-    expect(summarizeEnrich(pass({ enriched: 7 }))).toContain("7 roles");
+// The banner shows COUNTS, not prose, and the mapping from totals to rows is
+// out here for the reason fitBrainRescoreOffer's comment records: a table
+// composed in JSX is a table no test can see. The first version buried five
+// numbers in a sentence and then listed two dozen blocked rows under it, so
+// the one thing the user needed — did this work, is it still going — was the
+// hardest thing on screen to find.
+describe("the results table", () => {
+  const rows = (over: Partial<EnrichPassResult>) =>
+    enrichStatRows(pass(over)).map((r) => [r.label, r.value] as const);
+
+  test("what was stored is always shown, even when it is zero", () => {
+    expect(rows({})).toContainEqual(["Stored", 0]);
   });
 
-  test("one role is not '1 roles'", () => {
-    expect(summarizeEnrich(pass({ enriched: 1 }))).toContain("1 role.");
+  test("a count of zero is otherwise left out rather than padding the table", () => {
+    const labels = rows({ enriched: 3 }).map(([label]) => label);
+
+    expect(labels).toEqual(["Stored"]);
   });
 
-  // Counted apart from spend: a systematic extraction failure looks exactly
-  // like a successful pass if these are folded into "enriched".
-  test("rows whose posting said nothing usable are reported separately", () => {
-    expect(summarizeEnrich(pass({ enriched: 2, empty: 3 }))).toContain("3");
+  test("every outcome that happened gets its own row", () => {
+    const labels = rows({
+      enriched: 4,
+      empty: 1,
+      relinked: 2,
+      unreadable: 21,
+      failed: 1,
+      blocked: [{ id: "j1", company: "C", role_title: "R", url: "u", reason: "absent" }],
+      remaining: 10,
+    }).map(([label]) => label);
+
+    expect(labels).toEqual([
+      "Stored",
+      "Nothing to store",
+      "Links repaired",
+      "Could not be read",
+      "Failed",
+      "Left alone",
+      "Still to do",
+    ]);
   });
 
-  test("rows that could not be read are named as skipped, not failed", () => {
-    const text = summarizeEnrich(pass({ unreadable: 4 }));
+  // The three that are not wins each carry why, because "21 could not be read"
+  // with no cause reads as a bug rather than as client-rendered postings.
+  test("the outcomes that are not wins explain themselves", () => {
+    const table = enrichStatRows(
+      pass({ unreadable: 21, blocked: [{ id: "j", company: "C", role_title: "R", url: "u", reason: "absent" }] })
+    );
 
-    expect(text).toContain("4");
-    expect(text.toLowerCase()).toContain("could not be read");
+    expect(table.find((r) => r.label === "Could not be read")?.note).toBeTruthy();
+    expect(table.find((r) => r.label === "Left alone")?.note).toBeTruthy();
+  });
+});
+
+describe("the progress line while a pass is running", () => {
+  test("it counts rows decided and rows left, so a long pass is visibly moving", () => {
+    const line = enrichProgressLine(pass({ enriched: 2, unreadable: 5, blocked: [], remaining: 40 }));
+
+    expect(line).toContain("7");
+    expect(line).toContain("40");
   });
 
-  test("a pass that found nothing to do says so rather than reading as an error", () => {
-    expect(summarizeEnrich(pass({}))).toContain("Nothing to read");
+  test("blocked rows count as decided — they cost a lookup and will not be revisited", () => {
+    const line = enrichProgressLine(
+      pass({ blocked: [{ id: "j", company: "C", role_title: "R", url: "u", reason: "absent" }], remaining: 3 })
+    );
+
+    expect(line).toContain("1");
   });
 
-  test("work left over is stated, so a stopped pass is not mistaken for a finished one", () => {
-    expect(summarizeEnrich(pass({ enriched: 10, remaining: 12 }))).toContain("12 still");
+  test("the first tick, before any batch has answered, says something rather than 0 of 0", () => {
+    expect(enrichProgressLine(pass({}))).toContain("Starting");
   });
 });

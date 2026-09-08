@@ -30,7 +30,12 @@ import { classifyJobLink, hostOf } from "@/lib/job-link";
 import { appliedDatePatch, todayStamp } from "@/lib/applied-date";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { enrichRoles } from "@/app/actions/enrich";
-import { runEnrichPass, summarizeEnrich, type EnrichPassResult } from "@/lib/enrich-pass";
+import {
+  enrichProgressLine,
+  enrichStatRows,
+  runEnrichPass,
+  type EnrichPassResult,
+} from "@/lib/enrich-pass";
 import { sourceOptions } from "@/lib/job-sources";
 import { Spinner } from "./ui";
 
@@ -232,6 +237,10 @@ export default function RolesTable({
   const [linkReport, setLinkReport] = useState<LinkRepairReport | null>(null);
   const [enriching, setEnriching] = useState(false);
   const [enrichReport, setEnrichReport] = useState<EnrichPassResult | null>(null);
+  // Collapsed by default. The rows the guardrail left alone are the LONGEST
+  // part of the report and the least urgent — they are why a number is what it
+  // is, not something to act on now.
+  const [blockedOpen, setBlockedOpen] = useState(false);
 
   /**
    * The report's undecidable rows, split by reason. Computed once per report
@@ -601,6 +610,7 @@ export default function RolesTable({
   async function handleEnrich() {
     setEnriching(true);
     setEnrichReport(null);
+    setBlockedOpen(false);
     try {
       const pass = await runEnrichPass({
         runBatch: ({ cursor }) => enrichRoles({ cursor }),
@@ -882,70 +892,109 @@ export default function RolesTable({
         </div>
       )}
 
-      {enrichReport && (
+      {(enriching || enrichReport) && (
         <div className="mb-6 rounded-lg border border-slate bg-canvas p-4 text-sm text-ink/70">
           <div className="flex items-start justify-between gap-4">
-            <div>
-              {enrichReport.error !== undefined
-                ? describeWriteFailure(enrichReport.error, "read your postings")
-                : summarizeEnrich(enrichReport)}
-              {enrichReport.error === undefined && enrichReport.enriched > 0 && (
-                /* The rescore itself lives on /settings, where the pass, its
-                   progress and its stamp already do. Offering it from here
-                   would be a second copy of that loop. */
-                <>
-                  {" "}
-                  These roles were scored before their postings were read —{" "}
-                  <Link href="/settings" className="underline hover:text-ink">
-                    rescore them on Settings
-                  </Link>
-                  .
-                </>
+            <div className="flex items-center gap-2">
+              {enriching ? (
+                <Spinner label="Reading postings…" />
+              ) : (
+                <span className="font-medium text-ink">Finished reading postings</span>
+              )}
+              {enrichReport && (
+                <span className="text-ink/50">
+                  {enriching
+                    ? enrichProgressLine(enrichReport)
+                    : `${enrichReport.batches} ${
+                        enrichReport.batches === 1 ? "batch" : "batches"
+                      }`}
+                </span>
               )}
             </div>
-            <button
-              onClick={() => setEnrichReport(null)}
-              className="shrink-0 rounded px-2 py-0.5 text-xs text-ink/40 transition hover:bg-slate hover:text-ink"
-            >
-              Dismiss
-            </button>
+            {/* No dismiss while a pass is running: the banner is the only thing
+                saying it is still working. */}
+            {!enriching && (
+              <button
+                onClick={() => setEnrichReport(null)}
+                className="shrink-0 rounded px-2 py-0.5 text-xs text-ink/40 transition hover:bg-slate hover:text-ink"
+              >
+                Dismiss
+              </button>
+            )}
           </div>
 
-          {enrichReport.blocked.length > 0 && (
-            <div className="mt-3 border-t border-slate pt-3">
-              {/* Nothing here was changed or closed. Every board behind these
-                  outcomes was found by guessing a slug from the company name,
-                  so the row says what we could not confirm and links to what we
-                  found — it never asserts whose board it is. */}
-              <p className="mb-2 text-xs text-ink/50">
-                Left alone — reading these could have stored another posting&apos;s words:
-              </p>
-              <ul className="space-y-1">
-                {enrichReport.blocked.map((b) => (
-                  <li key={b.id} className="flex flex-wrap items-baseline gap-x-2">
-                    <span className="text-ink">
-                      {b.company} — {b.role_title}
-                    </span>
-                    <span className="text-xs text-ink/50">
-                      {b.reason === "unresolved"
-                        ? "only a job-board copy, and no employer posting was found"
-                        : b.reason === "absent"
-                          ? "not on the board we found for them"
-                          : b.reason === "empty"
-                            ? "the board we found lists nothing"
-                            : "several postings there could be this role"}
-                    </span>
-                    <a
-                      href={b.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-ink/50 underline hover:text-ink"
-                    >
-                      open
-                    </a>
-                  </li>
+          {enrichReport?.error !== undefined && (
+            <p className="mt-2 text-[#991B1B]">
+              {describeWriteFailure(enrichReport.error, "read your postings")}
+            </p>
+          )}
+
+          {enrichReport && (
+            <table className="mt-3 w-full max-w-md text-sm">
+              <tbody>
+                {enrichStatRows(enrichReport).map((row) => (
+                  <tr key={row.label} className="border-t border-slate/60">
+                    <td className="py-1 pr-3 text-right font-mono tabular-nums text-ink">
+                      {row.value}
+                    </td>
+                    <td className="py-1 pr-3 text-ink">{row.label}</td>
+                    <td className="py-1 text-xs text-ink/50">{row.note}</td>
+                  </tr>
                 ))}
-              </ul>
+              </tbody>
+            </table>
+          )}
+
+          {!enriching && enrichReport && enrichReport.enriched > 0 && (
+            <p className="mt-3 text-xs text-ink/60">
+              These roles were scored before their postings were read —{" "}
+              <Link href="/settings" className="underline hover:text-ink">
+                rescore them on Settings
+              </Link>
+              .
+            </p>
+          )}
+
+          {!enriching && enrichReport && enrichReport.blocked.length > 0 && (
+            <div className="mt-3 border-t border-slate pt-3">
+              <button
+                onClick={() => setBlockedOpen((v) => !v)}
+                className="text-xs text-ink/50 underline transition hover:text-ink"
+              >
+                {blockedOpen ? "Hide" : "Show"} the {enrichReport.blocked.length} left alone
+              </button>
+              {blockedOpen && (
+                /* Nothing here was changed or closed. Every board behind these
+                   outcomes was found by guessing a slug from the company name,
+                   so a row says what we could not confirm and links to what we
+                   found — it never asserts whose board it is. */
+                <ul className="mt-2 space-y-1">
+                  {enrichReport.blocked.map((b) => (
+                    <li key={b.id} className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-ink">
+                        {b.company} — {b.role_title}
+                      </span>
+                      <span className="text-xs text-ink/50">
+                        {b.reason === "unresolved"
+                          ? "only a job-board copy, and no employer posting was found"
+                          : b.reason === "absent"
+                            ? "not on the board we found for them"
+                            : b.reason === "empty"
+                              ? "the board we found lists nothing"
+                              : "several postings there could be this role"}
+                      </span>
+                      <a
+                        href={b.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-ink/50 underline hover:text-ink"
+                      >
+                        open
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>
