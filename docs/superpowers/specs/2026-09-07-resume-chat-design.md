@@ -2,6 +2,8 @@
 
 **Implemented 2026-09-08, see `docs/superpowers/plans/2026-09-07-resume-chat.md`.**
 
+**What shipped differs from this document in one structural way — read `CLAUDE.md`'s résumé-chat section for the current picture.** This spec names `effectiveCareer()` as the one record everything downstream sees, and says every operation is applied "by re-running `selectBullets` and `renderBody` over a different effective record". The first implementation honoured the first half and not the second: `selectBullets` kept its single call site, invoked with `themes` alone, so `set_themes`, `set_lead`, `set_taper` and `set_compress_after` wrote overrides nothing read, and `request_rule_change`'s output was discarded — five operations validated, billed and reported as done while changing nothing, through fifteen task reviews that all asserted the override object rather than the rendered document. The final whole-branch review caught it. `lib/effective-document.ts` now owns that hop and is the file to read, not this spec; `effectiveCareer` remains the record-level merge underneath it. Two constraints discovered during that fix are also absent here: `set_lead` is first-role-only (`render.js:73`), and "an operation ran" is tracked separately from "the document changed".
+
 2026-09-07. Covers three changes to `/resume?jobId=…`: the bullet-selection
 ordering rule, a coverage panel, and a conversational agent that can change the
 document by selection, by text, and by design.
