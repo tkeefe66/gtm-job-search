@@ -36,7 +36,14 @@ export interface CoverageReport {
   editedBullets: number;
 }
 
-/** The roles renderBody actually draws bullets for (render.js:117-119). */
+/**
+ * The roles renderBody actually draws bullets for (render.js:135-136).
+ *
+ * Reads `rules.compressAfter` off the RECORD, which is also where a chat
+ * `set_compress_after` override lands — lib/effective-document.ts overrides
+ * the field on a fresh record rather than threading an option, precisely so
+ * this function and renderBody cannot disagree about how many roles are drawn.
+ */
 function renderedRoles(career: CareerRecord): CareerRecord {
   const compressAfter = career.rules ? career.rules.compressAfter : null;
   if (compressAfter == null) return career;
@@ -54,7 +61,9 @@ export function coverageReport(
   // Narrow the selection to only rendered role IDs. coverage() builds selectedIds from
   // every key in selection.bullets, not scoped to the career argument, so passing a
   // narrowed career with a full selection would inflate the denominator with bullets
-  // from roles that never render, silently understating strength by ~30 points.
+  // from roles that never render, silently understating strength by ~25 points
+  // (measured on the shipped record: 0.5652 against 0.8125). The figure used to
+  // read "~30" here and in CLAUDE.md; only CLAUDE.md was corrected.
   const renderedRoleIds = new Set(rendered.roles.map((r) => r.id));
   const renderedSelection = selection.bullets
     ? {

@@ -46,8 +46,7 @@ describe("sanitizeBulletText", () => {
 
   it("rejects input under the raw cap that expands past it after escaping", () => {
     // 400 raw chars of '<' → escapes to 1600 chars, well over 600 limit
-    const input = "<".repeat(400);
-    expect(input.length).toBe(400); // confirm input is under cap
+    const input = "<".repeat(400); // under the 600 raw cap, 1600 once escaped
     const res = sanitizeBulletText(input);
     expect(res.text).toBeUndefined(); // rejection, not acceptance
     expect(res.error).toBeDefined();
@@ -55,17 +54,22 @@ describe("sanitizeBulletText", () => {
   });
 
   it("accepts a near-cap input that does not expand past the limit", () => {
-    // 580 legitimate characters that escape to <630 chars should be rejected
-    // but 400 + some text should fit: 400 chars + "test" = 404 raw -> stays under
-    const input = "A valid bullet with some text " + "x".repeat(370);
-    expect(input.length).toBeLessThanOrEqual(MAX_BULLET_CHARS);
+    // Text that carries nothing the sanitizer escapes, so its post-escape
+    // length equals its raw length and the cap is the only thing it has to
+    // clear. The rejecting twin is the test above, where 400 raw '<'
+    // characters escape to 1600.
+    const input = "A valid bullet with some text " + "x".repeat(370); // 400 raw
     const res = sanitizeBulletText(input);
     expect(res.text).toBeDefined(); // acceptance
     expect(res.error).toBeUndefined();
   });
 
   it("guarantees accepted output satisfies the length cap", () => {
-    // Test a variety of inputs that should pass, and verify all stay under cap
+    // The assertion used to sit inside `if (res.text)`, so an implementation
+    // that rejected every input passed with zero assertions executed — the
+    // branch's one genuinely non-biting test, guarding the escaping-growth
+    // boundary this branch specifically added. Acceptance is now asserted
+    // first, so a blanket-rejecting implementation fails here.
     const validInputs = [
       "A simple bullet.",
       "Owned a <strong>$100M+</strong> pipeline.",
@@ -74,9 +78,9 @@ describe("sanitizeBulletText", () => {
     ];
     for (const input of validInputs) {
       const res = sanitizeBulletText(input);
-      if (res.text) {
-        expect(res.text.length).toBeLessThanOrEqual(MAX_BULLET_CHARS);
-      }
+      expect(res.error).toBeUndefined();
+      expect(res.text).toBeDefined();
+      expect((res.text as string).length).toBeLessThanOrEqual(MAX_BULLET_CHARS);
     }
   });
 });

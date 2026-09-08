@@ -31,6 +31,13 @@ interface TokenSpec {
   units?: string[];
 }
 
+// The unit lists below are the ONE definition of what each parser accepts:
+// the regexes are BUILT from them rather than restating them. A restated list
+// fails closed and silently — a unit added to the array alone is rejected by
+// the regex with an error naming units the array says are fine, and a unit
+// added to the regex alone is rejected by the array. Every character here is
+// literal in a regex (`%` included), so no escaping is needed; if a unit ever
+// carries a metacharacter, escape it at the join.
 const LENGTH_UNITS = ["px", "pt", "rem", "em", "%", "ch"];
 
 export const DESIGN_TOKENS: TokenSpec[] = [
@@ -67,7 +74,7 @@ DESIGN_TOKENS.forEach((t) => {
 
 // Anchored, no /u flag. A value is a number plus an optional allowed unit, or a
 // colour in one of three shapes. Anchoring is what rejects "1px } .rsm { ... }".
-const LENGTH_RE = /^-?[0-9]+(\.[0-9]+)?(px|pt|rem|em|%|ch)?$/;
+const LENGTH_RE = new RegExp("^-?[0-9]+(\\.[0-9]+)?(" + LENGTH_UNITS.join("|") + ")?$");
 const OKLCH_RE = /^oklch\([0-9. ]+(\/[0-9. ]+)?\)$/;
 const HEX_RE = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
 const NAMED_COLORS = ["black", "white", "transparent", "currentColor", "inherit"];
@@ -116,7 +123,9 @@ export function styleAttributeFor(overrides: Record<string, string>): string {
 }
 
 export const PAGE_MARGIN = { min: 0.25, max: 1.5, units: ["in", "mm", "px"] };
-const PAGE_MARGIN_RE = /^[0-9]+(\.[0-9]+)?(in|mm|px)$/;
+// Built from PAGE_MARGIN.units for the reason above — `units` was previously
+// declared and read by nothing, so the two could drift with no symptom.
+const PAGE_MARGIN_RE = new RegExp("^[0-9]+(\\.[0-9]+)?(" + PAGE_MARGIN.units.join("|") + ")$");
 
 /**
  * The page margin is NOT a token. It is the `margin` attribute on <doc-page>
