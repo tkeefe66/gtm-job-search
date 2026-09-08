@@ -542,3 +542,33 @@ describe("classifyFetchOutcome", () => {
     }
   });
 });
+
+// Step 4 of the verifiable-sourcing spec, and the hazard BOTH reviewers raised
+// independently. `seenTitles` becomes crawl_runs.role_titles, and titlesToClose
+// closes any Crawl-sourced New role absent from two consecutive trustworthy
+// runs. Board enumeration routes a slug into that path — and a vendor returning
+// `{"jobs":[]}` parses as a real EMPTY board, which counts as closure evidence
+// today. Two nights of that would close every crawl-sourced role at a company.
+describe("a board-sourced run is not automatically closure evidence", () => {
+  test("a GUESSED slug's run never closes anything", () => {
+    expect(runProvidesClosureEvidence("ok", false, { source: "guessed" })).toBe(false);
+  });
+
+  // A read slug names a board that is certainly the employer's, so its listing
+  // is as good as the careers page the HTML tier reads.
+  test("a READ slug's run is evidence, like any other successful run", () => {
+    expect(runProvidesClosureEvidence("ok", false, { source: "read" })).toBe(true);
+  });
+
+  // An empty board is indistinguishable from a parser that broke on a vendor's
+  // shape change, and the cost of being wrong is every role at that company.
+  test("an EMPTY board is never evidence, however the slug was found", () => {
+    expect(runProvidesClosureEvidence("empty", false, { source: "read" })).toBe(false);
+  });
+
+  test("a run that was not board-sourced keeps exactly its old behaviour", () => {
+    expect(runProvidesClosureEvidence("ok", false)).toBe(true);
+    expect(runProvidesClosureEvidence("empty", false)).toBe(true);
+    expect(runProvidesClosureEvidence("ok", true)).toBe(false);
+  });
+});

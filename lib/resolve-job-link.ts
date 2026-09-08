@@ -4,6 +4,8 @@ import {
   boardPageUrl,
   findPosting,
   parseBoard,
+  boardIdentityFrom,
+  boardIdentityUrl,
   parsePostingBody,
   postingBodyUrl,
 } from "./ats-boards";
@@ -11,6 +13,7 @@ import type { PostingBody } from "./ats-boards";
 import type { Posting } from "./ats-boards";
 import type { BoardVendor } from "./ats-boards";
 import { companySlugs, hostOf, parseBoardLink } from "./job-link";
+import type { BoardResolution } from "./board-source";
 
 /**
  * Finds the employer's own link for a role we only have a reseller's link to.
@@ -322,6 +325,78 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
     // id on a real board — control-tested, the standard BOARD_VENDORS demands.
     if (!res.ok) return null;
     return parsePostingBody(link.vendor, link.id, await res.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * The employer's board for a whole COMPANY, for enumeration rather than repair.
+ *
+ * Two ways in, and they are not equally trustworthy — see lib/board-source.ts
+ * for why the distinction decides what may be done with the result:
+ *
+ * 1. READ: a URL this company already has a row for is an ATS deep link, so
+ *    `parseBoardLink` takes the vendor and slug straight out of it. That board
+ *    is certainly the employer's.
+ * 2. GUESSED: `companySlugs` × `BOARD_VENDORS`, accepted only when a board
+ *    answers with postings. That proves the vendor is honest, never that the
+ *    board belongs to this company — which is why `boardTrust` then demands
+ *    corroboration before such a board may create rows.
+ *
+ * Costs no Claude tokens. The guessed path is up to slugs × vendors sequential
+ * fetches, so callers should prefer a stored URL and cache the outcome for the
+ * life of their pass.
+ */
+export async function resolveBoardForCompany(
+  company: string,
+  storedUrls: (string | null | undefined)[]
+): Promise<{ resolution: BoardResolution; postings: Posting[] } | null> {
+  for (const url of storedUrls) {
+    const link = parseBoardLink(url);
+    if (!link || !link.slug) continue;
+    const postings = await fetchBoard(link.vendor, link.slug);
+    if (postings === null) continue;
+    return {
+      resolution: { vendor: link.vendor, slug: link.slug, source: "read" },
+      postings,
+    };
+  }
+
+  for (const slug of companySlugs(company)) {
+    for (const vendor of BOARD_VENDORS) {
+      const postings = await fetchBoard(vendor, slug);
+      // An EMPTY board is not a resolution here, unlike in link repair: there
+      // is nothing to enumerate and nothing to corroborate against, and
+      // accepting it would let a stranger's empty board stand in for this
+      // company's real one.
+      if (postings === null || postings.length === 0) continue;
+      return { resolution: { vendor, slug, source: "guessed" }, postings };
+    }
+  }
+  return null;
+}
+
+/**
+ * The employer's own name for a board, for corroborating a GUESSED slug.
+ *
+ * One fetch, no Claude tokens, and independent of where the board's postings
+ * are hosted — see boardIdentityUrl for why that independence is the point.
+ */
+export async function fetchBoardIdentity(
+  vendor: BoardVendor,
+  slug: string
+): Promise<string | null> {
+  const url = boardIdentityUrl(vendor, slug);
+  if (url === null) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    return boardIdentityFrom(await res.json());
   } catch {
     return null;
   } finally {

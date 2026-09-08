@@ -387,3 +387,30 @@ export function parsePostingBody(
 
   return null;
 }
+
+/**
+ * Where a vendor publishes the EMPLOYER'S OWN NAME for a whole board, or null.
+ *
+ * The corroborator a guessed slug needs (see lib/board-source.ts). Greenhouse
+ * answers `{"name": "Databricks"}` for a board, in one fetch and independent of
+ * where its postings are hosted — which matters, because a company using a
+ * custom careers domain publishes posting URLs this codebase cannot parse a
+ * slug back out of, so reading the name off a POSTING failed for exactly the
+ * boards most likely to need corroboration. Measured 2026-09-07: Databricks
+ * refused corroboration by the posting route and passes by this one.
+ *
+ * Null for the vendors that publish no board-level name — a guessed slug there
+ * simply cannot be corroborated, which boardTrust turns into a refusal.
+ */
+export function boardIdentityUrl(vendor: BoardVendor, slug: string): string | null {
+  return vendor === "greenhouse"
+    ? `https://boards-api.greenhouse.io/v1/boards/${slug}`
+    : null;
+}
+
+/** The employer name out of whatever boardIdentityUrl returned. */
+export function boardIdentityFrom(json: unknown): string | null {
+  if (!json || typeof json !== "object") return null;
+  const name = (json as { name?: unknown }).name;
+  return typeof name === "string" && name.trim() !== "" ? name.trim() : null;
+}

@@ -9,9 +9,11 @@ import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { ingestRoles } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
+import { boardTrust, rolesFromBoard, type BoardResolution } from "@/lib/board-source";
+import { fetchBoardIdentity, resolveBoardForCompany } from "@/lib/resolve-job-link";
 import { parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_FIELDS } from "@/lib/types";
-import { normalizeTitle } from "@/lib/role-key";
+import { NORMALIZED_COMPANY_SQL, normalizeCompanyName, normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
 import type { Profile } from "@/lib/profile";
 import {
@@ -286,6 +288,78 @@ type FetchTierResult =
   | { kind: "shell" }
   | { kind: "unavailable" };
 
+/**
+ * The BOARD tier: ask the employer's own hiring system what is open.
+ *
+ * Tried before the page tiers because it is the only source that is verifiable
+ * rather than merely readable — the board answers with the employer's own
+ * titles and canonical URLs, and answers honestly when a req closes. It costs
+ * no Claude tokens for the listing itself; each role is still READ and scored
+ * by ingestRoles, bounded by MAX_INGEST_READS.
+ *
+ * Returns null whenever the board may not source roles, which sends the company
+ * down the existing fetch/search path unchanged. `boardTrust` is what decides
+ * that: a guessed slug with no corroborating employer name never enumerates.
+ */
+/**
+ * ATS deep links this company already has rows for, newest first.
+ *
+ * rawQuery rather than the builder for the same reason ingestRoles uses it: the
+ * filter is a normalizing expression the builder cannot express. Failure is
+ * swallowed to an empty list on purpose — a board resolution is an OPTIONAL
+ * improvement, and a company should still crawl if this read fails.
+ */
+async function storedAtsLinks(company: string): Promise<string[]> {
+  const tenantId = await resolveTenantId();
+  const { data, error } = await rawQuery<{ job_url: string }>(
+    `select job_url from jobs
+      where tenant_id = $2 and ${NORMALIZED_COMPANY_SQL} = $1
+        and job_url ~* '(greenhouse|ashby|lever|workable|breezy)'
+      order by created_at desc limit 3`,
+    [normalizeCompanyName(company), tenantId],
+    tenantId
+  );
+  if (error) {
+    console.warn(`crawler: could not read stored links for ${company} — ${error.message}`);
+    return [];
+  }
+  return (data ?? []).map((r) => r.job_url);
+}
+
+async function extractViaBoard(
+  company: string,
+  criteria: Criteria,
+  storedUrls: (string | null)[]
+): Promise<{ roles: Role[]; resolution: BoardResolution } | null> {
+  const found = await resolveBoardForCompany(company, storedUrls);
+  if (!found) return null;
+
+  // The corroborator a guessed slug needs. Asked of the BOARD, not of a
+  // posting: a company on a custom careers domain publishes posting URLs no
+  // slug can be parsed back out of, so the posting route failed for exactly the
+  // boards most in need of corroboration (measured: Databricks).
+  let declared: string[] = [];
+  if (found.resolution.source === "guessed") {
+    const name = await fetchBoardIdentity(found.resolution.vendor, found.resolution.slug);
+    if (name) declared = [name];
+  }
+
+  if (boardTrust(found.resolution, company, declared) !== "source") {
+    console.log(
+      `crawler: ${company} — board ${found.resolution.vendor}:${found.resolution.slug} ` +
+        `was ${found.resolution.source} and uncorroborated, not used for sourcing`
+    );
+    return null;
+  }
+
+  const roles = rolesFromBoard(found.postings, criteria.titles);
+  console.log(
+    `crawler: ${company} — board ${found.resolution.vendor}:${found.resolution.slug} ` +
+      `(${found.resolution.source}) listed ${found.postings.length}, ${roles.length} match the titles`
+  );
+  return { roles, resolution: found.resolution };
+}
+
 async function extractViaFetch(
   company: string,
   careersUrl: string,
@@ -394,9 +468,23 @@ async function extractViaSearch(
  */
 export function runProvidesClosureEvidence(
   status: CrawlStatus,
-  salvaged: boolean
+  salvaged: boolean,
+  board?: { source: "read" | "guessed" }
 ): boolean {
   if (salvaged) return false;
+  if (board !== undefined) {
+    // A board-sourced run may only close roles when the board is certainly the
+    // employer's — a slug READ out of their own posting URL. A guessed slug
+    // routed into this path would let a stranger's board close real roles, and
+    // closure is the one operation here that writes `status`.
+    if (board.source !== "read") return false;
+    // And an EMPTY board is never evidence, however the slug was found: it is
+    // indistinguishable from a parser that broke on a vendor shape change, and
+    // the cost of being wrong is every crawl-sourced role at that company. The
+    // HTML tier's `empty` means a page loaded and listed nothing, which is a
+    // fact about the employer; a vendor's `{"jobs":[]}` is not.
+    return status === "ok";
+  }
   return status === "ok" || status === "empty";
 }
 
@@ -620,6 +708,10 @@ export async function crawlCompany(
   // so leaving it null preserves whatever crawl_method already was.
   let runMethod: CrawlMethod | null = null;
   let learnedMethod: CrawlMethod | null = null;
+  // Set only when the board tier sourced this run's roles, and carried into the
+  // closure decision: a guessed board may never close a role, and an empty
+  // board is never evidence at all. See runProvidesClosureEvidence.
+  let boardSource: "read" | "guessed" | null = null;
   let status: CrawlStatus = "error";
   let errorMessage: string | undefined;
   let roles: Role[] = [];
@@ -658,12 +750,33 @@ export async function crawlCompany(
 
       // A company that previously needed the search tier skips the fetch
       // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
-      let fetchResult: FetchTierResult | null = null;
-      if (tracked.crawl_method !== "search") {
+      // The board tier first. A company whose board is certainly its own gives
+      // verifiable roles for free; everything else falls through to the page
+      // tiers exactly as before.
+      const board = await extractViaBoard(company, criteria, [
+        // A link this company already has a row for is the best source of a
+        // READ slug — 57 of 195 rows carry an employer ATS link, and a read
+        // slug needs no corroboration because it was never a guess.
+        ...(await storedAtsLinks(company)),
+        tracked.careers_url,
+      ]);
+      if (board) {
+        boardSource = board.resolution.source;
+        runMethod = "fetch";
+        roles = board.roles;
+      }
+
+      let fetchResult: FetchTierResult | null = board ? { kind: "roles", roles: board.roles } : null;
+      if (!board && tracked.crawl_method !== "search") {
         fetchResult = await extractViaFetch(company, careersUrl, criteria, ctx.profile);
       }
 
-      if (fetchResult?.kind === "roles") {
+      if (board) {
+        // Nothing is LEARNED from a board run: crawl_method is the page-tier
+        // state machine, and stamping it here would teach the fetch tier a
+        // lesson the board tier learned.
+        learnedMethod = null;
+      } else if (fetchResult?.kind === "roles") {
         runMethod = "fetch";
         learnedMethod = "fetch";
         roles = fetchResult.roles;
@@ -718,7 +831,14 @@ export async function crawlCompany(
       // ever "ok" or "empty" here, set two lines above from roles.length) —
       // that's the safety property, and it holds structurally, not just by
       // this check: a fetch failure must never close a live job.
-      if (!dryRun && runProvidesClosureEvidence(status, salvaged)) {
+      if (
+        !dryRun &&
+        runProvidesClosureEvidence(
+          status,
+          salvaged,
+          boardSource === null ? undefined : { source: boardSource }
+        )
+      ) {
         // [current run, previous trustworthy run] — a role closes only when
         // absent from both, so nothing found today is ever closed today.
         //
