@@ -3,6 +3,7 @@ import { DEFAULT_CRITERIA, DEFAULT_FIT_BRAIN } from "./search-criteria";
 import { buildSettingsView, settingsReadWarning } from "./settings-view";
 import {
   COMP_SCORING_RESCORED_AT_KEY,
+  ENRICH_RESCORED_AT_KEY,
   CRITERIA_CHANGED_AT_KEY,
   JOB_STATUSES_KEY,
   PROFILE_KEY,
@@ -16,6 +17,7 @@ const CLEAN = {
   settingsError: undefined,
   scoredJobCount: 0,
   countError: undefined,
+  latestEnrichedAt: null as string | null,
 };
 
 describe("buildSettingsView", () => {
@@ -208,5 +210,41 @@ describe("profile on the settings view", () => {
     const view = buildSettingsView({ ...CLEAN, settingsError: "" });
     expect(view.profile).toEqual(DEFAULT_PROFILE);
     expect(view.error).toBeTruthy();
+  });
+});
+
+// Both halves of the enrichment rescore offer's gate arrive through this view.
+// A field that never reached it would be an offer that renders for nobody,
+// green under every test in lib/rescore-progress.test.ts.
+describe("the enrichment rescore gate", () => {
+  test("the stamp is read off the same snapshot as everything else", () => {
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [{ key: ENRICH_RESCORED_AT_KEY, value: "2026-09-07T11:00:00.000Z" }],
+    });
+
+    expect(view.enrichRescoredAt).toBe("2026-09-07T11:00:00.000Z");
+  });
+
+  test("a non-string stamp reads as never stamped, so the offer appears", () => {
+    const view = buildSettingsView({
+      ...CLEAN,
+      rows: [{ key: ENRICH_RESCORED_AT_KEY, value: 42 }],
+    });
+
+    expect(view.enrichRescoredAt).toBeNull();
+  });
+
+  test("the newest enrich write is carried through", () => {
+    const view = buildSettingsView({ ...CLEAN, latestEnrichedAt: "2026-09-07T10:00:00.000Z" });
+
+    expect(view.latestEnrichedAt).toBe("2026-09-07T10:00:00.000Z");
+  });
+
+  // The SQL side is a max() over TEXT, where "whenever" outranks every real
+  // ISO timestamp — and a stamp nothing can parse would otherwise pin the
+  // offer on permanently.
+  test("an unparseable stamp from SQL is rejected here, not rendered", () => {
+    expect(buildSettingsView({ ...CLEAN, latestEnrichedAt: "whenever" }).latestEnrichedAt).toBeNull();
   });
 });

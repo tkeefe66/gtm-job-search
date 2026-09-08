@@ -14,11 +14,13 @@ import {
   ceilingFrom,
   compFloorFrom,
   compScoringRescoredFrom,
+  enrichRescoredFrom,
   jobStatusesFrom,
   mergeSettings,
   profileFrom,
   type SettingRow,
 } from "@/lib/settings-store";
+import { newestStamp } from "@/lib/posting-detail";
 import type { JobStatusDef } from "@/lib/job-statuses";
 import type { Profile } from "@/lib/profile";
 
@@ -38,6 +40,13 @@ export interface SettingsView {
    * compRescoreOffer in lib/rescore-progress.ts.
    */
   compScoringRescoredAt: string | null;
+  /**
+   * The newest moment the /roles backfill wrote a row, or null. Half of the
+   * enrichment rescore offer's gate; the stamp below is the other half.
+   */
+  latestEnrichedAt: string | null;
+  /** When a rescore last ran against enriched rows, or null if never. */
+  enrichRescoredAt: string | null;
   /** The user's pipeline statuses, resolved from the same snapshot as the rest. */
   statuses: JobStatusDef[];
   /**
@@ -59,6 +68,8 @@ export interface SettingsViewInput {
   scoredJobCount: number;
   /** Why the scored-role count could not be taken, if it could not. */
   countError: string | undefined;
+  /** `max(posting->>'enrichedAt')` — validated here, not trusted. */
+  latestEnrichedAt: string | null;
 }
 
 /**
@@ -127,6 +138,10 @@ export function buildSettingsView(input: SettingsViewInput): SettingsView {
     // a wrongly suppressed one loses the feature), and the read-failure banner
     // is already on screen next to it.
     compScoringRescoredAt: compScoringRescoredFrom(input.rows),
+    // Through newestStamp even though it is one value: a SQL max() over text
+    // would let an unparseable stamp win and pin the offer on forever.
+    latestEnrichedAt: newestStamp([input.latestEnrichedAt]),
+    enrichRescoredAt: enrichRescoredFrom(input.rows),
     statuses: jobStatusesFrom(input.rows),
     // Off the SAME snapshot as everything else in this function, for the
     // reason every other reader here gives: a second query is a second

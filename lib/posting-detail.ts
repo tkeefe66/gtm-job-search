@@ -62,3 +62,43 @@ export function postingDetailFrom(role: {
     niceToHaves: stringList(role.nice_to_haves),
   };
 }
+
+/**
+ * The newest moment the backfill wrote any of these rows, or null.
+ *
+ * One half of the enrichment rescore offer's gate; the other is the
+ * `enrich_rescored_at` setting. Derived from rows the caller already holds
+ * rather than from SQL, so the comparison the offer makes is expressible in a
+ * test — the same reason EXPIRED_PREDICATE has a JS twin.
+ *
+ * A row with no `enrichedAt` is a row ingest wrote, not a row the backfill
+ * touched, and is no evidence either way. An unparseable stamp is ignored
+ * rather than compared as a string, where "whenever" would sort above every
+ * real ISO timestamp and pin the offer on forever.
+ */
+export function latestEnrichedAt(
+  jobs: { posting?: PostingDetail | null }[]
+): string | null {
+  return newestStamp(jobs.map((job) => job.posting?.enrichedAt));
+}
+
+/**
+ * The newest parseable ISO timestamp in a list, or null.
+ *
+ * Separate from latestEnrichedAt because the settings page takes its value
+ * from SQL (`max(posting->>'enrichedAt')`) rather than from rows, and that
+ * answer still has to pass the same validity rule — a `max()` over text sorts
+ * "whenever" above every real timestamp.
+ */
+export function newestStamp(stamps: (string | null | undefined)[]): string | null {
+  let newest: string | null = null;
+  let newestMs = -Infinity;
+  for (const at of stamps) {
+    if (typeof at !== "string") continue;
+    const ms = Date.parse(at);
+    if (!Number.isFinite(ms) || ms <= newestMs) continue;
+    newest = at;
+    newestMs = ms;
+  }
+  return newest;
+}

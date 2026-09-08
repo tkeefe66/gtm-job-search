@@ -889,6 +889,19 @@ export default function RolesTable({
               {enrichReport.error !== undefined
                 ? describeWriteFailure(enrichReport.error, "read your postings")
                 : summarizeEnrich(enrichReport)}
+              {enrichReport.error === undefined && enrichReport.enriched > 0 && (
+                /* The rescore itself lives on /settings, where the pass, its
+                   progress and its stamp already do. Offering it from here
+                   would be a second copy of that loop. */
+                <>
+                  {" "}
+                  These roles were scored before their postings were read —{" "}
+                  <Link href="/settings" className="underline hover:text-ink">
+                    rescore them on Settings
+                  </Link>
+                  .
+                </>
+              )}
             </div>
             <button
               onClick={() => setEnrichReport(null)}

@@ -145,6 +145,21 @@ export const PROFILE_KEY = "profile";
  */
 export const ONBOARDED_AT_KEY = "onboarded_at";
 
+/**
+ * When a rescore last ran against rows the backfill had enriched.
+ *
+ * The other half of the enrichment rescore offer, whose first half is the
+ * `enrichedAt` stamp inside each row's `posting` jsonb — the offer shows while
+ * any row was enriched AFTER this. Server state on both sides for the reason
+ * compRescoreOffer records: an offer that lives only in the session is missing
+ * for the user who closes the tab mid-pass.
+ *
+ * A stamp the app writes, so it follows the other three OUT of SETTING_KEYS:
+ * it is not a `Criteria` field, mergeSettings must never see it, and no
+ * settings form may offer it.
+ */
+export const ENRICH_RESCORED_AT_KEY = "enrich_rescored_at";
+
 export interface SettingRow {
   key: string;
   value: unknown;
@@ -248,6 +263,18 @@ export const compFloorFrom = (rows: SettingRow[]) =>
  */
 export function compScoringRescoredFrom(rows: SettingRow[]): string | null {
   const row = rows.find((r) => r.key === COMP_SCORING_RESCORED_AT_KEY);
+  return typeof row?.value === "string" ? row.value : null;
+}
+
+/**
+ * The enrichment rescore stamp, read out of a snapshot the caller already has.
+ *
+ * Same non-string rule as above, and for the same reason: a value nothing can
+ * interpret must make the offer APPEAR — one pass clears it — never suppress it
+ * forever.
+ */
+export function enrichRescoredFrom(rows: SettingRow[]): string | null {
+  const row = rows.find((r) => r.key === ENRICH_RESCORED_AT_KEY);
   return typeof row?.value === "string" ? row.value : null;
 }
 
@@ -379,7 +406,8 @@ async function upsertSetting(
     | typeof COMP_SCORING_RESCORED_AT_KEY
     | typeof JOB_STATUSES_KEY
     | typeof PROFILE_KEY
-    | typeof ONBOARDED_AT_KEY,
+    | typeof ONBOARDED_AT_KEY
+    | typeof ENRICH_RESCORED_AT_KEY,
   value: unknown
 ): Promise<{ error?: string }> {
   // `on conflict (tenant_id, key)`, matching the composite primary key that
@@ -440,6 +468,21 @@ export async function writeCompScoringRescoredAt(
   when: Date = new Date()
 ): Promise<{ error?: string }> {
   return upsertSetting(COMP_SCORING_RESCORED_AT_KEY, when.toISOString());
+}
+
+/**
+ * Stamps `enrich_rescored_at`, which is what retires the enrichment rescore
+ * offer until the next backfill runs.
+ *
+ * Same placement rule as the two stamps above: the write lives next to its key
+ * so no other module has to widen `SettingKey` to reach it. Callers decide WHEN
+ * — only after a pass that actually drained, the rule markCompScoringRescored
+ * enforces for the compensation stamp.
+ */
+export async function writeEnrichRescoredAt(
+  when: Date = new Date()
+): Promise<{ error?: string }> {
+  return upsertSetting(ENRICH_RESCORED_AT_KEY, when.toISOString());
 }
 
 export async function deleteSetting(key: SettingKey): Promise<{ error?: string }> {

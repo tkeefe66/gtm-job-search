@@ -38,6 +38,7 @@ import {
   readCriteriaChangedAt,
   writeCompScoringRescoredAt,
   writeCriteriaChangedAt,
+  writeEnrichRescoredAt,
   writeJobStatuses,
   writeProfile,
   writeSetting,
@@ -59,16 +60,42 @@ export async function getSettings(): Promise<SettingsView> {
   // that must NOT degrade silently to the shipped defaults. Rendering them as
   // if they were the user's saved values invites a save that overwrites the
   // real ones, and there is no history table.
-  const [settings, scored] = await Promise.all([
+  const [settings, scored, enrichedAt] = await Promise.all([
     readAllSettingsResult(),
     countScoredJobs(),
+    latestEnrichWrite(),
   ]);
   return buildSettingsView({
     rows: settings.rows,
     settingsError: settings.error,
     scoredJobCount: scored.count,
     countError: scored.error,
+    latestEnrichedAt: enrichedAt,
   });
+}
+
+/**
+ * The newest moment the /roles backfill wrote a row.
+ *
+ * A max() rather than a row read: this decides whether ONE prompt renders, and
+ * pulling the jobs table into the settings page for it would be a second full
+ * read of a table this page otherwise never touches. A failed read returns null
+ * — "no enriched rows" — which hides the offer rather than showing one whose
+ * cost nobody can state. buildSettingsView still validates what comes back.
+ */
+async function latestEnrichWrite(): Promise<string | null> {
+  const { data, error } = await rawQuery<{ at: string | null }>(
+    `select max(posting->>'enrichedAt') as at from jobs where tenant_id = $1`,
+    [await resolveTenantId()],
+    await resolveTenantId()
+  );
+  if (error) {
+    console.error(
+      `settings: could not read the newest enrichment stamp — ${error.message || UNDESCRIBED_DB_ERROR}`
+    );
+    return null;
+  }
+  return data?.[0]?.at ?? null;
 }
 
 async function countScoredJobs(): Promise<{ count: number; error?: string }> {
@@ -584,6 +611,36 @@ export async function markCompScoringRescored(pass: {
   // that shipped here reported a hard write failure as a clean stamp — the
   // same defect readAllSettings once had, in a place where it would tell the
   // user the offer was retired when nothing had been written.
+  const described = describeWriteFailure(error, "record that the rescore ran");
+  if (described !== undefined) {
+    console.error(`settings: ${described}`);
+    return { error: described, stamped: false };
+  }
+  return { stamped: true };
+}
+
+/**
+ * The enrichment twin of markCompScoringRescored, and deliberately a separate
+ * action rather than a flag on it: the two stamps answer different questions
+ * ("has a comp-scoring pass ever run" vs "has a pass run since the last
+ * backfill"), and one pass legitimately satisfies both. Same rules — session
+ * required, passDrained re-applied here rather than trusted from a React
+ * component, presence-checked write failure.
+ */
+export async function markEnrichRescored(pass: {
+  rescored: number;
+  remaining: number | null;
+  error?: string;
+}): Promise<{ error?: string; stamped: boolean }> {
+  await requireActor();
+  if (!passDrained(pass)) {
+    console.warn(
+      `settings: refusing to stamp the enrichment rescore — the pass did not drain ` +
+        `(rescored ${pass.rescored}, remaining ${pass.remaining ?? "uncounted"})`
+    );
+    return { stamped: false };
+  }
+  const { error } = await writeEnrichRescoredAt();
   const described = describeWriteFailure(error, "record that the rescore ran");
   if (described !== undefined) {
     console.error(`settings: ${described}`);

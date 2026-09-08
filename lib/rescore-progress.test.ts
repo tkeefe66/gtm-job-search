@@ -21,6 +21,7 @@ import {
   type RescoreBatchResult,
   type RescoreOfferSession,
   type RescoreOfferView,
+  enrichRescoreOffer,
 } from "./rescore-progress";
 
 describe("rescoreCostDollars", () => {
@@ -855,5 +856,121 @@ describe("an undescribed batch failure", () => {
     expect(rescoreErrorText("connection terminated")).not.toContain(
       UNDESCRIBED_RESCORE_ERROR
     );
+  });
+});
+
+// Part 4 of docs/superpowers/specs/2026-09-07-posting-detail-design.md. A row
+// that has just gained real key_skills and company_description carries a
+// fit_score computed from strictly less than a rescore would now use, so
+// leaving it is leaving a knowingly stale score on screen.
+describe("the enrichment rescore offer", () => {
+  const OFFER = {
+    scoredJobCount: 12,
+    latestEnrichedAt: "2026-09-07T10:00:00.000Z",
+    enrichRescoredAt: null as string | null,
+    dismissed: false,
+  };
+
+  test("enriched rows that have never been rescored are offered", () => {
+    expect(enrichRescoreOffer(OFFER)).toBe("enrichment");
+  });
+
+  test("nothing enriched, nothing to offer", () => {
+    expect(enrichRescoreOffer({ ...OFFER, latestEnrichedAt: null })).toBeNull();
+  });
+
+  // Same rule as the other two: rescoring updates scores rather than removing
+  // them, so a count can never be the trigger on its own — and an offer to
+  // spend $0.00 on zero roles is not an offer.
+  test("nothing scored, nothing to offer", () => {
+    expect(enrichRescoreOffer({ ...OFFER, scoredJobCount: 0 })).toBeNull();
+  });
+
+  test("a stamp newer than every enriched row retires the offer", () => {
+    expect(
+      enrichRescoreOffer({ ...OFFER, enrichRescoredAt: "2026-09-07T11:00:00.000Z" })
+    ).toBeNull();
+  });
+
+  test("a row enriched after the last rescore brings it back", () => {
+    expect(
+      enrichRescoreOffer({ ...OFFER, enrichRescoredAt: "2026-09-07T09:00:00.000Z" })
+    ).toBe("enrichment");
+  });
+
+  // The compFloor `>` vs `>=` hazard, in the same shape. A stamp written at the
+  // same instant as the last enrich write means that pass DID cover it: the
+  // rescore ran after the enrichment, and `>=` would re-offer a rescore that
+  // already happened, forever, at full price.
+  test("a stamp exactly as old as the newest enriched row has covered it", () => {
+    expect(
+      enrichRescoreOffer({ ...OFFER, enrichRescoredAt: "2026-09-07T10:00:00.000Z" })
+    ).toBeNull();
+  });
+
+  test("a dismissal in this session hides it", () => {
+    expect(enrichRescoreOffer({ ...OFFER, dismissed: true })).toBeNull();
+  });
+
+  // Same direction as compScoringRescoredFrom's: an uninterpretable value must
+  // make the offer APPEAR (one rescore clears it), never suppress it forever.
+  test("an unparseable stamp is treated as never stamped", () => {
+    expect(enrichRescoreOffer({ ...OFFER, enrichRescoredAt: "not a date" })).toBe(
+      "enrichment"
+    );
+  });
+
+  test("an unparseable enrichedAt is not evidence of anything", () => {
+    expect(enrichRescoreOffer({ ...OFFER, latestEnrichedAt: "whenever" })).toBeNull();
+  });
+});
+
+describe("what the enrichment offer says", () => {
+  const why = enrichRescoreOffer({
+    scoredJobCount: 3,
+    latestEnrichedAt: "2026-09-07T10:00:00.000Z",
+    enrichRescoredAt: null,
+    dismissed: false,
+  })!;
+
+  test("it says the scores predate what was just read, not that anything was saved", () => {
+    const text = rescorePromptQuestion(why, 3);
+
+    expect(text).not.toContain("Saved.");
+    expect(text.toLowerCase()).toContain("posting");
+  });
+
+  test("it carries the same cost figure as the pass bills", () => {
+    expect(rescorePromptQuestion(why, 3)).toContain(rescoreCostDollars(3).toFixed(2));
+  });
+});
+
+// The settings page holds no gate logic: it renders whatever rescoreOffers
+// returns. A third offer that never reached this function would be a section
+// that renders nothing, green under every test above.
+describe("rescoreOffers carries the enrichment offer too", () => {
+  const VIEW = {
+    scoredJobCount: 5,
+    fitBrainOverridden: false,
+    compScoringRescoredAt: "2026-09-01T00:00:00.000Z",
+    latestEnrichedAt: "2026-09-07T10:00:00.000Z",
+    enrichRescoredAt: null,
+  };
+  const SESSION = {
+    fitBrainEditedThisSession: false,
+    floorEditedThisSession: false,
+    dismissed: false,
+  };
+
+  test("an enriched, never-rescored table is offered a rescore", () => {
+    expect(rescoreOffers(VIEW, SESSION).enrichment).toBe("enrichment");
+  });
+
+  test("the one dismissal covers it, as it covers the other two", () => {
+    expect(rescoreOffers(VIEW, { ...SESSION, dismissed: true }).enrichment).toBeNull();
+  });
+
+  test("a table with nothing enriched is not offered one", () => {
+    expect(rescoreOffers({ ...VIEW, latestEnrichedAt: null }, SESSION).enrichment).toBeNull();
   });
 });

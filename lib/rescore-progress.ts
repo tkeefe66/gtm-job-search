@@ -48,6 +48,9 @@ export function rescoreCostDollars(count: number): number {
  *   DEPLOY, and the offer is firing on a bare page load.
  * - "fit-brain": nobody saved anything this session either, but a customized
  *   fit brain is stored, so the scores may not match it.
+ * - "enrichment": a backfill just read the postings behind rows whose scores
+ *   were computed without them — the row now carries key_skills and
+ *   company_description the first score never saw.
  * - "onboarding": a RE-RUN of onboarding just replaced the fit brain, its
  *   tails, title scope and domain bonus wholesale — every row scored under
  *   the previous career is now stale. Unlike the other three this one has no
@@ -56,7 +59,12 @@ export function rescoreCostDollars(count: number): number {
  *   gate — the offer either fires now, in the same render that knows a save
  *   just happened, or never.
  */
-type RescoreReasonKind = "edit" | "comp-scoring" | "fit-brain" | "onboarding";
+type RescoreReasonKind =
+  | "edit"
+  | "comp-scoring"
+  | "fit-brain"
+  | "onboarding"
+  | "enrichment";
 
 declare const REASON_BRAND: unique symbol;
 
@@ -153,6 +161,46 @@ export function fitBrainRescoreOffer(
   return input.fitBrainOverridden ? reason("fit-brain") : null;
 }
 
+export interface EnrichRescoreOfferInput {
+  scoredJobCount: number;
+  /** The newest `posting.enrichedAt` on any row, or null if nothing is enriched. */
+  latestEnrichedAt: string | null;
+  /** When a rescore last ran against enriched rows, or null if never. */
+  enrichRescoredAt: string | null;
+  dismissed: boolean;
+}
+
+/**
+ * Whether enrichment has outrun the last rescore.
+ *
+ * Server state, not a session flag — the rule compRescoreOffer's comment
+ * establishes, for the same reason: a client component has no memory across
+ * page loads, and an offer that exists only in the session is missing for the
+ * user who closes the tab mid-pass. Both sides of the comparison are stored:
+ * `posting.enrichedAt` on the rows, `enrich_rescored_at` in app_settings.
+ *
+ * STRICTLY newer. A stamp written at the same instant as the last enrich write
+ * means that rescore already covered it; `>=` would re-offer a rescore that
+ * has already been paid for, on every page load, forever. That is the compFloor
+ * `>` vs `>=` hazard in the same shape, and a test pins the boundary.
+ *
+ * An unparseable stamp reads as "never stamped" and an unparseable enrichedAt
+ * as "nothing enriched" — both directions chosen so the failure is an offer the
+ * user can clear with one pass, never an offer suppressed forever by a value
+ * nothing can interpret.
+ */
+export function enrichRescoreOffer(
+  input: EnrichRescoreOfferInput
+): RescoreReason | null {
+  if (input.dismissed) return null;
+  if (input.scoredJobCount <= 0) return null;
+  const enrichedAt = Date.parse(input.latestEnrichedAt ?? "");
+  if (!Number.isFinite(enrichedAt)) return null;
+  const stampedAt = Date.parse(input.enrichRescoredAt ?? "");
+  if (!Number.isFinite(stampedAt)) return reason("enrichment");
+  return enrichedAt > stampedAt ? reason("enrichment") : null;
+}
+
 export interface OnboardingRescoreOfferInput {
   /** Rows carrying a fit score, read fresh after saveProfile commits. */
   scoredJobCount: number;
@@ -199,6 +247,10 @@ export interface RescoreOfferView {
   scoredJobCount: number;
   fitBrainOverridden: boolean;
   compScoringRescoredAt: string | null;
+  /** The newest row the backfill wrote, or null — see latestEnrichedAt. */
+  latestEnrichedAt: string | null;
+  /** When a rescore last ran against enriched rows, or null if never. */
+  enrichRescoredAt: string | null;
 }
 
 /** What the user has done in this page load. */
@@ -214,6 +266,8 @@ export interface RescoreOffers {
   fitBrain: RescoreReason | null;
   /** Shown in the compensation section, or null. */
   compensation: RescoreReason | null;
+  /** Shown where the backfill's results are, or null. */
+  enrichment: RescoreReason | null;
 }
 
 /**
@@ -240,6 +294,15 @@ export function rescoreOffers(
       scoredJobCount: view.scoredJobCount,
       compScoringRescoredAt: view.compScoringRescoredAt,
       floorEditedThisSession: session.floorEditedThisSession,
+      dismissed: session.dismissed,
+    }),
+    // No session flag of its own: enrichment happens on /roles, not here, so
+    // there is no "edited in this session" state for this page to hold — the
+    // two server stamps are the whole gate.
+    enrichment: enrichRescoreOffer({
+      scoredJobCount: view.scoredJobCount,
+      latestEnrichedAt: view.latestEnrichedAt,
+      enrichRescoredAt: view.enrichRescoredAt,
       dismissed: session.dismissed,
     }),
   };
@@ -281,6 +344,18 @@ export function rescorePromptQuestion(why: RescoreReason, count: number): string
       `Your fit brain is customized. ${roles} ` +
       `${count === 1 ? "has a score" : "have scores"} that may not reflect it. ` +
       `Rescore ${them} for about $${dollars}?`
+    );
+  }
+  if (why === "enrichment") {
+    // Not "Saved." — nothing was saved. What happened is that the postings
+    // themselves were read, so the scores now predate their own inputs. This
+    // one can be unhedged where "comp-scoring" and "fit-brain" cannot: the
+    // enrichedAt stamps say exactly which rows gained inputs since the last
+    // pass.
+    return (
+      `The postings behind ${roles} have been read since ` +
+      `${count === 1 ? "it was" : "they were"} scored. ` +
+      `Rescore ${them} against what they actually say, for about $${dollars}?`
     );
   }
   if (why === "onboarding") {

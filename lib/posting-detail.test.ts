@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { postingDetailFrom, EMPTY_POSTING_DETAIL } from "./posting-detail";
+import { EMPTY_POSTING_DETAIL, latestEnrichedAt, postingDetailFrom } from "./posting-detail";
 
 // The repair-don't-reject contract resolveProfile and resolveStatuses already
 // establish, applied to the extraction's new fields. Nothing normalizes a
@@ -52,5 +52,39 @@ describe("postingDetailFrom repairs whatever the model returned", () => {
 
     expect(EMPTY_POSTING_DETAIL.requirements).toEqual([]);
     expect(postingDetailFrom({}).requirements).toEqual([]);
+  });
+});
+
+// Half of the enrichment rescore offer's gate (the other half is the
+// `enrich_rescored_at` stamp). Reading it off the rows the page already has
+// avoids a second query and, more importantly, keeps the comparison the offer
+// makes out of SQL, where no test in this repo could execute it.
+describe("latestEnrichedAt finds the newest backfill write", () => {
+  const at = (enrichedAt?: string) => ({
+    posting: enrichedAt ? { requirements: [], niceToHaves: [], enrichedAt } : null,
+  });
+
+  test("the newest stamp wins, whatever order the rows arrive in", () => {
+    expect(
+      latestEnrichedAt([
+        at("2026-09-01T00:00:00.000Z"),
+        at("2026-09-07T00:00:00.000Z"),
+        at("2026-09-03T00:00:00.000Z"),
+      ])
+    ).toBe("2026-09-07T00:00:00.000Z");
+  });
+
+  test("rows ingest wrote carry no stamp and are not evidence", () => {
+    expect(latestEnrichedAt([{ posting: { requirements: [], niceToHaves: [] } }])).toBeNull();
+  });
+
+  test("a table with nothing enriched returns null", () => {
+    expect(latestEnrichedAt([at(), at()])).toBeNull();
+  });
+
+  test("an unparseable stamp is ignored rather than winning by string order", () => {
+    expect(latestEnrichedAt([at("2026-09-01T00:00:00.000Z"), at("whenever")])).toBe(
+      "2026-09-01T00:00:00.000Z"
+    );
   });
 });

@@ -6,6 +6,7 @@ import {
   countCrawlJobsMatchingTitles,
   getSettings,
   markCompScoringRescored,
+  markEnrichRescored,
   rescoreAll,
   resetSetting,
   saveCeiling,
@@ -599,7 +600,15 @@ export default function Settings() {
         // The pass goes with it: the action re-applies passDrained itself, so
         // a future edit that moves this call out of the branch refuses rather
         // than stamping a partial pass.
-        const stamp = await markCompScoringRescored(pass);
+        // BOTH stamps, for the reason the comment above gives about the
+        // compensation one: a single drained pass re-scores every scored row
+        // through the same scoreFit, so it satisfies the enrichment offer just
+        // as fully. Stamping only the trigger that raised the prompt would bill
+        // a second identical pass for nothing.
+        const [stamp] = await Promise.all([
+          markCompScoringRescored(pass),
+          markEnrichRescored(pass),
+        ]);
         // Presence, not truthiness — this repo's signature defect. markCompScoringRescored
         // propagates a raw pg message, which is "" when the database is unreachable, and
         // `if (stamp.error)` would read that as "no problem" and drop this whole banner.
@@ -676,7 +685,7 @@ export default function Settings() {
         floorEditedThisSession: compFloorTouchedHere,
         dismissed: rescoreDismissed,
       })
-    : { fitBrain: null, compensation: null };
+    : { fitBrain: null, compensation: null, enrichment: null };
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-ink/40">Loading…</div>;
@@ -1033,6 +1042,19 @@ export default function Settings() {
           resetLabel="Turn off"
         />
 
+        {view && offers.enrichment && (
+          /* Rendered here rather than in a section of its own because there is
+             no enrichment SETTING to sit under — the backfill runs on /roles.
+             Its own reason and wording still come from rescoreOffers, so this
+             call site states nothing about why it is on screen. */
+          <RescorePrompt
+            count={view.scoredJobCount}
+            reason={offers.enrichment}
+            busy={rescoring}
+            onRescore={() => void handleRescore("compFloor")}
+            onDismiss={() => setRescoreDismissed(true)}
+          />
+        )}
         {view && offers.compensation && (
           <RescorePrompt
             count={view.scoredJobCount}
