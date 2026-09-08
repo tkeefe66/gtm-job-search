@@ -27,6 +27,16 @@
    label on one page and its rows on the next. Roles may span pages; sections may not. */
 .rsm-section{break-inside:avoid;display:grid;grid-template-columns:var(--rail) minmax(0,1fr);column-gap:var(--space-6);padding-top:var(--space-5);border-top:var(--border-hair) solid var(--border-rule);margin-bottom:var(--gap-section)}
 .rsm-section>*:not(.rsm-section-title){grid-column:2}
+/* DIVERGENCE from the vendored source, 2026-09-08. The rule above is right for a section that
+   FITS on a page and wrong for the one that cannot. `break-inside:avoid` on a box taller than a
+   page does not keep it whole — the engine pushes it to the next page and fragments it there
+   anyway — so the experience section, at twelve roles, began on page 2 and left ~700px of white
+   under the summary. Measured before and after through headless Chrome: 4 pages to 3, page 1
+   full. The exemption is scoped to the section that HOLDS role entries, because that is the only
+   one whose height is unbounded; Advisory and Education stay unsplittable, which is what the
+   source's rail-label argument is actually protecting. The rail label does not repeat on the
+   continuation page, which is correct — it labels the section, not the page. */
+.rsm-section:has(.rsm-role){break-inside:auto}
 .rsm-section-title{grid-column:1;grid-row:1/span 99;align-self:start;font:var(--type-section);font-variant-caps:all-small-caps;letter-spacing:var(--tracking-label);color:var(--accent-600);margin:0;padding-top:1px}
 
 /* Role entries */
