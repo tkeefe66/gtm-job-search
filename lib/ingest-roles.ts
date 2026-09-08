@@ -8,6 +8,7 @@ import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import type { BoardCache } from "@/lib/resolve-job-link";
 import { postingDetailFrom } from "@/lib/posting-detail";
+import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -41,6 +42,19 @@ export interface IngestOptions {
   // Promise.all below would be one database round trip per scored role.
   fitInputs: FitInputs;
 }
+
+/**
+ * How many of one ingest's new roles get their posting READ.
+ *
+ * Not a ration on quality — a bound on one REQUEST. Railway closes a request
+ * that transfers no data after 300s, the crawler gets exactly one request per
+ * company, and a measured crawl already costs up to 91s before any of this. A
+ * company posting thirty new roles must not turn one crawl into thirty fetches
+ * and thirty model calls; the rest are stored unread, stay in the backfill's
+ * queue (`thinJobs` keys on the enrichedAt stamp, not on the column), and the
+ * Enrich button on /roles covers them at the user's pace.
+ */
+export const MAX_INGEST_READS = 6;
 
 export interface IngestResult {
   added: Role[];
@@ -145,6 +159,37 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
     .filter((part) => part !== "")
     .join(". ");
 
+  // Read BEFORE the insert, and therefore before the score.
+  //
+  // This is the whole ordering argument: fit_score is computed below, so a role
+  // scored from the extraction's one-line summary — one search prompt covering
+  // ten roles — carries a number computed without the posting's own words, and
+  // fixing it later costs three operations (score, read, rescore) where one
+  // ordering gets it right once.
+  //
+  // Bounded and only for roles worth reading: a role whose URL already 404s has
+  // nothing to apply for, and one with no URL has nothing to fetch. Serial
+  // within the bound, because these roles are all at ONE company and usually on
+  // one host — the same politeness the robots gate exists for.
+  const reads = new Map<number, PostingRead>();
+  if (!dryRun) {
+    let budget = MAX_INGEST_READS;
+    for (let i = 0; i < fresh.length && budget > 0; i++) {
+      const deadUrl = urlStatuses[i] === "dead";
+      if (deadUrl || links[i].unlisted || !links[i].url) continue;
+      budget--;
+      reads.set(
+        i,
+        await readPosting({
+          url: links[i].url,
+          company,
+          roleTitle: fresh[i].role_title,
+          label: `ingestRoles(${source})`,
+        })
+      );
+    }
+  }
+
   await Promise.all(
     fresh.map(async (role, i) => {
       // Two independent ways to already be closed: the link 404s, or the
@@ -161,7 +206,12 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       // The column's only producer. Written once and read back by every
       // rescore (lib/rescore-scope.ts), so the same value has to be what
       // scoreFit is given below.
-      const department = (role.department ?? "").trim();
+      // The posting's own words win over the extraction's, because they ARE
+      // the posting; the extraction is one search prompt covering ten roles.
+      const read = reads.get(i);
+      const wasRead = read?.kind === "read" ? read : null;
+      const department = (wasRead?.department || role.department || "").trim();
+      const summary = wasRead?.summary || role.description_summary || "";
       const isDead = deadUrl || links[i].unlisted;
 
       const jobRes = await addJob({
@@ -190,13 +240,13 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         // given below, and a rescore reads them back off the row
         // (lib/rescore-scope.ts). Omitting them made every rescore run on ""
         // where the first score saw the posting's own words.
-        key_skills: role.description_summary || null,
+        key_skills: summary || null,
         company_description: companyDescription,
         department: department || null,
-        // A real value even when the model said nothing: `posting is null` is
-        // what the backfill reads as "thin", so storing undefined here would
-        // put the row back in the enrich queue on every run.
-        posting: postingDetailFrom(role),
+        // Stamped only when the posting itself was read. Unstamped, the row
+        // stays in the backfill's queue (see thinJobs) — which is correct: what
+        // it carries then is the extraction's guess, not the posting.
+        posting: wasRead ? readDetail(wasRead) : postingDetailFrom(role),
         ic_flag: role.ic_flag ?? false,
         source,
       });
@@ -222,7 +272,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           company,
           role_title: role.role_title,
           company_description: companyDescription,
-          key_skills: role.description_summary,
+          key_skills: summary,
           fit_summary: role.fit_signal,
           department,
           location: role.location,

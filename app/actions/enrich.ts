@@ -7,17 +7,12 @@ import {
   enrichGate,
   type EnrichReport,
 } from "@/lib/enrich-scope";
-import { buildEnrichPrompt, enrichSystem } from "@/lib/enrich-prompt";
-import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
-import { readPostingPage, type ExtractedPage } from "@/lib/page-extract";
 import { classifyJobLink } from "@/lib/job-link";
 import { withBudget } from "@/lib/metered";
-import { callStructured, parseJson } from "@/lib/model-call";
-import { postingDetailFrom } from "@/lib/posting-detail";
+import { readDetail, readPosting } from "@/lib/posting-read";
 import { relinkPatch } from "@/lib/relink";
 import { requireActor } from "@/lib/require-actor";
 import {
-  fetchPostingBody,
   newBoardCache,
   resolveEmployerLink,
   verifyPostingLink,
@@ -146,10 +141,6 @@ async function enrichOne(job: Job, boards: BoardCache, report: EnrichReport): Pr
 
   const gate = enrichGate(kind, verified);
   let target = url;
-  // Set only when the body came from a board API, which publishes the team it
-  // files the posting under. Used as a fallback below, never over the model's
-  // reading of the posting itself.
-  let boardDepartment = "";
 
   if (gate.kind === "blocked") {
     report.blocked.push({
@@ -189,88 +180,30 @@ async function enrichOne(job: Job, boards: BoardCache, report: EnrichReport): Pr
   // The crawler's own rule, and the reason fetchAllowed and fetchPage now live
   // in one module: a robots.txt that could not be READ is not permission, and
   // the gate runs BEFORE the fetch, never after.
-  const allowed = await fetchAllowed(target);
-  if (!allowed) {
-    console.log(`enrichRoles: robots.txt disallows (or could not be read for) ${target}`);
+  // The read itself is shared with ingest — see lib/posting-read.ts. Two
+  // copies would drift on exactly the parts that are invisible when wrong: the
+  // robots gate, the page-then-board order, and the refusal to escalate.
+  const read = await readPosting({
+    url: target,
+    company: job.company,
+    roleTitle: job.role_title,
+    label: "enrichRoles",
+  });
+  if (read.kind === "unreadable") {
+    report.unreadable++;
+    return;
   }
-
-  // readPostingPage, NOT the crawler's classifyFetchOutcome: that one also
-  // requires three job LINKS, which a single posting page has no reason to
-  // carry, so it calls every real posting a shell.
-  const html = allowed ? await fetchPage(target) : null;
-  const fromPage = html === null ? null : readPostingPage(html);
-
-  // The page FIRST, the board API only as the fallback: where a posting
-  // renders server-side its own page is the fuller document, and the board's
-  // body is what the vendor chose to publish.
-  //
-  // This is the only way past a client-rendered posting that costs no Claude
-  // tokens and issues no search — measured, not assumed: a pass over 60 rows
-  // skipped 21 as JS shells, and Greenhouse and Ashby were most of what was
-  // left. Escalating to the web_search tier stays forbidden; see fetchPostingBody.
-  let page: ExtractedPage;
-  if (fromPage?.kind === "content") {
-    page = fromPage.page;
-  } else {
-    // Reached when robots disallowed the PAGE too, and that is deliberate
-    // rather than an oversight: a board API is a different host publishing the
-    // same posting deliberately, and link repair already queries it for every
-    // row. What robots governs is crawling the employer's site, which this
-    // branch does not do. If that ever stops being true, this is the line to
-    // change — not fetchAllowed, which the crawler shares.
-    const body = await fetchPostingBody(target);
-    if (body === null) {
-      console.log(
-        `enrichRoles: ${job.company} / ${job.role_title} could not be read ` +
-          `(${fromPage === null ? "no page" : "JS shell"}, no board body), skipped`
-      );
-      report.unreadable++;
-      return;
-    }
-    page = { text: body.text, links: [] };
-    // The vendor's own filing, used only where the posting text yields none.
-    boardDepartment = body.department;
-  }
-
-  let answer: {
-    requirements?: unknown;
-    nice_to_haves?: unknown;
-    department?: unknown;
-    description_summary?: unknown;
-  };
-  try {
-    const raw = await callStructured({
-      system: enrichSystem(),
-      prompt: buildEnrichPrompt({
-        company: job.company,
-        roleTitle: job.role_title,
-        page,
-      }),
-      maxTokens: 2000,
-    });
-    answer = parseJson(raw);
-  } catch (err) {
-    // Not describeWriteFailure: this failure is the model or the parse, and
-    // UNDESCRIBED_DB_ERROR names the database, which would be a false sentence.
-    console.error(
-      `enrichRoles: ${job.company} / ${job.role_title} — ${err instanceof Error ? err.message : String(err)}`
-    );
+  if (read.kind === "failed") {
     report.failed++;
     return;
   }
 
-  const detail = postingDetailFrom(answer);
-  const department =
-    (typeof answer.department === "string" ? answer.department.trim() : "") || boardDepartment;
-  const summary =
-    typeof answer.description_summary === "string" ? answer.description_summary.trim() : "";
-  const gotSomething =
-    detail.requirements.length > 0 || detail.niceToHaves.length > 0 || department !== "" || summary !== "";
-
+  const { department, summary } = read;
   const patch: Partial<Job> = {
     // Stamped so the rescore offer can tell which rows gained inputs since the
-    // last pass. Written even when the answer was empty — see EnrichReport.
-    posting: { ...detail, enrichedAt: new Date().toISOString() },
+    // last pass, AND so the row leaves the thin queue. Written even when the
+    // answer was empty — see EnrichReport.
+    posting: readDetail(read),
   };
   // Only ever FILLS. An empty answer must not blank a column a human, or an
   // earlier ingest, already filled.
@@ -286,8 +219,8 @@ async function enrichOne(job: Job, boards: BoardCache, report: EnrichReport): Pr
     report.failed++;
     return;
   }
-  if (gotSomething) report.enriched++;
-  else report.empty++;
+  if (read.empty) report.empty++;
+  else report.enriched++;
 }
 
 /** Writes a repaired link. False means the row must not be enriched. */

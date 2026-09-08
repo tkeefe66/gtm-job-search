@@ -114,17 +114,22 @@ audit and a dedicated sweep still missed four.
 
 **Compensation**: `salary_range` is stored verbatim as the posting wrote it and parsed at READ time by `parseSalaryRange` in `lib/salary.ts` — base preferred over OTE, so `$280K–$325K (base); $305K–$365K OTE` is a $280–325K role. The optional floor lives in `app_settings` under `compFloor`. It filters `/roles` on DISPLAY only (`lib/salary-filter.ts`: two independent toggles, both off by default; `ote` is its own bucket and is never hidden as "below") — no job is ever dropped or hidden at ingest because of pay. `scoreFit` receives both the posting's stated range and the floor. **The boundary is strict (`>`, not `>=`): a band whose top only REACHES the floor is below it** — `$150K–$200K` fails a $200K floor, `$177K–$221K` clears it. That rule lives in TWO places and they must not drift: `salaryBucketFor` (the display bucket) and `compScoringClause` + `aiGtmCompCarveOut` in `lib/fit-prompt.ts` (the scoring rule). Changing one alone produces a role the table hides while its fit score still reads 4 — and the carve-out needs it too, because it outranks the compensation clause. Because that changed `scoreFit`'s inputs on deploy rather than on an edit, `/settings` offers a one-time rescore gated on the `comp_scoring_rescored_at` stamp (`compRescoreOffer` in `lib/rescore-progress.ts`); the pass itself is `runRescorePass`, never a hand-rolled loop.
 
-**Posting detail lives in a `posting jsonb` column, and `posting is null` is load-bearing.**
+**Posting detail lives in a `posting jsonb` column, and the `enrichedAt` stamp inside it — NOT the column's presence — is what "already read" means.**
 Ingest used to produce the posting's substance, hand it to `scoreFit`, and throw it away:
 the row stored `""` where the model had seen real text, so every rescore
 (`scoringArgsFor`, `lib/rescore-scope.ts`) was strictly impoverished — and the rescore's
 score is the one that persists. `ingestRoles` now writes `key_skills`,
 `company_description`, `department` and `posting` (requirements + nice-to-haves,
 `lib/posting-detail.ts`, which REPAIRS whatever the model returned rather than rejecting
-it — nothing normalizes a role array, every path casts `parsed as Role[]`). The column is
-NULLABLE WITH NO DEFAULT on purpose: `posting is null` is literally the backfill's "thin"
-predicate, so a `default '{}'` would make every pre-existing row look enriched and the
-backfill would skip the whole table. `db/migrations/017_posting_detail.sql`, applied to
+it — nothing normalizes a role array, every path casts `parsed as Role[]`). The column is nullable with no
+default, so a row predating it is distinguishable from one nothing was found for. **The
+backfill's "thin" predicate is `posting.enrichedAt` missing, not `posting is null`** —
+that first version was a defect: ingest always writes `posting` (deliberately, so a row
+the model had nothing for is not re-billed forever), which made every NEWLY INGESTED role
+permanently ineligible for enrichment however thin its content, and the row looked
+enriched while carrying a one-search-covers-ten-roles summary. Only the posting-reading
+path writes `enrichedAt`, so it is the honest question, and an unparseable stamp counts as
+unread. `db/migrations/017_posting_detail.sql`, applied to
 production 2026-09-07. Read it as `job.posting ?? null` everywhere — `getJobs` and
 `repairJobLinks` both `select *` into `Job`, and the ES5 build does not catch
 `job.posting.requirements` against a null. The structural guard is
@@ -133,6 +138,18 @@ production 2026-09-07. Read it as `job.posting ?? null` everywhere — `getJobs`
 ingest forgets is a failing test rather than a silent drift. Only `arr`, `exit_signal` and
 `backer` are exempt — hand-entered from the discovered-startup context, with no producer
 anywhere.
+
+**Ingest reads the posting BEFORE it scores, and the backfill is for history and retries.**
+`ingestRoles` calls `readPosting` (`lib/posting-read.ts`) for up to `MAX_INGEST_READS` (6)
+of a run's new roles, skipping any that are already dead or link-less, and feeds what it
+finds to `scoreFit` — because `fit_score` is computed at ingest, so reading afterwards
+costs three operations (score, read, rescore) where one ordering gets it right once. The
+bound is a bound on one REQUEST, not a ration on quality: the crawler gets one request per
+company against Railway's 300s edge timeout, and a measured crawl already costs up to
+91s. Roles past the bound are stored unread and stay in the backfill's queue. `readPosting`
+is shared by both callers deliberately — two copies would drift on the parts that are
+invisible when wrong: the robots gate, the page-then-board order, and the refusal to
+escalate to search.
 
 **The enrich backfill (`app/actions/enrich.ts`, the "Enrich roles" button on `/roles`)
 reads ONE posting per row, and every bound on it is deliberate.** One plain HTTP fetch
@@ -143,8 +160,8 @@ shell is skipped and reported instead. Bounded per BATCH, not per pass, because
 scope pass a single check at row 0 and then bill regardless, and sixty rows of
 (fetch + call) would not answer inside Railway's 300s no-data edge timeout anyway, losing
 the report of what was spent. Paging is by CURSOR (`enrichBatch`), NOT the rescore's
-`passStartedAt`: an enriched row stops matching `posting is null` on its own but a BLOCKED
-one never does, so re-reading the thin set would hand every later batch the same blocked
+`passStartedAt`: a row that was READ stops matching the thin predicate on its own but a
+BLOCKED one never does, so re-reading the thin set would hand every later batch the same blocked
 rows and never drain. The guardrail (`enrichGate`, `lib/enrich-scope.ts`) is POSITIVE
 EVIDENCE OF WRONGNESS, and its aggregator branch comes FIRST and ignores the verification:
 `verifyPostingLink` answers `notApplicable` for a reseller link as well as for a company
@@ -161,7 +178,15 @@ classifier delegates to `isJsShell`, whose second clause requires three job LINK
 right question for a careers LISTING and the wrong one for a posting, which links to one
 job or none. Using it here classified every real posting as a shell and skipped the entire
 table while reporting a clean pass. `readPostingPage` (`lib/page-extract.ts`) keeps only
-the length test, which is the half that actually detects an unrendered SPA. Related:
+the length test, which is the half that actually detects an unrendered SPA. **A client-rendered posting is read through the employer's board API instead**
+(`fetchPostingBody`, `lib/resolve-job-link.ts`): Greenhouse and Workable through a
+per-posting call, Ashby and Lever out of the board payload they already publish every
+description in. Breezy is excluded — its board list carries no body and its per-posting
+JSON only redirects — and every vendor here was control-tested the way `BOARD_VENDORS`
+demands: a nonsense slug AND a nonsense posting id on a real board must both fail. This is
+not the "no ATS vendor APIs" rule being bent; that rule is about how roles are DISCOVERED,
+and this reads one already found. An unrecognised payload parses to null, never `""`,
+because `""` would be stored as "this posting says nothing". Related:
 `fetchPage` and `fetchAllowed` now live together in `lib/fetch-page.ts` and neither is
 exported without the other, because two copies of the robots rule would be a policy
 regression rather than a bug — silent, and visible only to the site being fetched. Gate

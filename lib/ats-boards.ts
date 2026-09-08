@@ -240,9 +240,19 @@ export function postingBodyUrl(
   slug: string,
   postingId: string
 ): string | null {
-  return vendor === "greenhouse"
-    ? `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs/${postingId}`
-    : null;
+  switch (vendor) {
+    case "greenhouse":
+      return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs/${postingId}`;
+    case "workable":
+      // The widget board list carries no description at all — title, shortcode,
+      // department and links only — so the body needs this second call, keyed
+      // by the shortcode parseBoardLink reads out of the stored URL.
+      return `https://apply.workable.com/api/v1/accounts/${slug}/jobs/${postingId}`;
+    default:
+      // Ashby and Lever publish every description in the board payload the link
+      // check already fetches; Breezy publishes none and is not guessed at.
+      return null;
+  }
 }
 
 /** Strips tags and collapses whitespace. The vendors publish HTML, not text. */
@@ -297,6 +307,43 @@ export function parsePostingBody(
     const departments = Array.isArray(job.departments) ? job.departments : [];
     const first = departments[0] as { name?: unknown } | undefined;
     return { text, department: typeof first?.name === "string" ? first.name : "" };
+  }
+
+  if (vendor === "lever") {
+    // Lever's board payload is a bare ARRAY, and its requirement bullets live
+    // in `lists` rather than in the description — a body built from
+    // descriptionPlain alone hands the model the blurb and none of what the
+    // posting actually asks for.
+    if (!Array.isArray(json)) return null;
+    const job = json.find((j) => (j as { id?: unknown })?.id === postingId) as
+      | { descriptionPlain?: unknown; lists?: unknown; categories?: unknown }
+      | undefined;
+    if (!job) return null;
+    const parts: string[] = [];
+    if (typeof job.descriptionPlain === "string") parts.push(job.descriptionPlain);
+    const lists = Array.isArray(job.lists) ? job.lists : [];
+    for (const list of lists) {
+      const entry = list as { text?: unknown; content?: unknown };
+      if (typeof entry.text === "string") parts.push(entry.text);
+      if (typeof entry.content === "string") parts.push(htmlToText(entry.content));
+    }
+    const text = parts.join(" ").replace(/\s+/g, " ").trim();
+    if (text === "") return null;
+    const team = (job.categories as { department?: unknown } | undefined)?.department;
+    return { text, department: typeof team === "string" ? team : "" };
+  }
+
+  if (vendor === "workable") {
+    // Three fields, and `requirements` is the one that matters most — it is
+    // where Workable puts what the posting asks for, and a body built from
+    // `description` alone would drop exactly that.
+    const job = json as { description?: unknown; requirements?: unknown; benefits?: unknown; department?: unknown };
+    const parts = [job.description, job.requirements, job.benefits]
+      .filter((v): v is string => typeof v === "string")
+      .map(htmlToText);
+    const text = parts.join(" ").trim();
+    if (text === "") return null;
+    return { text, department: typeof job.department === "string" ? job.department : "" };
   }
 
   if (vendor === "ashby") {

@@ -88,8 +88,10 @@ describe("which rows a backfill is for", () => {
     expect(thinJobs([job({})], DEFAULT_STATUSES).map((j) => j.id)).toEqual(["j1"]);
   });
 
-  test("an already-enriched row is not", () => {
-    const enriched = job({ posting: { requirements: [], niceToHaves: [] } });
+  test("a row whose posting has been READ is not — see the stamp rule below", () => {
+    const enriched = job({
+      posting: { requirements: [], niceToHaves: [], enrichedAt: "2026-09-07T10:00:00.000Z" },
+    });
 
     expect(thinJobs([enriched], DEFAULT_STATUSES)).toEqual([]);
   });
@@ -173,10 +175,56 @@ describe("paging past the rows a pass has already decided", () => {
   });
 
   test("rows that are not thin are never counted as remaining work", () => {
-    const done = job({ id: "z", posting: { requirements: [], niceToHaves: [] } });
+    const done = job({
+      id: "z",
+      posting: { requirements: [], niceToHaves: [], enrichedAt: "2026-09-07T10:00:00.000Z" },
+    });
 
     const res = enrichBatch([thin("a"), done], DEFAULT_STATUSES, { limit: 1 });
 
     expect(res.remaining).toBe(0);
+  });
+});
+
+// The predicate had a silent hole, found by asking what happens to roles found
+// AFTER this shipped. Ingest always writes `posting` — deliberately, so a row
+// the model had nothing for is not re-billed forever — so `posting is null`
+// made every newly ingested role permanently ineligible for enrichment,
+// however thin its content. The row LOOKED enriched.
+//
+// The stamp is the honest question: has anyone read the posting ITSELF? Only
+// the enrich path writes enrichedAt, and ingest's extraction-derived detail is
+// second-hand — one search prompt covering ten roles, not the posting page.
+describe("thin means nobody has read the posting itself", () => {
+  const withPosting = (posting: Record<string, unknown> | null) =>
+    job({ posting: posting as never });
+
+  test("a row ingest wrote is still thin — its detail came from a search, not the page", () => {
+    const ingested = withPosting({ requirements: ["SQL"], niceToHaves: [] });
+
+    expect(thinJobs([ingested], DEFAULT_STATUSES).map((j) => j.id)).toEqual(["j1"]);
+  });
+
+  test("a row the backfill read is not thin", () => {
+    const read = withPosting({
+      requirements: [],
+      niceToHaves: [],
+      enrichedAt: "2026-09-07T10:00:00.000Z",
+    });
+
+    expect(thinJobs([read], DEFAULT_STATUSES)).toEqual([]);
+  });
+
+  test("a row predating the column is thin, as it always was", () => {
+    expect(thinJobs([withPosting(null)], DEFAULT_STATUSES).map((j) => j.id)).toEqual(["j1"]);
+  });
+
+  // Otherwise a garbage stamp permanently excludes the row from the one pass
+  // that could fix it — the same direction every other stamp check in this
+  // repo chooses.
+  test("an unparseable stamp does not count as having been read", () => {
+    const bogus = withPosting({ requirements: [], niceToHaves: [], enrichedAt: "whenever" });
+
+    expect(thinJobs([bogus], DEFAULT_STATUSES).map((j) => j.id)).toEqual(["j1"]);
   });
 });

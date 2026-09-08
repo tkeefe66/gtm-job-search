@@ -211,7 +211,7 @@ describe("reading one posting's body off the board API", () => {
 
   test("a vendor whose body shape is unverified is not guessed at", () => {
     expect(postingBodyUrl("breezy", "acme", "1")).toBeNull();
-    expect(postingBodyUrl("workable", "acme", "1")).toBeNull();
+    expect(parsePostingBody("breezy", "1", { description: "anything" })).toBeNull();
   });
 
   test("Greenhouse's content is HTML and comes back as text", () => {
@@ -250,5 +250,58 @@ describe("reading one posting's body off the board API", () => {
 
   test("a posting whose body is blank is null too — there is nothing to store", () => {
     expect(parsePostingBody("greenhouse", "1", { content: "   " })).toBeNull();
+  });
+});
+
+// Probed 2026-09-07, each against the standard BOARD_VENDORS demands: a real
+// board, a nonsense slug, and (where the vendor has a per-posting endpoint) a
+// nonsense posting id on a real board. Lever and Workable answered honestly;
+// Breezy did not and is excluded.
+describe("the vendors whose bodies were probed, and the one that failed", () => {
+  test("Lever's board payload carries every posting's own text", () => {
+    const board = [
+      { id: "other", descriptionPlain: "Not this one" },
+      {
+        id: "wanted",
+        descriptionPlain: "You will own the revenue stack.",
+        lists: [{ text: "Requirements", content: "<li>5 years of SQL</li>" }],
+        department: "Revenue Operations",
+      },
+    ];
+
+    const body = parsePostingBody("lever", "wanted", board);
+
+    expect(body?.text).toContain("You will own the revenue stack.");
+    // The `lists` are where Lever puts the requirement bullets — dropping them
+    // would hand the model the blurb and none of what the posting asks for.
+    expect(body?.text).toContain("Requirements");
+    expect(body?.text).toContain("5 years of SQL");
+  });
+
+  test("Workable needs a per-posting call, keyed by the shortcode in the link", () => {
+    expect(postingBodyUrl("workable", "asseti", "5DC414FD1C")).toBe(
+      "https://apply.workable.com/api/v1/accounts/asseti/jobs/5DC414FD1C"
+    );
+  });
+
+  test("Workable keeps requirements in their own field, and it must not be dropped", () => {
+    const body = parsePostingBody("workable", "5DC414FD1C", {
+      description: "<p>About the company</p>",
+      requirements: "<p>What you will bring</p><ul><li>5 years of SQL</li></ul>",
+      department: "Sales",
+    });
+
+    expect(body?.text).toContain("About the company");
+    expect(body?.text).toContain("5 years of SQL");
+    expect(body?.department).toBe("Sales");
+  });
+
+  // Breezy's board list carries no description at all, and its per-posting
+  // JSON answers 302 rather than a body — a redirect is not an honest answer.
+  // Same treatment as SmartRecruiters and Workday: excluded rather than
+  // guessed at.
+  test("Breezy is not read, because nothing about it was verifiable", () => {
+    expect(postingBodyUrl("breezy", "acme", "1")).toBeNull();
+    expect(parsePostingBody("breezy", "1", { description: "anything" })).toBeNull();
   });
 });

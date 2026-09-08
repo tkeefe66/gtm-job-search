@@ -22,6 +22,16 @@ const h = vi.hoisted(() => ({
   // this is a different lookup from the guessed-slug one above and needs its
   // own stub. Default is the inert outcome, so every pre-existing test in this
   // file keeps its meaning.
+  read: { kind: "unreadable" } as
+    | { kind: "unreadable" }
+    | { kind: "failed"; message: string }
+    | {
+        kind: "read";
+        detail: { requirements: string[]; niceToHaves: string[] };
+        department: string;
+        summary: string;
+        empty: boolean;
+      },
   verified: { kind: "notApplicable" } as
     | { kind: "notApplicable" }
     | { kind: "listed" }
@@ -46,6 +56,13 @@ vi.mock("@/lib/tenant", () => ({
   resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
 }));
 vi.mock("@/lib/verify-url", () => ({ checkJobUrl: vi.fn(async () => h.urlStatus) }));
+vi.mock("@/lib/posting-read", () => ({
+  readPosting: vi.fn(async () => h.read),
+  readDetail: (read: { detail: unknown }) => ({
+    ...(read.detail as object),
+    enrichedAt: "2026-09-08T00:00:00.000Z",
+  }),
+}));
 // Not mocked before: ROLE's example.com link classifies as "other", so
 // upgradeLink returned early and never reached this module. The unlisted case
 // below uses an aggregator link, which does reach it.
@@ -55,7 +72,8 @@ vi.mock("@/lib/resolve-job-link", () => ({
   newBoardCache: () => new Map(),
 }));
 
-import { ingestRoles } from "./ingest-roles";
+import { MAX_INGEST_READS, ingestRoles } from "./ingest-roles";
+import { readPosting } from "@/lib/posting-read";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { addJob } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
@@ -86,6 +104,7 @@ beforeEach(() => {
   h.urlStatus = "live";
   h.resolved = null;
   h.verified = { kind: "notApplicable" };
+  h.read = { kind: "unreadable" };
   vi.clearAllMocks();
 });
 
@@ -479,5 +498,96 @@ describe("ingest stores the posting's own words", () => {
     expect(insertedRow().posting).toEqual({ requirements: [], niceToHaves: [] });
     expect(insertedRow().department).toBeNull();
     expect(vi.mocked(scoreFit).mock.calls[0][0].department).toBe("");
+  });
+});
+
+// The ordering question, asked plainly: why should a role reach /roles scored
+// from a search summary when the posting itself is one fetch away? The fit
+// score is computed HERE, so reading after the fact means paying three times —
+// score, read, rescore — for what one ordering gets right once.
+describe("a role's posting is read before it is scored", () => {
+  const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
+
+  beforeEach(() => {
+    h.addJobResult = { job: { id: "job-1" } };
+    h.read = {
+      kind: "read",
+      detail: { requirements: ["5 years of SQL"], niceToHaves: ["Python"] },
+      department: "Revenue Operations",
+      summary: "Runs the revenue stack.",
+      empty: false,
+    };
+  });
+
+  test("what the posting says is what scoreFit is given", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    const scored = vi.mocked(scoreFit).mock.calls[0][0];
+    expect(scored.key_skills).toBe("Runs the revenue stack.");
+    expect(scored.department).toBe("Revenue Operations");
+  });
+
+  test("the stored row carries the read, stamped, so no backfill repeats it", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(insertedRow().posting).toMatchObject({
+      requirements: ["5 years of SQL"],
+      niceToHaves: ["Python"],
+    });
+    expect((insertedRow().posting as { enrichedAt?: string }).enrichedAt).toBeTruthy();
+  });
+
+  // Ordering, not just occurrence: a read that lands after the score is the
+  // defect this change exists to remove.
+  test("the read happens BEFORE the score, not alongside it", async () => {
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(readPosting).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(scoreFit).mock.invocationCallOrder[0]
+    );
+  });
+
+  // Unreadable is the COMMON case (a JS shell on a vendor with no honest board
+  // API), and it must not block ingest: the role still lands, still scores on
+  // the extraction's own summary, and stays in the backfill's queue because
+  // nothing stamped it.
+  test("an unreadable posting still ingests, unstamped, on the extraction's summary", async () => {
+    h.read = { kind: "unreadable" };
+
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(insertedRow().key_skills).toBe(ROLE.description_summary);
+    expect((insertedRow().posting as { enrichedAt?: string }).enrichedAt).toBeUndefined();
+    expect(vi.mocked(scoreFit)).toHaveBeenCalledTimes(1);
+  });
+
+  test("a role that was already dead is never read — there is nothing to apply for", async () => {
+    h.urlStatus = "dead";
+
+    await ingestRoles({ ...OPTS, roles: [LIVE] });
+
+    expect(vi.mocked(readPosting)).not.toHaveBeenCalled();
+  });
+
+  test("a role with no link at all is never read", async () => {
+    await ingestRoles({ ...OPTS, roles: [{ ...ROLE, job_url: "" }] });
+
+    expect(vi.mocked(readPosting)).not.toHaveBeenCalled();
+  });
+
+  // Railway closes a request that transfers no data for 300s, and the crawler
+  // gets ONE request per company. A company posting thirty new roles must not
+  // turn one crawl into thirty fetches and thirty model calls; the rest stay
+  // unread and the Enrich button covers them.
+  test("only the first few roles of a big batch are read", async () => {
+    const many = Array.from({ length: MAX_INGEST_READS + 4 }, (_, i) => ({
+      ...LIVE,
+      role_title: `RevOps Manager ${i}`,
+    }));
+
+    await ingestRoles({ ...OPTS, roles: many });
+
+    expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(MAX_INGEST_READS);
+    expect(vi.mocked(scoreFit)).toHaveBeenCalledTimes(many.length);
   });
 });

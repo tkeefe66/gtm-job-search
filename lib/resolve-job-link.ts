@@ -300,13 +300,15 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
   const link = parseBoardLink(url);
   if (!link || !link.slug || !link.id) return null;
 
-  // Greenhouse omits `content` from its list endpoint, so a posting needs its
-  // own call; Ashby publishes `descriptionPlain` for every posting in the board
-  // payload, so the board URL IS the body source there. Any other vendor has no
-  // verified shape and is not guessed at.
+  // Greenhouse and Workable omit the body from their list endpoints, so a
+  // posting needs its own call there; Ashby and Lever publish every description
+  // in the board payload, so the board URL IS the body source for them. Breezy
+  // has no verified shape and is not guessed at.
   const endpoint =
     postingBodyUrl(link.vendor, link.slug, link.id) ??
-    (link.vendor === "ashby" ? boardApiUrl(link.vendor, link.slug) : null);
+    (link.vendor === "ashby" || link.vendor === "lever"
+      ? boardApiUrl(link.vendor, link.slug)
+      : null);
   if (endpoint === null) return null;
 
   const controller = new AbortController();

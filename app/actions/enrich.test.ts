@@ -57,6 +57,8 @@ vi.mock("@/lib/model-call", () => ({
   callStructured: vi.fn(async () => h.answer),
   parseJson: (raw: string) => JSON.parse(raw),
 }));
+// page-extract and posting-detail stay REAL: the reader's page-vs-shell
+// decision is the thing several of these tests are about.
 vi.mock("@/lib/resolve-job-link", () => ({
   newBoardCache: () => new Map(),
   verifyPostingLink: vi.fn(async () => h.verified),

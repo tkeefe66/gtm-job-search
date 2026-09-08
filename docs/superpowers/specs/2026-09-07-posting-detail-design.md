@@ -385,3 +385,32 @@ Two smaller decisions the spec left open, decided here:
 - **Extraction quality is still unverified against a real posting.** The first live run
   is the test; if quality is poor the fallback is to narrow the ask, never to escalate
   to search.
+
+## What the first live pass changed (2026-09-07, same day)
+
+The backfill ran over 60 eligible rows: 9 stored, 21 skipped as JS shells, 24 left alone
+by the guardrail, 5¢. Three things that reading only showed:
+
+- **`posting is null` was the wrong predicate, and the spec is the source of the error.**
+  Ingest always writes `posting`, so every role found AFTER this shipped was permanently
+  ineligible for the backfill however thin its content — and the row looked enriched. The
+  predicate is now `posting.enrichedAt` missing: has anyone read the posting ITSELF. The
+  consequence is intended: the queue never permanently empties while searches keep finding
+  roles, because every new role arrives unread.
+
+- **Reading belongs at INGEST, before the score.** `fit_score` is computed there, so a
+  role scored from the extraction's one-line summary carries a number computed without the
+  posting's own words, and repairing it later costs three operations where one ordering
+  costs one. `ingestRoles` now reads up to `MAX_INGEST_READS` (6) postings per run — a
+  bound on one Railway request, not on quality — and `lib/posting-read.ts` is shared by
+  ingest and the backfill so the robots gate, the page-then-board order and the
+  no-escalation rule cannot drift apart.
+
+- **The fetch tier cannot see client-rendered postings, which was most of the queue.**
+  Greenhouse (19 rows) and Ashby (8) publish the body through the same public board APIs
+  this app already reads for link health; Lever and Workable were probed the same way and
+  pass; Breezy fails and is excluded. Reading a body there costs no Claude tokens and
+  issues no search.
+
+Still open: `lib/cost-estimate.ts` has no vocabulary for per-row non-search calls, so
+neither the enrich banner nor a search run shows the cost of the reads it makes.
