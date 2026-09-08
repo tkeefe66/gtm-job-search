@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   resolved: null as { url: string; precision: string } | null,
   updateError: undefined as string | undefined,
   body: null as { text: string; department: string } | null,
+  pageByUrl: {} as Record<string, string | null>,
 }));
 
 vi.mock("@/lib/require-actor", () => ({
@@ -51,7 +52,9 @@ vi.mock("@/lib/metered", () => ({
 }));
 vi.mock("@/lib/fetch-page", () => ({
   fetchAllowed: vi.fn(async () => h.robotsAllows),
-  fetchPage: vi.fn(async () => h.page),
+  // URL-aware: the rescue path fetches a SECOND, different URL, and a mock that
+  // answers the same for both cannot tell a rescued read from the failed one.
+  fetchPage: vi.fn(async (url: string) => h.pageByUrl[url] ?? h.page),
 }));
 vi.mock("@/lib/model-call", () => ({
   callStructured: vi.fn(async () => h.answer),
@@ -107,6 +110,7 @@ beforeEach(() => {
   h.resolved = null;
   h.updateError = undefined;
   h.body = null;
+  h.pageByUrl = {};
   vi.clearAllMocks();
 });
 
@@ -354,3 +358,51 @@ describe("a client-rendered posting is read through the employer's board API", (
     expect(vi.mocked(callStructured)).not.toHaveBeenCalled();
   });
 })
+
+// The Databricks case, from production 2026-09-07: the row's stored link is a
+// careers LISTING page, while the real posting sits at
+// databricks.com/company/careers/exec-sales/leader-of-gtm-…-8486165002 and its
+// board API carries 6,682 characters of description. The row was unreadable not
+// because the JD is unreachable but because the link points at the wrong page.
+describe("an unreadable link is rescued from the employer's own board", () => {
+  const LISTING = "https://www.databricks.com/company/careers";
+
+  beforeEach(() => {
+    h.jobs = [row({ job_url: LISTING, company: "Databricks" })];
+    h.page = null; // the listing page reads as nothing
+  });
+
+  test("the employer's posting is found, stored, and read instead", async () => {
+    h.resolved = { url: "https://www.databricks.com/company/careers/x-8486165002", precision: "posting" };
+    h.pageByUrl = { "https://www.databricks.com/company/careers/x-8486165002": POSTING };
+
+    const report = await enrichRoles();
+
+    expect(patch()).toMatchObject({ job_url: "https://www.databricks.com/company/careers/x-8486165002" });
+    expect(report.relinked).toBe(1);
+    expect(report.enriched).toBe(1);
+  });
+
+  // The rescue GUESSES a board slug from the company name, so it may only act
+  // on an exact single-posting match — the same rule repairJobLinks follows
+  // before it will rewrite a link.
+  test("an ambiguous or absent board rescues nothing", async () => {
+    for (const precision of ["ambiguous", "empty", "absent"]) {
+      vi.clearAllMocks();
+      h.resolved = { url: "https://x/board", precision };
+
+      const report = await enrichRoles();
+
+      expect(report.unreadable).toBe(1);
+      expect(report.relinked).toBe(0);
+    }
+  });
+
+  test("a readable page is never rescued — the stored link is fine", async () => {
+    h.page = POSTING;
+
+    await enrichRoles();
+
+    expect(vi.mocked(resolveEmployerLink)).not.toHaveBeenCalled();
+  });
+});

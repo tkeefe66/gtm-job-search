@@ -9,7 +9,7 @@ import {
 } from "@/lib/enrich-scope";
 import { classifyJobLink } from "@/lib/job-link";
 import { withBudget } from "@/lib/metered";
-import { readDetail, readPosting } from "@/lib/posting-read";
+import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
 import { relinkPatch } from "@/lib/relink";
 import { requireActor } from "@/lib/require-actor";
 import {
@@ -183,12 +183,29 @@ async function enrichOne(job: Job, boards: BoardCache, report: EnrichReport): Pr
   // The read itself is shared with ingest — see lib/posting-read.ts. Two
   // copies would drift on exactly the parts that are invisible when wrong: the
   // robots gate, the page-then-board order, and the refusal to escalate.
-  const read = await readPosting({
+  let read = await readPosting({
     url: target,
     company: job.company,
     roleTitle: job.role_title,
     label: "enrichRoles",
   });
+  // A link that could not be read is not always a JD that cannot be reached:
+  // a row may simply point at the wrong page. Measured 2026-09-07 — a Databricks
+  // row linked to the careers LISTING while the posting itself sat on their
+  // board with 6,682 characters of description.
+  //
+  // The rescue GUESSES a slug from the company name, so it may act only on an
+  // exact single-posting match, the same rule repairJobLinks follows before it
+  // will rewrite a link. Anything less rescues nothing.
+  if (read.kind === "unreadable") {
+    const rescued = await rescueFromBoard(job, target, report);
+    if (rescued === null) {
+      report.unreadable++;
+      return;
+    }
+    read = rescued.read;
+    target = rescued.url;
+  }
   if (read.kind === "unreadable") {
     report.unreadable++;
     return;
@@ -243,4 +260,41 @@ async function writeRelink(
   }
   report.relinked++;
   return true;
+}
+
+/**
+ * Finds the employer's own posting for a row whose stored link cannot be read,
+ * stores the corrected link, and reads THAT.
+ *
+ * Returns null when nothing may be acted on — the caller then reports the row
+ * unreadable exactly as before. The write happens BEFORE the second read for
+ * the reason relinkPatch exists: enriching against a corrected URL that was
+ * never stored attaches one posting's words to a row pointing at another.
+ */
+async function rescueFromBoard(
+  job: Job,
+  from: string,
+  report: EnrichReport
+): Promise<{ read: PostingRead; url: string } | null> {
+  const resolved = await resolveEmployerLink(job.company, job.role_title);
+  if (resolved?.precision !== "posting") return null;
+
+  const failure = describeWriteFailure(
+    (await updateJob(job.id, relinkPatch(job, from, resolved.url))).error,
+    `relink ${job.company} / ${job.role_title}`
+  );
+  if (failure !== undefined) {
+    console.error(`enrichRoles: ${failure}`);
+    report.failed++;
+    return null;
+  }
+  report.relinked++;
+
+  const read = await readPosting({
+    url: resolved.url,
+    company: job.company,
+    roleTitle: job.role_title,
+    label: "enrichRoles(rescued)",
+  });
+  return read.kind === "unreadable" ? null : { read, url: resolved.url };
 }
