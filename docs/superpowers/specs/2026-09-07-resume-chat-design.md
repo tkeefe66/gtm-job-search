@@ -1,5 +1,7 @@
 # Résumé chat, coverage, and the anchor fix
 
+**Implemented 2026-09-08, see `docs/superpowers/plans/2026-09-07-resume-chat.md`.**
+
 2026-09-07. Covers three changes to `/resume?jobId=…`: the bullet-selection
 ordering rule, a coverage panel, and a conversational agent that can change the
 document by selection, by text, and by design.
