@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   verified: { kind: "notApplicable" } as { kind: string; url?: string; reason?: string },
   resolved: null as { url: string; precision: string } | null,
   updateError: undefined as string | undefined,
+  body: null as { text: string; department: string } | null,
 }));
 
 vi.mock("@/lib/require-actor", () => ({
@@ -59,6 +60,7 @@ vi.mock("@/lib/model-call", () => ({
 vi.mock("@/lib/resolve-job-link", () => ({
   newBoardCache: () => new Map(),
   verifyPostingLink: vi.fn(async () => h.verified),
+  fetchPostingBody: vi.fn(async () => h.body),
   resolveEmployerLink: vi.fn(async () => h.resolved),
 }));
 
@@ -68,7 +70,7 @@ import { callStructured } from "@/lib/model-call";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
 import { withBudget } from "@/lib/metered";
 import { readOnboardedAtFor } from "@/lib/settings-store";
-import { resolveEmployerLink } from "@/lib/resolve-job-link";
+import { fetchPostingBody, resolveEmployerLink } from "@/lib/resolve-job-link";
 
 const POSTING =
   "<html><body><p>" +
@@ -102,6 +104,7 @@ beforeEach(() => {
   h.verified = { kind: "notApplicable" };
   h.resolved = null;
   h.updateError = undefined;
+  h.body = null;
   vi.clearAllMocks();
 });
 
@@ -297,3 +300,55 @@ describe("the spend gates", () => {
     expect(vi.mocked(callStructured)).toHaveBeenCalledTimes(1);
   });
 });
+
+// Measured, not assumed: a real pass over 60 rows skipped 21 as JS shells, and
+// Greenhouse and Ashby — whose posting PAGES are client-rendered while their
+// board APIs answer honestly — were most of the remaining queue. This is the
+// only way past a shell that costs no Claude tokens and issues no search.
+describe("a client-rendered posting is read through the employer's board API", () => {
+  const ATS = "https://job-boards.greenhouse.io/clay/jobs/4461450008";
+
+  test("a shell falls back to the board body rather than being skipped", async () => {
+    h.jobs = [row({ job_url: ATS })];
+    h.page = "<html><body><div id='root'></div></body></html>";
+    h.body = { text: "Requires 5 years of SQL. ".repeat(30), department: "Revenue Operations" };
+
+    const report = await enrichRoles();
+
+    expect(report.enriched).toBe(1);
+    expect(report.unreadable).toBe(0);
+    expect(vi.mocked(callStructured)).toHaveBeenCalledTimes(1);
+  });
+
+  test("the board's own department is stored when the posting page had none", async () => {
+    h.jobs = [row({ job_url: ATS })];
+    h.page = null;
+    h.body = { text: "Requires 5 years of SQL. ".repeat(30), department: "Revenue Operations" };
+    h.answer = JSON.stringify({ requirements: ["SQL"], nice_to_haves: [] });
+
+    await enrichRoles();
+
+    expect(patch().department).toBe("Revenue Operations");
+  });
+
+  // The fetch tier is still FIRST: the posting's own page is the fuller
+  // document where it renders, and the board API is the fallback.
+  test("a page that reads fine never asks the board", async () => {
+    h.jobs = [row({ job_url: ATS })];
+
+    await enrichRoles();
+
+    expect(vi.mocked(fetchPostingBody)).not.toHaveBeenCalled();
+  });
+
+  test("a vendor with no verified body shape still counts as unreadable", async () => {
+    h.jobs = [row({ job_url: "https://careers.example.com/jobs/1" })];
+    h.page = "<html><body><div id='root'></div></body></html>";
+    h.body = null;
+
+    const report = await enrichRoles();
+
+    expect(report.unreadable).toBe(1);
+    expect(vi.mocked(callStructured)).not.toHaveBeenCalled();
+  });
+})

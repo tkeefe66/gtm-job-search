@@ -213,3 +213,113 @@ function normalizeTitle(title: string): string {
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
+
+/** One posting's own words, read off the vendor's board API. */
+export interface PostingBody {
+  text: string;
+  /** The team the vendor files it under, when it publishes one. */
+  department: string;
+}
+
+/**
+ * Where to fetch ONE posting's body, or null when no second call is needed or
+ * the vendor's body shape has not been verified.
+ *
+ * Greenhouse's list endpoint omits `content`, so a posting needs its own call.
+ * Ashby's board list already carries `descriptionPlain` for every posting, so
+ * asking again would be a second request for data the cached board fetch
+ * already holds. The other three are null because nobody has probed them:
+ * guessing a body shape here is how a parser starts returning "" for a posting
+ * that says plenty, which then gets STORED as "this posting says nothing".
+ *
+ * Both Greenhouse shapes were control-tested the way BOARD_VENDORS demands: a
+ * nonsense slug 404s, and so does a nonsense posting id on a real board.
+ */
+export function postingBodyUrl(
+  vendor: BoardVendor,
+  slug: string,
+  postingId: string
+): string | null {
+  return vendor === "greenhouse"
+    ? `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs/${postingId}`
+    : null;
+}
+
+/** Strips tags and collapses whitespace. The vendors publish HTML, not text. */
+function htmlToText(html: string): string {
+  return decodeEntities(html)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const ENTITY_PATTERN = /&(?:amp|lt|gt|quot|#39|apos|nbsp|#x27|#x2F);/g;
+const BODY_ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&nbsp;": " ",
+  "&#x27;": "'",
+  "&#x2F;": "/",
+};
+
+// Twice, deliberately: Greenhouse serves its content DOUBLE-escaped (`&lt;p&gt;`
+// arrives where a `<p>` was), so one pass leaves literal tags in the text and
+// the model is handed markup as though it were prose.
+function decodeEntities(s: string): string {
+  const once = s.replace(ENTITY_PATTERN, (m) => BODY_ENTITIES[m] ?? m);
+  return once.replace(ENTITY_PATTERN, (m) => BODY_ENTITIES[m] ?? m);
+}
+
+/**
+ * One posting's body, out of whatever the vendor's endpoint returned.
+ *
+ * NULL for anything unrecognised — the same rule parseBoard follows, and for a
+ * sharper reason here: an empty string would be stored as "this posting says
+ * nothing", which is a claim, where null means "we could not read it" and
+ * leaves the row thin for a later pass.
+ */
+export function parsePostingBody(
+  vendor: BoardVendor,
+  postingId: string,
+  json: unknown
+): PostingBody | null {
+  if (!json || typeof json !== "object") return null;
+
+  if (vendor === "greenhouse") {
+    const job = json as { content?: unknown; departments?: unknown };
+    if (typeof job.content !== "string") return null;
+    const text = htmlToText(job.content);
+    if (text === "") return null;
+    const departments = Array.isArray(job.departments) ? job.departments : [];
+    const first = departments[0] as { name?: unknown } | undefined;
+    return { text, department: typeof first?.name === "string" ? first.name : "" };
+  }
+
+  if (vendor === "ashby") {
+    // The whole board payload, not one posting: Ashby publishes every
+    // description in the list the board fetch already cached.
+    const jobs = (json as { jobs?: unknown }).jobs;
+    if (!Array.isArray(jobs)) return null;
+    const job = jobs.find((j) => (j as { id?: unknown })?.id === postingId) as
+      | { descriptionPlain?: unknown; descriptionHtml?: unknown; department?: unknown }
+      | undefined;
+    if (!job) return null;
+    const raw =
+      typeof job.descriptionPlain === "string"
+        ? job.descriptionPlain
+        : typeof job.descriptionHtml === "string"
+          ? htmlToText(job.descriptionHtml)
+          : null;
+    if (raw === null || raw.trim() === "") return null;
+    return {
+      text: raw.trim(),
+      department: typeof job.department === "string" ? job.department : "",
+    };
+  }
+
+  return null;
+}

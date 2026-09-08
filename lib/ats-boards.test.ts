@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { boardApiUrl, boardPageUrl, findPosting, parseBoard } from "./ats-boards";
+import { boardApiUrl, boardPageUrl, findPosting, parseBoard,
+  parsePostingBody,
+  postingBodyUrl,
+} from "./ats-boards";
 
 describe("parseBoard — absence vs emptiness", () => {
   test("a real board with no roles is [], an absent board is null", () => {
@@ -182,5 +185,70 @@ describe("board URLs", () => {
     expect(boardApiUrl("ashby", "hex")).toBe("https://api.ashbyhq.com/posting-api/job-board/hex");
     expect(boardApiUrl("lever", "atlan")).toBe("https://api.lever.co/v0/postings/atlan?mode=json");
     expect(boardPageUrl("greenhouse", "invoca")).toBe("https://job-boards.greenhouse.io/invoca");
+  });
+});
+
+// Coverage, measured rather than assumed: a real pass over 60 rows skipped 21
+// of them as JS shells, and the two vendors behind most of that queue
+// (Greenhouse 19 rows, Ashby 8) both publish the posting's own text through
+// the SAME honest APIs this file already reads for link health. Reading the
+// body there is not the "no ATS APIs for DISCOVERY" rule being bent — nothing
+// here finds a role; it reads a role we already have.
+describe("reading one posting's body off the board API", () => {
+  test("Greenhouse needs a per-posting URL, built from the id in the stored link", () => {
+    expect(postingBodyUrl("greenhouse", "anthropic", "4461450008")).toBe(
+      "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs/4461450008"
+    );
+  });
+
+  // Ashby's board list already carries descriptionPlain for every posting, so
+  // asking for one costs NOTHING beyond the board fetch link health already
+  // makes and caches. A per-posting URL would be a second call for data we
+  // have.
+  test("Ashby needs no second call", () => {
+    expect(postingBodyUrl("ashby", "baseten", "abc")).toBeNull();
+  });
+
+  test("a vendor whose body shape is unverified is not guessed at", () => {
+    expect(postingBodyUrl("breezy", "acme", "1")).toBeNull();
+    expect(postingBodyUrl("workable", "acme", "1")).toBeNull();
+  });
+
+  test("Greenhouse's content is HTML and comes back as text", () => {
+    const body = parsePostingBody("greenhouse", "6510547003", {
+      content: "&lt;p&gt;Requires 5 years of SQL.&lt;/p&gt;",
+      departments: [{ name: "Revenue Operations" }],
+    });
+
+    expect(body?.text).toContain("Requires 5 years of SQL.");
+    expect(body?.text).not.toContain("<p>");
+    expect(body?.department).toBe("Revenue Operations");
+  });
+
+  test("Ashby's body is found by posting id inside the board payload", () => {
+    const board = {
+      jobs: [
+        { id: "other", descriptionPlain: "Not this one", department: "Sales" },
+        { id: "wanted", descriptionPlain: "Requires 5 years of SQL.", department: "RevOps" },
+      ],
+    };
+
+    const body = parsePostingBody("ashby", "wanted", board);
+
+    expect(body?.text).toBe("Requires 5 years of SQL.");
+    expect(body?.department).toBe("RevOps");
+  });
+
+  // The same rule every other parser in this file follows: a shape we do not
+  // recognise is null — "we could not read it" — never an empty string that a
+  // caller would store as "this posting says nothing".
+  test("an unrecognised payload is null, not empty text", () => {
+    expect(parsePostingBody("greenhouse", "1", { status: 404, error: "Job not found" })).toBeNull();
+    expect(parsePostingBody("ashby", "missing", { jobs: [] })).toBeNull();
+    expect(parsePostingBody("greenhouse", "1", null)).toBeNull();
+  });
+
+  test("a posting whose body is blank is null too — there is nothing to store", () => {
+    expect(parsePostingBody("greenhouse", "1", { content: "   " })).toBeNull();
   });
 });

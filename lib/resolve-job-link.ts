@@ -1,4 +1,13 @@
-import { BOARD_VENDORS, boardApiUrl, boardPageUrl, findPosting, parseBoard } from "./ats-boards";
+import {
+  BOARD_VENDORS,
+  boardApiUrl,
+  boardPageUrl,
+  findPosting,
+  parseBoard,
+  parsePostingBody,
+  postingBodyUrl,
+} from "./ats-boards";
+import type { PostingBody } from "./ats-boards";
 import type { Posting } from "./ats-boards";
 import type { BoardVendor } from "./ats-boards";
 import { companySlugs, hostOf, parseBoardLink } from "./job-link";
@@ -270,5 +279,50 @@ function pathOf(url: string): string {
     return new URL(url).pathname.replace(/\/+$/, "").toLowerCase();
   } catch {
     return "";
+  }
+}
+
+/**
+ * One posting's own words, straight from the employer's board API.
+ *
+ * The fetch tier's blind spot, measured: a pass over 60 rows skipped 21 as JS
+ * shells, and Greenhouse (19 of the remaining queue) and Ashby (8) are exactly
+ * the vendors whose posting PAGES are client-rendered while their board APIs
+ * answer honestly. Reading the body there is not the "no ATS APIs" rule being
+ * bent — that rule is about how roles are DISCOVERED, and nothing here finds a
+ * role. It reads one we already have, and costs no Claude tokens.
+ *
+ * Null for every vendor whose body shape has not been probed, for a link that
+ * names no posting, and for a board that would not answer. Never "" — an empty
+ * body would be STORED as "this posting says nothing".
+ */
+export async function fetchPostingBody(url: string): Promise<PostingBody | null> {
+  const link = parseBoardLink(url);
+  if (!link || !link.slug || !link.id) return null;
+
+  // Greenhouse omits `content` from its list endpoint, so a posting needs its
+  // own call; Ashby publishes `descriptionPlain` for every posting in the board
+  // payload, so the board URL IS the body source there. Any other vendor has no
+  // verified shape and is not guessed at.
+  const endpoint =
+    postingBodyUrl(link.vendor, link.slug, link.id) ??
+    (link.vendor === "ashby" ? boardApiUrl(link.vendor, link.slug) : null);
+  if (endpoint === null) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(endpoint, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    // Both vendors 404 honestly for a missing board AND for a missing posting
+    // id on a real board — control-tested, the standard BOARD_VENDORS demands.
+    if (!res.ok) return null;
+    return parsePostingBody(link.vendor, link.id, await res.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
