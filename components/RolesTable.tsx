@@ -1466,6 +1466,13 @@ export default function RolesTable({
               {/* Expanded detail */}
               {expandedId === job.id && (
                 <div className="border-t border-slate bg-canvas px-4 py-4">
+                  {/* What the POSTING says, above everything this app inferred.
+                      It leads because it is the only block here the employer
+                      wrote — the fit rationale, key skills and company blurb
+                      are all this app's own words about the role. Without it on
+                      screen there was no way to tell a role whose description
+                      we hold from one where we only have a title. */}
+                  <PostingDetailBlock job={job} />
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
                     {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
@@ -1649,6 +1656,60 @@ function SourceTag({ url }: { url: string | null }) {
     >
       via {hostOf(url)}
     </span>
+  );
+}
+
+/**
+ * What the posting itself asks for, or an honest line saying nobody read it.
+ *
+ * The employer's own words, kept apart from everything the app inferred: the
+ * fit rationale is this app's opinion, the key skills are a summary of a search
+ * result, and only this block is the posting speaking. A role scored 5 with no
+ * JD behind it is a guess, and until this existed nothing on screen said which
+ * kind of row you were looking at.
+ */
+function PostingDetailBlock({ job }: { job: Job }) {
+  const posting = job.posting ?? null;
+  const requirements = posting?.requirements ?? [];
+  const niceToHaves = posting?.niceToHaves ?? [];
+  const read = hasPostingBeenRead(job);
+
+  if (!read || (requirements.length === 0 && niceToHaves.length === 0)) {
+    return (
+      <div className="mb-4 rounded-md border border-slate bg-white px-3 py-2 text-xs text-ink/60">
+        {read
+          ? "The posting was read, but it listed nothing we could store. The score and any tailored résumé come from the title and this app's own summary."
+          : "No job description stored. The score and any tailored résumé come from the title and this app's own summary — use Enrich roles, or add this posting again by URL."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-md border border-slate bg-white px-3 py-3">
+      <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-ink/40">
+        What the posting asks for
+        {posting?.enrichedAt ? ` · read ${new Date(posting.enrichedAt).toLocaleDateString()}` : ""}
+      </p>
+      {requirements.length > 0 && (
+        <ul className="mb-2 list-disc space-y-1 pl-4 text-sm text-ink/80">
+          {requirements.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
+      {niceToHaves.length > 0 && (
+        <>
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink/40">
+            Nice to have
+          </p>
+          <ul className="list-disc space-y-1 pl-4 text-sm text-ink/60">
+            {niceToHaves.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
   );
 }
 
