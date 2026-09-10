@@ -69,20 +69,10 @@ describe("generationFailure", () => {
 });
 
 describe("keyStepCopy", () => {
-  test("does not claim a key is required — an admin can generate without one", () => {
-    // resolveTier (lib/budget.ts) gives an admin the platform key regardless
-    // of whether one is stored, so any wording implying a key is mandatory,
-    // or that there is no free/platform-backed path, is false for that account.
-    const copy = keyStepCopy();
-    expect(copy).not.toMatch(/entirely on your own/i);
-    expect(copy).not.toMatch(/no free tier/i);
-    expect(copy).not.toMatch(/must|required|before continuing/i);
-  });
-
-  test("tells the user there is a path forward even without a key", () => {
-    const copy = keyStepCopy();
-    expect(copy.length).toBeGreaterThan(0);
-    expect(copy).toMatch(/next step/i);
+  // Mutation: restore optional/free-usage wording for users who must bring a key.
+  test("explains the required key and who pays", () => {
+    expect(keyStepCopy()).toMatch(/required/i);
+    expect(keyStepCopy()).toMatch(/Anthropic/);
   });
 });
 

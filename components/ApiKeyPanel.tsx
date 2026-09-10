@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getApiKeyStatus, saveApiKey, removeApiKey, type ApiKeyStatus } from "@/app/actions/api-key";
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/providers/anthropic-pricing";
+import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 
 /**
@@ -12,7 +14,8 @@ import { Spinner } from "./ui";
  * four characters, which are stored separately so displaying them never requires
  * decrypting anything.
  */
-export default function ApiKeyPanel() {
+export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (ready: boolean) => void; compact?: boolean }) {
+  const router = useRouter();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
   const [draft, setDraft] = useState("");
   const [modelDraft, setModelDraft] = useState("");
@@ -21,44 +24,55 @@ export default function ApiKeyPanel() {
   const [saved, setSaved] = useState(false);
 
   async function load() {
-    const res = await getApiKeyStatus();
-    // Presence, not truthiness — an unreachable database reports an empty
-    // message, and `if (res.error)` would render "no key stored" for it.
-    setError(res.error !== undefined ? res.error : null);
-    setStatus(res);
-    // PREFILLED with the stored model, because a blank field means "the
-    // provider's default" — so re-pasting a key to change nothing would
-    // silently move a tenant off a non-default model and onto Sonnet.
-    setModelDraft(res.model ?? "");
+    try {
+      const res = await getApiKeyStatus();
+      setError(describeWriteFailure(res.error, "check your API key") ?? null);
+      setStatus(res);
+      setModelDraft(res.model ?? "");
+      onReady?.(res.error === undefined && res.present && res.status === "ok");
+    } catch {
+      setError("Could not check your API key. Reload this page to try again.");
+      setStatus({ present: false });
+      onReady?.(false);
+    }
   }
   useEffect(() => { void load(); }, []);
 
   async function save() {
-    setBusy(true); setSaved(false);
-    const res = await saveApiKey(draft, { model: modelDraft });
-    setError(res.error !== undefined ? res.error : null);
-    setBusy(false);
-    // The model field is not cleared — load() refills it from what was stored.
-    if (res.error === undefined) { setDraft(""); setSaved(true); await load(); }
+    setBusy(true); setSaved(false); setError(null);
+    try {
+      const res = await saveApiKey(draft, { model: modelDraft });
+      const failure = describeWriteFailure(res.error, "save your API key");
+      if (failure !== undefined) { setError(failure); return; }
+      setDraft(""); setSaved(true); await load();
+      router.refresh();
+    } catch {
+      setError("Could not verify or save your API key. Check your connection and try again.");
+    } finally { setBusy(false); }
   }
 
   async function remove() {
-    setBusy(true);
-    const res = await removeApiKey();
-    setError(res.error !== undefined ? res.error : null);
-    setBusy(false);
-    await load();
+    setBusy(true); setSaved(false);
+    try {
+      const res = await removeApiKey();
+      const failure = describeWriteFailure(res.error, "remove your API key");
+      if (failure !== undefined) { setError(failure); return; }
+      onReady?.(false);
+      await load();
+      router.refresh();
+    } catch {
+      setError("Could not remove your API key. Check your connection and try again.");
+    } finally { setBusy(false); }
   }
 
   if (!status) return <Spinner label="Loading API key" />;
 
   return (
-    <section className="mt-10">
+    <section className={compact ? "mt-4" : "mt-10"}>
       <h2 className="font-display text-xl text-ink">Your Anthropic API key</h2>
       <p className="mt-1 max-w-2xl text-sm text-ink/60">
-        Optional. With your own key, searches bill your Anthropic account instead
-        of the included free usage, and no monthly limit applies. Usage is still
-        recorded here so you can see what you spend.
+        Required for AI features. Profile generation and searches bill your Anthropic account.
+        Usage is recorded here so you can see what you spend. A Claude chat subscription does not cover API usage.
       </p>
 
       {/*
@@ -73,12 +87,12 @@ export default function ApiKeyPanel() {
         the people who operate this server.
       </p>
 
-      {error && (
+      {error !== null && (
         <p className="mt-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2 text-sm text-[#991B1B]">
           {error}
         </p>
       )}
-      {saved && !error && (
+      {saved && error === null && (
         <p className="mt-3 text-sm text-[#166534]">Key verified with Anthropic and saved.</p>
       )}
 
@@ -114,20 +128,22 @@ export default function ApiKeyPanel() {
       <div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <input
+            aria-label="Anthropic API key"
             type="password"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="sk-ant-…"
             autoComplete="off"
-            className="w-80 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+            className="w-full max-w-sm rounded-lg border border-slate px-3 py-2 font-mono text-sm"
           />
           <input
+            aria-label="Model (optional)"
             type="text"
             value={modelDraft}
             onChange={(e) => setModelDraft(e.target.value)}
             placeholder={ANTHROPIC_DEFAULT_MODEL}
             autoComplete="off"
-            className="w-56 rounded-lg border border-slate px-3 py-2 font-mono text-sm"
+            className="w-full max-w-sm rounded-lg border border-slate px-3 py-2 font-mono text-sm"
           />
           <button
             disabled={busy || draft.trim().length === 0}
@@ -140,9 +156,7 @@ export default function ApiKeyPanel() {
         <p className="mt-2 text-sm text-ink/60">
           {status.present ? (
             <>
-              To change the model, type it here and paste your key again. There is no way
-              around the re-paste: the stored key is bound to the model it runs on and is
-              never read back, so it cannot be re-sealed against a new model on its own.
+              To change your model, enter its name and paste your key again so we can verify access.
             </>
           ) : (
             <>Optional. Leave blank for the default, {ANTHROPIC_DEFAULT_MODEL}.</>

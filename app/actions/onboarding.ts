@@ -48,6 +48,7 @@ import {
   UNDESCRIBED_DB_ERROR,
   describeWriteFailure,
   onboardedAtFrom,
+  compFloorFrom,
   profileFrom,
   readAllSettingsResult,
   writeProfile,
@@ -57,9 +58,11 @@ import { rawQuery, tenantTransaction } from "@/lib/supabase";
 export async function getOnboardingState(): Promise<{
   answers: OnboardingAnswers;
   onboardedAt: string | null;
+  compFloor: number | null;
+  isAdmin: boolean;
   error?: string;
 }> {
-  await requireActor();
+  const actor = await requireActor();
   const { rows, error } = await readAllSettingsResult();
   // Presence, not truthiness. This page decides whether to show a user their
   // own half-finished answers; rendering empty ones because the read failed
@@ -68,12 +71,16 @@ export async function getOnboardingState(): Promise<{
     return {
       answers: DEFAULT_PROFILE.answers,
       onboardedAt: null,
+      compFloor: null,
+      isAdmin: actor.isAdmin,
       error: describeWriteFailure(error, "read your onboarding answers")!,
     };
   }
   return {
     answers: profileFrom(rows).answers,
     onboardedAt: onboardedAtFrom(rows),
+    compFloor: compFloorFrom(rows),
+    isAdmin: actor.isAdmin,
   };
 }
 
@@ -224,9 +231,15 @@ function listOr(v: unknown, fallback: string[]): string[] {
  * distinguishing them.
  */
 export async function saveProfile(
-  profile: Profile & GeneratedProfile
+  profile: Profile & GeneratedProfile,
+  preferences: { compFloor?: number | null } = {}
 ): Promise<{ error?: string }> {
   await requireActor();
+
+  const { compFloor } = preferences;
+  if (compFloor !== undefined && compFloor !== null && (!Number.isSafeInteger(compFloor) || compFloor < 1)) {
+    return { error: "The minimum base must be a whole number of at least 1, or left blank." };
+  }
 
   // Blocked at the action as well as at the screen. An empty fit brain is the
   // one field whose absence is not recoverable by editing later: every role
@@ -279,6 +292,7 @@ export async function saveProfile(
           [tenantId, key, JSON.stringify(value)]
         );
       await put(PROFILE_KEY, clean);
+      if (compFloor !== undefined) await put(SETTING_KEYS.compFloor, compFloor);
       await put(SETTING_KEYS.titles, titlesCheck.value);
       await put(SETTING_KEYS.locations, locationsCheck.value);
       await put(SETTING_KEYS.stackTerms, stackTermsCheck.value);

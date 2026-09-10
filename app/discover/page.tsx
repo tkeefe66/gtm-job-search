@@ -6,7 +6,7 @@ import { requireActorPage } from "@/lib/require-actor";
 // time — against no session — and the result would be served to everyone.
 export const dynamic = "force-dynamic";
 
-export default async function DiscoverPage() {
+export default async function DiscoverPage({ searchParams }: { searchParams?: { mode?: string } }) {
   await requireActorPage();
-  return <Discover />;
+  return <Discover initialMode={searchParams?.mode === "role" ? "role" : "company"} />;
 }

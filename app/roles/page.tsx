@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 // A server component reads the floor once, here, rather than adding a client
 // round trip to RolesTable's own load(). RolesTable stays a client component;
 // it just receives the number.
-export default async function RolesPage() {
+export default async function RolesPage({ searchParams }: { searchParams?: { add?: string } }) {
   const actor = await requireActorPage();
-  return <RolesTable compFloor={await readCompFloor()} isAdmin={actor.isAdmin} />;
+  return <RolesTable compFloor={await readCompFloor()} isAdmin={actor.isAdmin} initialAddOpen={searchParams?.add === "1"} />;
 }

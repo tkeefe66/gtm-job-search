@@ -1,3 +1,6 @@
+"use client";
+
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 
 /**
@@ -13,6 +16,8 @@ import Link from "next/link";
  * that forgets it.
  */
 export default function NeedsKeyBanner() {
+  const pathname = usePathname();
+  if (pathname === "/welcome") return null;
   return (
     <div className="mx-auto mb-6 max-w-6xl px-4 sm:px-6">
       <div className="rounded-xl border border-[#FCD34D] bg-[#FFFBEB] p-4">
@@ -23,8 +28,7 @@ export default function NeedsKeyBanner() {
           This app searches the web for roles and scores each one 1–5 against
           your background using an AI model. It runs on <strong>your</strong>{" "}
           model API key, so the usage is billed to your account and nothing is
-          charged to anyone else — which also means no one else can see what you
-          search for.
+          charged to anyone else. Your search requests are sent to Anthropic.
         </p>
         <p className="mt-2 max-w-2xl text-sm text-[#92400E]/90">
           You&apos;ll need a key from{" "}

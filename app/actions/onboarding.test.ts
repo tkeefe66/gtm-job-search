@@ -360,3 +360,29 @@ describe("clearAnswers", () => {
     expect(written.answers).toEqual(DEFAULT_PROFILE.answers);
   });
 });
+
+
+describe("onboarding compensation", () => {
+  // Mutation: omit the compFloor write, leaving scoring on the old floor.
+  test("saves an explicit minimum base in the same transaction as the profile", async () => {
+    expect(await saveProfile(VALID_PROFILE, { compFloor: 180000 })).toEqual({});
+    expect(transactionCalls.find(c => c.key === "compFloor")?.value).toBe(180000);
+  });
+  // Mutation: treat null as omission, preventing users from removing a floor.
+  test("saves an explicit no-minimum choice", async () => {
+    await saveProfile(VALID_PROFILE, { compFloor: null });
+    expect(transactionCalls.find(c => c.key === "compFloor")).toEqual({ key: "compFloor", value: null });
+  });
+  // Mutation: accept an invalid numeric preference and stamp onboarding complete.
+  test("refuses invalid compensation before writing anything", async () => {
+    for (const compFloor of [-1, 0, 1.5, NaN, Infinity]) {
+      expect((await saveProfile(VALID_PROFILE, { compFloor })).error).toBeDefined();
+    }
+    expect(transactionCalls).toEqual([]);
+  });
+  // Mutation: default to null on a restart and overwrite an existing preference.
+  test("loads the saved minimum base for onboarding", async () => {
+    readSettings.mockResolvedValue({ rows: [{ key: "compFloor", value: 180000 }] });
+    expect((await getOnboardingState()).compFloor).toBe(180000);
+  });
+});

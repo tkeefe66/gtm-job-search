@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useId, useRef } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
@@ -10,6 +11,7 @@ import {
   saveAnswers,
   saveProfile,
 } from "@/app/actions/onboarding";
+import { readResumeUpload } from "@/app/actions/resume-upload";
 import { getApiKeyStatus } from "@/app/actions/api-key";
 import { scoreFit } from "@/app/actions/parse-role";
 import { getSettings, markCompScoringRescored, rescoreAll } from "@/app/actions/settings";
@@ -39,16 +41,10 @@ import {
 import ApiKeyPanel from "./ApiKeyPanel";
 import { Spinner } from "./ui";
 
-// The five steps of the brief, plus the housekeeping states around them.
-// "loading" and "rescore" are not numbered in the spec but are real screens:
-// "loading" covers the two reads that decide where step 0 starts, and
-// "rescore" is the re-run offer Task 8's review added on top of Step 4.
-type Step = "loading" | "key" | "door" | "answers" | "generating" | "review" | "rescore";
+// Four setup stages, followed by first-action choices or the existing rescore offer.
+type Step = "loading" | "key" | "door" | "answers" | "preferences" | "generating" | "review" | "rescore" | "done";
 
-// "key" was removed from here when Step 0 stopped being a gate: nothing sets
-// busy/errors under that key any more (see handleKeyContinue), so keeping it
-// in this union would be dead surface with nothing to test.
-type Section = "answers" | "generate" | "sample" | "finish" | "rescore";
+type Section = "key" | "answers" | "generate" | "sample" | "finish" | "rescore";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -81,12 +77,13 @@ export default function Onboarding() {
   // Read once, at mount, before this run can have changed it. A first run has
   // nothing to rescore — see onboardingRescoreOffer in lib/rescore-progress.ts.
   const [wasAlreadyOnboarded, setWasAlreadyOnboarded] = useState(false);
-  // Whether Step 0 (the key) was shown to THIS user, captured once at mount so
-  // the step numbering stays consistent even if they go Back into it later.
-  // Drives the "Step X of N" labels below — with the key step skipped, the
-  // wizard is 3 steps, not 4, and the door screen must read "Step 1", not
-  // "Step 2" with no Step 1 ever having been shown.
-  const [keyStepNeeded, setKeyStepNeeded] = useState(false);
+  const [keyReady, setKeyReady] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [compFloor, setCompFloor] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { headingRef.current?.focus(); }, [step]);
 
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [showMore, setShowMore] = useState(false);
@@ -132,19 +129,17 @@ export default function Onboarding() {
         // this branch can reach Finish, so there is nothing to guard by
         // skipping setWasAlreadyOnboarded / setStep too.
         if (state.error !== undefined) {
-          setLoadError(state.error);
+          setLoadError(state.error || "Could not read your saved answers. Reload to try again.");
           return;
         }
         setAnswers(state.answers);
         setWasAlreadyOnboarded(
           state.onboardedAt !== null && state.onboardedAt.length > 0
         );
-        // A failed key check is treated the same as "no key": Step 0 still
-        // shows, and ApiKeyPanel surfaces the read failure itself when it
-        // loads a second time.
-        const needsKey = !(keyStatus.error === undefined && keyStatus.present);
-        setKeyStepNeeded(needsKey);
-        setStep(needsKey ? "key" : "door");
+        setKeyReady(keyStatus.error === undefined && keyStatus.present && keyStatus.status === "ok");
+        setIsAdmin(state.isAdmin);
+        setCompFloor(state.compFloor === null ? "" : String(state.compFloor));
+        setStep("door");
       } catch (err) {
         if (!cancelled) setLoadError(`Could not load onboarding — ${message(err)}`);
       }
@@ -154,34 +149,40 @@ export default function Onboarding() {
     };
   }, []);
 
-  // Step numbering, relative to what THIS user actually sees (Step 0/"key" is
-  // skipped for anyone with a stored key already) rather than a fixed literal
-  // — a fixed "Step 2 of 4" on the door screen read as skipping a step for
-  // whoever never saw Step 1. Pure arithmetic, not a decision with a wrong
-  // answer worth pinning in lib/: unlike payloadFrom/draftFromGenerated, there
-  // is no failure mode here subtler than "off by one", and it is visible on
-  // every screen it appears on.
-  const totalSteps = keyStepNeeded ? 4 : 3;
-  const stepNumber = (s: "key" | "door" | "answers" | "generating" | "review") => {
-    if (s === "key") return 1;
-    const base = keyStepNeeded ? 1 : 0;
-    if (s === "door" || s === "answers") return base + 1;
-    if (s === "generating") return base + 2;
-    return base + 3; // review
-  };
+  const stepIndex = step === "door" || step === "answers" ? 0 : step === "preferences" ? 1 : step === "key" || step === "generating" ? 2 : 3;
 
-  // Step 0 is a pre-flight HINT ("a key is useful"), not a gate ("a key is
-  // required") — see keyStepCopy's own comment in lib/onboarding-rules.ts.
-  // The authoritative refusal is `capped` from generateProfile (tier "none"
-  // in lib/metered.ts), which the review step already renders with the key
-  // field attached, so Continue always advances regardless of whether a key
-  // is stored. This function does not call getApiKeyStatus(): ApiKeyPanel
-  // already reads and surfaces its own load failures (see its `load()`), so
-  // duplicating that read here would only add a second, redundant fetch with
-  // nowhere new to show the result — the mount effect above is what decides
-  // whether Step 0 is shown at all.
-  function handleKeyContinue() {
-    setStep("door");
+  async function handleKeyContinue() {
+    setBusy(b => ({ ...b, key: true }));
+    setErrors(e => ({ ...e, key: undefined }));
+    try {
+      const status = await getApiKeyStatus();
+      if (status.error !== undefined) {
+        setErrors(e => ({ ...e, key: status.error || "Could not check your key. Please try again." }));
+        return;
+      }
+      if (!isAdmin && (!status.present || status.status !== "ok")) {
+        setKeyReady(false);
+        setErrors(e => ({ ...e, key: "Save and verify your Anthropic API key before continuing." }));
+        return;
+      }
+      setStep("generating");
+    } catch {
+      setErrors(e => ({ ...e, key: "Could not check your key. Check your connection and try again." }));
+    } finally { setBusy(b => ({ ...b, key: false })); }
+  }
+
+  async function handleUpload(file: File | undefined) {
+    if (!file) return;
+    setUploading(true); setUploadError(null);
+    try {
+      if (file.size > 1024 * 1024) { setUploadError("Choose a file smaller than 1 MB, or paste its text."); return; }
+      const form = new FormData();
+      form.set("resume", file);
+      const result = await readResumeUpload(form);
+      if (result.error !== undefined) { setUploadError(result.error || "Could not read the file. Paste its text instead."); return; }
+      setAnswers(a => ({ ...a, resume: result.text ?? "" }));
+    } catch { setUploadError("Could not upload your résumé. Check your connection or paste its text instead."); }
+    finally { setUploading(false); }
   }
 
   function chooseMode(mode: OnboardingAnswers["mode"]) {
@@ -190,6 +191,10 @@ export default function Onboarding() {
   }
 
   async function handleContinueFromAnswers() {
+    if (compFloor.trim() && (!Number.isSafeInteger(Number(compFloor)) || Number(compFloor) < 1)) {
+      setErrors(e => ({ ...e, answers: "Enter a whole annual salary in USD, or leave it blank." }));
+      return;
+    }
     if (!answersAreComplete(answers)) {
       setErrors((e) => ({
         ...e,
@@ -207,7 +212,7 @@ export default function Onboarding() {
         setErrors((e) => ({ ...e, answers: res.error }));
         return;
       }
-      setStep("generating");
+      setStep(keyReady || isAdmin ? "generating" : "key");
     } catch (err) {
       setErrors((e) => ({ ...e, answers: message(err) }));
     } finally {
@@ -271,7 +276,7 @@ export default function Onboarding() {
       const titles = toList(draft.titles);
       const locations = toList(draft.locations);
       const role = sampleRoleFor({ titles, locations });
-      const fitInputs = profileToFitInputs(payloadFrom(draft, answers), null);
+      const fitInputs = profileToFitInputs(payloadFrom(draft, answers), compFloor.trim() ? Number(compFloor) : null);
       const res = await scoreFit({ ...role, fitInputs });
       if (res.error !== undefined) {
         setSampleError(res.error);
@@ -307,7 +312,7 @@ export default function Onboarding() {
     setBusy((b) => ({ ...b, finish: true }));
     setErrors((e) => ({ ...e, finish: undefined }));
     try {
-      const res = await saveProfile(payloadFrom(draft, answers));
+      const res = await saveProfile(payloadFrom(draft, answers), { compFloor: compFloor.trim() ? Number(compFloor) : null });
       if (res.error !== undefined) {
         setErrors((e) => ({ ...e, finish: res.error }));
         return;
@@ -352,7 +357,7 @@ export default function Onboarding() {
           return;
         }
       }
-      router.push("/discover");
+      setStep("done");
     } catch (err) {
       setErrors((e) => ({ ...e, finish: message(err) }));
     } finally {
@@ -448,22 +453,27 @@ export default function Onboarding() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10">
-      <h1 className="font-heading text-2xl font-semibold text-ink">Welcome</h1>
-      <p className="mt-1 text-sm text-ink/60">
-        A few questions decide what this tool searches for and how it scores what it finds.
-      </p>
+    <div className="mx-auto max-w-3xl py-8 sm:py-12">
+      <h1 ref={headingRef} tabIndex={-1} className="font-heading text-3xl font-semibold tracking-tight text-ink outline-none">{step === "done" ? "Your search is ready" : "Let’s build your search"}</h1>
+      <p className="mt-3 text-base text-ink/60">{step === "done" ? "Your profile is saved. Choose where to begin." : "A few details about you. A search that knows what matters."}</p>
+      {step !== "done" && step !== "rescore" && <ol aria-label="Setup progress" className="mt-8 grid grid-cols-4 gap-2 text-xs sm:text-sm">
+        {["Background", "Preferences", "Connect AI", "Review"].map((label, i) => <li key={label} aria-current={i === stepIndex ? "step" : undefined} className={`border-t-2 pt-3 ${i <= stepIndex ? "border-ink font-medium text-ink" : "border-slate text-ink/50"}`}>{label}</li>)}
+      </ol>}
 
       {step === "key" && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step {stepNumber("key")} of {totalSteps} — your API key
+            Connect your AI account
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">{keyStepCopy()}</p>
-          <ApiKeyPanel />
-          <div className="mt-4">
+          <ApiKeyPanel compact onReady={setKeyReady} />
+          <p className="mt-4 text-sm text-ink/70">Create a key in the <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer noopener" className="underline">Anthropic Console</a>, add API billing there, then paste the key above. Verification makes a small billed request.</p>
+          {errors.key !== undefined && <p role="alert" className="mt-3 text-sm text-[#92400E]">{errors.key}</p>}
+          <div className="mt-4 flex items-center gap-4">
+            <button className="text-sm underline" onClick={() => setStep("preferences")}>Back</button>
             <button
-              onClick={handleKeyContinue}
+              disabled={(!keyReady && !isAdmin) || !!busy.key}
+              onClick={() => void handleKeyContinue()}
               className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90"
             >
               Continue
@@ -475,10 +485,10 @@ export default function Onboarding() {
       {step === "door" && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step {stepNumber("door")} of {totalSteps} — tell us about you
+            Start with your experience
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
-            Answer a few short questions, or paste a résumé and tell us what you want next.
+            Upload or paste your résumé, or answer a few short questions.
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <button
@@ -494,7 +504,7 @@ export default function Onboarding() {
               onClick={() => chooseMode("resume")}
               className="rounded-lg border border-slate bg-white p-4 text-left transition hover:border-ink"
             >
-              <div className="font-heading font-semibold">Paste a résumé</div>
+              <div className="font-heading font-semibold">Use my résumé</div>
               <p className="mt-1 text-sm text-ink/60">
                 Faster if you have one handy. We'll still ask what you want next.
               </p>
@@ -506,18 +516,23 @@ export default function Onboarding() {
       {step === "answers" && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step {stepNumber("answers")} of {totalSteps} —{" "}
+            Your background: {" "}
             {answers.mode === "resume" ? "your résumé" : "a few questions"}
           </h2>
 
           {answers.mode === "resume" ? (
             <>
               <p className="mt-2 max-w-2xl text-sm text-ink/60">
-                Your résumé is sent to your own model provider, on your own API key. It is
-                stored so you can regenerate your profile later without pasting it again, and
-                you can clear it at any time.
+                Uploaded files are read on this server to extract text; the original file is not stored.
+                Review the text below before continuing. Your answers are saved when you continue
+                from preferences and sent to Anthropic when you generate your profile.
               </p>
-              <Field label="Your résumé">
+              <Field label="Upload your résumé" help="PDF, DOCX, or TXT. Up to 1 MB; PDF up to 10 pages. You can also paste below.">
+                <input type="file" accept=".pdf,.docx,.txt" disabled={uploading} onChange={e => { void handleUpload(e.target.files?.[0]); e.target.value = ""; }} className="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-ink file:px-4 file:py-2 file:text-white" />
+              </Field>
+              {uploading && <p role="status" className="mt-2 text-sm">Reading your résumé…</p>}
+              {uploadError !== null && <p role="alert" className="mt-2 text-sm text-[#92400E]">{uploadError}</p>}
+              <Field label="Your résumé text" help="Check the imported text or paste your résumé here.">
                 <textarea
                   value={answers.resume}
                   onChange={(e) => setAnswers((a) => ({ ...a, resume: e.target.value }))}
@@ -528,7 +543,7 @@ export default function Onboarding() {
               </Field>
               <button
                 onClick={() => void handleClearAnswers()}
-                disabled={!!busy.answers}
+                disabled={uploading || !!busy.answers}
                 className="mt-1 text-xs text-ink/40 underline transition hover:text-ink disabled:opacity-50"
               >
                 Clear saved answers
@@ -545,6 +560,15 @@ export default function Onboarding() {
             </Field>
           )}
 
+          <div className="mt-6 flex items-center gap-4">
+            <button onClick={() => setStep("door")} className="text-sm underline">Back</button>
+            <button disabled={uploading || !(answers.mode === "resume" ? answers.resume : answers.current).trim()} onClick={() => setStep("preferences")} className="rounded-lg bg-ink px-5 py-3 text-sm font-medium text-white disabled:opacity-40">Continue to preferences</button>
+          </div>
+        </section>
+      )}
+      {step === "preferences" && (
+        <section className="mt-8">
+          <h2 className="font-heading text-xl font-semibold">What would make your next role a good move?</h2>
           <Field label="What do you want next?">
             <textarea
               value={answers.wanted}
@@ -564,6 +588,9 @@ export default function Onboarding() {
             />
           </Field>
 
+          <Field label="Minimum annual base salary (USD, optional)" help="Use a whole dollar amount, before bonus or equity. Leave blank for no minimum. A salary band must extend above this amount to clear your floor.">
+            <input type="number" min="1" step="1" value={compFloor} onChange={e => setCompFloor(e.target.value)} placeholder="e.g. 120000" className="w-full rounded-md border border-slate px-3 py-2 text-sm" />
+          </Field>
           <Field label="What rules a job out for you? (optional)">
             <textarea
               value={answers.dealbreakers}
@@ -578,7 +605,7 @@ export default function Onboarding() {
 
           <div className="mt-4 flex items-center gap-3">
             <button
-              onClick={() => setStep("door")}
+              onClick={() => setStep("answers")}
               disabled={!!busy.answers}
               className="text-sm text-ink/40 transition hover:text-ink disabled:opacity-50"
             >
@@ -598,18 +625,18 @@ export default function Onboarding() {
       {step === "generating" && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step {stepNumber("generating")} of {totalSteps} — build your profile
+            Build your search profile
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
-            One billed call to your model provider turns your answers into search terms and a
-            scoring rubric. You can edit everything it produces on the next screen.
+            Your answers become a search profile you can review and edit. Generating it uses
+            your connected AI account and incurs an API charge. No job search starts yet.
           </p>
 
           {cappedMessage && (
             <div className="mt-4 rounded-md border border-ink/20 bg-ink/5 p-4">
               <p className="text-sm text-ink">{cappedMessage}</p>
               <div className="mt-3">
-                <ApiKeyPanel />
+                <ApiKeyPanel compact onReady={setKeyReady} />
               </div>
             </div>
           )}
@@ -620,7 +647,7 @@ export default function Onboarding() {
 
           <div className="mt-4 flex items-center gap-3">
             <button
-              onClick={() => setStep("answers")}
+              onClick={() => setStep("preferences")}
               disabled={!!busy.generate}
               className="text-sm text-ink/40 transition hover:text-ink disabled:opacity-50"
             >
@@ -640,13 +667,20 @@ export default function Onboarding() {
       {step === "review" && draft && (
         <section className="mt-8">
           <h2 className="font-heading text-lg font-semibold">
-            Step {stepNumber("review")} of {totalSteps} — review
+            Does this sound like you?
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">
-            Edit anything that is wrong before finishing. Nothing is saved until you click
-            Finish.
+            Edit anything that is wrong before finishing. Your answers are saved. Your search profile takes effect when you finish.
           </p>
 
+          <dl className="mt-6 divide-y divide-slate rounded-xl border border-slate bg-white px-5">
+            {[["Roles we’ll look for", toList(draft.titles).join(", ")], ["Where you’ll work", draft.locationRule], ["Minimum base salary", compFloor.trim() ? `$${Number(compFloor).toLocaleString("en-US")} USD` : "No minimum"], ["What makes a strong match", draft.fitBrain]].map(([label, value]) => <div key={label} className="py-5"><dt className="font-heading font-semibold">{label}</dt><dd className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink/70">{value}</dd></div>)}
+          </dl>
+          <Field label="Minimum annual base salary (USD, optional)">
+            <input type="number" min="1" step="1" value={compFloor} onChange={e => setCompFloor(e.target.value)} className="w-full rounded-md border border-slate px-3 py-2 text-sm" />
+          </Field>
+          <details className="mt-5 rounded-lg border border-slate bg-white p-5">
+            <summary className="cursor-pointer font-medium">Edit your search profile</summary>
           <Field label="Job titles to search for" help="One per line.">
             <textarea
               value={draft.titles}
@@ -693,14 +727,13 @@ export default function Onboarding() {
               correct one, so it gets its own heading and its own border. */}
           <div className="mt-6 rounded-lg border-2 border-ink bg-ink/5 p-4">
             <h3 className="font-heading font-semibold uppercase tracking-wide text-ink">
-              This is what scores your roles
+              What makes a strong match
             </h3>
             <p className="mt-1 text-sm text-ink/60">
-              Every posting you see is scored 1–5 against this. Get this wrong and every score
-              is wrong, silently.
+              Roles are scored against this description. Edit it to reflect your experience and priorities.
             </p>
 
-            <Field label="Fit brain" help="A description of you. Required.">
+            <Field label="Your background and priorities" help="A description of you. Required.">
               <textarea
                 value={draft.fitBrain}
                 onChange={(e) => updateDraft("fitBrain", e.target.value)}
@@ -751,13 +784,15 @@ export default function Onboarding() {
             </div>
           </div>
 
+          </details>
+
           <details
             className="mt-6 rounded-lg border border-slate bg-white p-4"
             open={showMore}
             onToggle={(e) => setShowMore((e.target as HTMLDetailsElement).open)}
           >
             <summary className="cursor-pointer font-heading font-semibold">
-              More — generated fields most people never need to touch
+              Advanced search and scoring settings
             </summary>
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -902,7 +937,7 @@ export default function Onboarding() {
                 Start over
               </button>
               <p className="text-xs text-ink/40">
-                Re-runs generation from Step 2 — this bills your API key again.
+                Return to your answers. Generating a replacement profile incurs another API charge.
               </p>
             </div>
             <button
@@ -910,11 +945,17 @@ export default function Onboarding() {
               disabled={!!busy.finish || !draft.fitBrain.trim()}
               className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
             >
-              {busy.finish ? "Saving…" : "Looks right — finish"}
+              {busy.finish ? "Saving…" : "Save my search profile"}
             </button>
           </div>
         </section>
       )}
+
+      {step === "done" && <section className="mt-8 space-y-4">
+        <Link href="/discover?mode=role" className="block rounded-xl bg-ink p-6 text-white"><h2 className="font-heading text-xl font-semibold">Find my first roles</h2><p className="mt-2 text-sm text-white/80">Choose a search based on your target titles. Review the estimate before starting.</p></Link>
+        <Link href="/roles?add=1" className="block rounded-xl border border-slate bg-white p-6"><h2 className="font-heading text-xl font-semibold">Check a job I already found</h2><p className="mt-2 text-sm text-ink/70">Paste a posting URL to save it and see how it matches you. This uses your AI account.</p></Link>
+        <p className="text-sm text-ink/60">No searches have started. You can change your preferences anytime in Settings.</p>
+      </section>}
 
       {step === "rescore" && (rescoreReason !== null || rescoreUnknown) && (
         <section className="mt-8">
@@ -979,11 +1020,12 @@ function Field({
   help?: string;
   children: React.ReactNode;
 }) {
+  const id = useId();
   return (
     <div className="mt-4">
-      <label className="mb-1 block text-sm font-medium text-ink">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-sm font-medium text-ink">{label}</label>
       {help && <p className="mb-1 text-xs text-ink/50">{help}</p>}
-      {children}
+      {React.isValidElement(children) ? React.cloneElement(children as React.ReactElement<{ id?: string }>, { id }) : children}
     </div>
   );
 }
@@ -997,10 +1039,12 @@ function TextField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const id = useId();
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-ink">{label}</label>
+      <label htmlFor={id} className="mb-1 block text-sm font-medium text-ink">{label}</label>
       <input
+        id={id}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

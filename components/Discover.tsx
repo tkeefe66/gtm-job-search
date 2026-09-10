@@ -40,7 +40,7 @@ import { Spinner, Tag } from "./ui";
 // below; a STANDING PROPERTY (e.g. a hospital accreditation) has no window
 // to fetch or chart at all, so it gets one button and no chips.
 
-export default function Discover() {
+export default function Discover({ initialMode = "company" }: { initialMode?: "company" | "role" }) {
   const router = useRouter();
   const [startups, setStartups] = useState<DiscoveredStartup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -65,7 +65,7 @@ export default function Discover() {
   // Which of the two discovery approaches is shown — mutually exclusive with
   // the company-mode body below. Role mode is a fully separate component
   // (RoleSearchPanel) so this file doesn't have to grow to hold both.
-  const [mode, setMode] = useState<"company" | "role">("company");
+  const [mode, setMode] = useState<"company" | "role">(initialMode);
   // Loaded alongside the cached results below. Drives the header copy and
   // which window controls render; null only for the brief instant before the
   // initial load resolves, during which `busy` is already true so nothing

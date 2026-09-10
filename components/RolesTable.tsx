@@ -194,9 +194,11 @@ type StatusFilter =
 export default function RolesTable({
   compFloor,
   isAdmin,
+  initialAddOpen = false,
 }: {
   compFloor: number | null;
   isAdmin: boolean;
+  initialAddOpen?: boolean;
 }) {
   const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -244,7 +246,7 @@ export default function RolesTable({
   // is, not something to act on now.
   const [blockedOpen, setBlockedOpen] = useState(false);
   const [unclearOpen, setUnclearOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(initialAddOpen);
   const [addUrl, setAddUrl] = useState("");
   const [addBusy, setAddBusy] = useState(false);
   // Set only when the fetch could not read the posting: the paste box appears

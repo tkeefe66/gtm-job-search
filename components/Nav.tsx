@@ -18,6 +18,9 @@ const TABS = [
  */
 export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  if (pathname === "/signin" || pathname === "/welcome") {
+    return <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6"><Link href="/" className="font-heading text-lg font-bold tracking-tight">Job Search</Link></header>;
+  }
   const tabs = isAdmin
     ? [...TABS, { label: "Résumé", href: "/resume" }, { label: "Accounts", href: "/admin" }]
     : TABS;
