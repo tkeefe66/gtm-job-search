@@ -204,21 +204,34 @@ async function discoverStartupsInner(
     const { text: raw, stopReason } = await callWithWebSearchDetailed({
       system: hiringSignalSystem(signal),
       prompt,
-      maxTokens: 4000,
+      maxTokens: 8000,
+      // The 7-day funding run issued 28 searches before its response was cut
+      // off. Twelve still lets the model vary sources and wording while
+      // preventing one click from fanning out without a bound.
+      maxSearches: 12,
     });
 
-    // maxTokens here is 4000, the lowest of the three search actions, so a
-    // TRUNCATED response is likeliest on this path — and parseOrSalvage
-    // deliberately does not salvage that one, it rethrows.
-    const { items: startups } = await parseOrSalvage<Startup>({
-      raw,
-      stopReason,
-      key: "startups",
-      itemNoun: "company",
-      itemFields: STARTUP_FIELDS,
-      label: `discoverStartups(${dateRange})`,
-      extract: arrayUnder<Startup>("startups"),
-    });
+    // parseOrSalvage deliberately refuses an incomplete response rather than
+    // manufacturing a confident result from a partial array. Translate the
+    // known token-limit case here so the Discover banner does not expose a raw
+    // JSON parser error; other parse failures retain their original detail.
+    let startups: Startup[];
+    try {
+      ({ items: startups } = await parseOrSalvage<Startup>({
+        raw,
+        stopReason,
+        key: "startups",
+        itemNoun: "company",
+        itemFields: STARTUP_FIELDS,
+        label: `discoverStartups(${dateRange})`,
+        extract: arrayUnder<Startup>("startups"),
+      }));
+    } catch (err) {
+      if (stopReason === "max_tokens") {
+        throw new Error("The search produced too much data to finish. Please retry.");
+      }
+      throw err;
+    }
     const result = startups.map(withLegacyExtraFields);
 
     // Persist — upsert so re-running refreshes the data.
