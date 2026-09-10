@@ -1,57 +1,48 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
+import styles from "./chat.module.css";
 
-/**
- * The floating shell the résumé chat lives in, on BOTH the tailor screen and a
- * saved résumé. Presentation only — it owns open/closed and nothing else, so
- * ChatPanel's turn state, proposals and accept flow stay exactly where they
- * were and there is one chat implementation rather than two.
- *
- * `print:hidden` on the root is load-bearing: nothing in this app hides chrome
- * at print by default (app/layout.tsx and TailorPanel scope their own), so a
- * fixed-position panel without it prints on top of the résumé — and the résumé
- * is the one document whose print output is the product.
- */
-export default function ChatDock({
-  title,
-  children,
-  defaultOpen = false,
-}: {
-  title: string;
-  children: ReactNode;
-  /** The tailor screen opens by default (the chat is the point of that page);
-   *  a saved résumé does not, because the document is what you came to read. */
-  defaultOpen?: boolean;
+export default function ChatDock({ title, children, defaultOpen = false }: {
+  title: string; children: ReactNode; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-40 rounded-full border border-slate bg-white px-4 py-2 text-sm shadow-lg hover:border-ink print:hidden"
-      >
-        💬 {title}
-      </button>
-    );
+  const [opened, setOpened] = useState(defaultOpen);
+  const [expanded, setExpanded] = useState(false);
+  const launcher = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  function minimize() {
+    setOpen(false);
+    requestAnimationFrame(() => launcher.current?.focus());
   }
+  return <div className="print:hidden">
+    {!open && <button ref={launcher} className={styles.launcher} aria-expanded={false} aria-controls={id}
+      onClick={() => { setOpened(true); setOpen(true); requestAnimationFrame(() => document.getElementById(id)?.querySelector("textarea")?.focus()); }}>
+      <ChatIcon /> Résumé assistant
+    </button>}
+    {/* Keep opened content mounted so minimizing preserves unsent text and in-flight turns. */}
+    {opened && <section id={id} aria-label={title} hidden={!open}
+      className={`${styles.dock} ${expanded ? styles.expanded : ""}`}
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); minimize(); } }}>
+      <header className={styles.header}>
+        <div className={styles.identity}><span className={styles.mark}><ChatIcon /></span>
+          <div><h2>Résumé assistant</h2><p>Refine the story. Make it yours.</p></div>
+        </div>
+        <div className={styles.controls}>
+          <button type="button" aria-label={expanded ? "Restore chat size" : "Expand chat"} aria-pressed={expanded}
+            onClick={() => setExpanded(!expanded)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d={expanded ? "M9 3v6H3m18 6h-6v6M9 9 3 3m12 12 6 6" : "M8 3H3v5m13 13h5v-5M3 3l7 7m11 11-7-7"}/></svg>
+          </button>
+          <button type="button" aria-label="Minimize chat" onClick={minimize}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+        </div>
+      </header>
+      <div className={styles.body}>{children}</div>
+    </section>}
+  </div>;
+}
 
-  return (
-    // Width is capped by the viewport as well as by rem, so it collapses on a
-    // laptop instead of covering the document it is meant to discuss.
-    <div className="fixed bottom-6 right-6 z-40 flex max-h-[70vh] w-[min(24rem,calc(100vw-3rem))] flex-col rounded-lg border border-slate bg-white shadow-xl print:hidden">
-      <div className="flex items-center justify-between border-b border-slate px-3 py-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-ink/60">{title}</span>
-        <button
-          onClick={() => setOpen(false)}
-          aria-label="Close chat"
-          className="rounded px-2 text-sm text-ink/60 hover:text-ink"
-        >
-          ✕
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2">{children}</div>
-    </div>
-  );
+function ChatIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"/><path d="M7 10h8M7 14h5"/></svg>;
 }

@@ -10,6 +10,8 @@ import {
 import type { ResumeOverrides } from "@/app/actions/resume";
 import type { CareerRecord, ResumeSelection } from "@/lib/resume-render/render";
 import type { CoverageReport } from "@/lib/resume-coverage";
+import ChatComposer, { ChatWelcome } from "./ChatComposer";
+import styles from "./chat.module.css";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 
 const DIRTY_CONFIRM =
@@ -92,16 +94,35 @@ export default function ChatPanel({
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const sentPending = useRef(false);
+  const [loading, setLoading] = useState(true);
+  const [sendingText, setSendingText] = useState<string | null>(null);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const turnStarted = useRef(false);
+  const busy = isPending || sendingText !== null || acceptingId !== null;
+
+  useEffect(() => {
+    if (followLatest.current && scrollArea.current) {
+      scrollArea.current.scrollTop = scrollArea.current.scrollHeight;
+    }
+  }, [messages, sendingText, error, loading]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const res = await loadChatThread(jobId);
       if (cancelled) return;
+      setLoading(false);
+      if (turnStarted.current) return;
       // Presence, not truthiness — res.error can legitimately be "".
       if (res.error !== undefined) setLoadError(res.error || UNDESCRIBED_DB_ERROR);
       else setMessages(res.messages);
-    })();
+    })().catch(() => {
+      if (!cancelled) {
+        setLoading(false);
+        setLoadError("Could not load this conversation. Refresh the page to try again.");
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -122,7 +143,7 @@ export default function ChatPanel({
    *  empty on a fresh mount — the user typed it on the previous screen. */
   function send(explicitText?: string) {
     const text = (explicitText ?? input).trim();
-    if (!text || isPending) return;
+    if (!text || busy) return;
 
     // The guard runs BEFORE we know whether this turn will change anything —
     // a question and a mutating request are indistinguishable until the model
@@ -136,6 +157,9 @@ export default function ChatPanel({
 
     setError(null);
     setTranscriptNote(null);
+    turnStarted.current = true;
+    followLatest.current = true;
+    setSendingText(text);
     startTransition(async () => {
       // Measured at SEND time, not on render: the document may have been
       // re-laid-out by fonts loading or a window resize since it was drawn, and
@@ -149,53 +173,59 @@ export default function ChatPanel({
       } catch {
         geometry = null;
       }
-      const res = await sendChatTurn(jobId, text, geometry);
-      setMessages(res.messages);
+      try {
+        const res = await sendChatTurn(jobId, text, geometry);
+        setMessages(res.messages);
 
-      // Presence, not truthiness — res.error can legitimately be "".
-      if (res.error !== undefined) {
-        setError(res.error || UNDESCRIBED_DB_ERROR);
-      } else {
-        setInput("");
-      }
+        // Presence, not truthiness — res.error can legitimately be "".
+        if (res.error !== undefined) {
+          setError(res.error || UNDESCRIBED_DB_ERROR);
+        } else {
+          setInput("");
+        }
 
-      // A SEPARATE field from `error`: the change already applied and saved,
-      // only the transcript entry may not survive a reload. Shown as a note,
-      // not a warning, and worded so retrying reads as unnecessary rather
-      // than as the fix — resending would duplicate an already-applied
-      // add_bullet or propose_career_bullet.
-      if (res.transcriptSaveError !== undefined) {
-        setTranscriptNote(
-          "That change was applied and saved to the document. This message may not still " +
-            "be here after a reload, but there's nothing to redo — no need to send it again."
-        );
-      }
+        // A SEPARATE field from `error`: the change already applied and saved,
+        // only the transcript entry may not survive a reload. Shown as a note,
+        // not a warning, and worded so retrying reads as unnecessary rather
+        // than as the fix — resending would duplicate an already-applied
+        // add_bullet or propose_career_bullet.
+        if (res.transcriptSaveError !== undefined) {
+          setTranscriptNote(
+            "That change was applied and saved to the document. This message may not still " +
+              "be here after a reload, but there's nothing to redo — no need to send it again."
+          );
+        }
 
-      const lastIndex = res.messages.length - 1;
-      if (lastIndex >= 0 && res.messages[lastIndex].role === "assistant") {
-        setTurnMeta((prev) => ({
-          ...prev,
-          [lastIndex]: {
-            applied: res.applied,
-            rejected: res.rejected,
-            summaryFlattened: res.applied.indexOf("edited text: summary") !== -1,
-          },
-        }));
-      }
+        const lastIndex = res.messages.length - 1;
+        if (lastIndex >= 0 && res.messages[lastIndex].role === "assistant") {
+          setTurnMeta((prev) => ({
+            ...prev,
+            [lastIndex]: {
+              applied: res.applied,
+              rejected: res.rejected,
+              summaryFlattened: res.applied.indexOf("edited text: summary") !== -1,
+            },
+          }));
+        }
 
-      // The honest "did this turn change the document" signal, decided
-      // server-side in lib/resume-ops.ts. A rejected or errored turn always
-      // returns `changedDocument: false`, so this can never fire for either —
-      // nothing on screen changes for those, matching requirement 3 — and
-      // neither does a turn whose only operations were a rule-change request
-      // or a bullet proposal.
-      if (res.changedDocument && res.career && res.selection && res.coverage) {
-        onApplied({
-          career: res.career,
-          selection: res.selection,
-          overrides: res.overrides,
-          coverage: res.coverage,
-        });
+        // The honest "did this turn change the document" signal, decided
+        // server-side in lib/resume-ops.ts. A rejected or errored turn always
+        // returns `changedDocument: false`, so this can never fire for either —
+        // nothing on screen changes for those, matching requirement 3 — and
+        // neither does a turn whose only operations were a rule-change request
+        // or a bullet proposal.
+        if (res.changedDocument && res.career && res.selection && res.coverage) {
+          onApplied({
+            career: res.career,
+            selection: res.selection,
+            overrides: res.overrides,
+            coverage: res.coverage,
+          });
+        }
+      } catch {
+        setError("The connection was interrupted. Refresh to check whether your change was applied before sending it again.");
+      } finally {
+        setSendingText(null);
       }
     });
   }
@@ -256,14 +286,17 @@ export default function ChatPanel({
   }
 
   return (
-    // No heading here: ChatDock renders the title bar now, and this component's
-    // own heading duplicated it once the chat moved into the dock.
-    <div className="flex flex-col gap-3 print:hidden">
-
-      {loadError && <p className="text-sm text-[#92400E]">{loadError}</p>}
+    <div className={styles.panel}>
+      <div className={styles.transcript} ref={scrollArea} onScroll={(event) => {
+        const el = event.currentTarget;
+        followLatest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+      }}>
+      {loading && !sendingText && <p role="status" className={styles.notice}>Loading conversation…</p>}
+      {loadError && <p role="alert" className={styles.error}>{loadError}</p>}
+      {!loading && !loadError && messages.length === 0 && !sendingText && <ChatWelcome onChoose={setInput} disabled={busy} />}
 
       {messages.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <div className={styles.messages}>
           {messages.map((m, i) => {
             const meta = turnMeta[i];
             return (
@@ -271,18 +304,19 @@ export default function ChatPanel({
                 key={i}
                 className={
                   m.role === "user"
-                    ? "self-end max-w-[85%] rounded bg-ink/5 px-3 py-2"
-                    : "max-w-[85%] rounded border border-slate px-3 py-2"
+                    ? styles.user
+                    : styles.assistant
                 }
               >
-                <p className="whitespace-pre-wrap text-sm">{m.text}</p>
+                <span className={styles.speaker}>{m.role === "user" ? "You" : "Résumé assistant"}</span>
+                <p className={styles.messageText}>{m.text}</p>
 
                 {m.role === "assistant" && meta?.rejected && (
-                  <p className="mt-1 text-xs text-[#92400E]">{meta.rejected}</p>
+                  <p className={styles.error}>{meta.rejected}</p>
                 )}
 
                 {m.role === "assistant" && !meta?.rejected && meta && meta.applied.length > 0 && (
-                  <ul className="mt-1 list-disc pl-4 text-xs text-ink/60">
+                  <ul aria-label="Applied changes" className={styles.changes}>
                     {meta.applied.map((a, j) => (
                       <li key={j}>{a}</li>
                     ))}
@@ -301,17 +335,17 @@ export default function ChatPanel({
                 )}
 
                 {m.role === "assistant" && meta?.summaryFlattened && (
-                  <p className="mt-1 text-xs italic text-ink/60">{SUMMARY_FLATTEN_NOTE}</p>
+                  <p className={styles.notice}>{SUMMARY_FLATTEN_NOTE}</p>
                 )}
 
                 {m.role === "assistant" && m.proposals && m.proposals.length > 0 && (
                   <div className="mt-2 flex flex-col gap-2">
                     {m.proposals.map((p) => (
-                      <div key={p.id} className="rounded border border-slate/60 px-2 py-1.5">
+                      <div key={p.id} className={styles.proposal}>
                         <p className="text-xs">{p.text}</p>
                         <button
                           onClick={() => accept(i, p.id)}
-                          disabled={isPending}
+                          disabled={busy}
                           className="mt-1 rounded border border-slate px-2 py-1 text-xs hover:border-ink disabled:opacity-50"
                         >
                           {acceptingId === p.id ? "Adding…" : "Accept into career record"}
@@ -326,34 +360,14 @@ export default function ChatPanel({
         </div>
       )}
 
-      {error && <p className="text-sm text-[#92400E]">{error}</p>}
-      {transcriptNote && <p className="text-xs text-ink/60">{transcriptNote}</p>}
-
-      <div className="flex items-center gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder="Ask for a change, e.g. “lead with the systems work”"
-          disabled={isPending}
-          className="flex-1 rounded border border-slate px-3 py-1.5 text-sm"
-        />
-        <button
-          // Arrow, not a bare `send`: React would pass the MouseEvent as
-          // `explicitText`, and the turn would be sent with an event object
-          // stringified into it. The build catches this; the runtime would not.
-          onClick={() => send()}
-          disabled={isPending || input.trim() === ""}
-          className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
-        >
-          {isPending ? "Sending…" : "Send"}
-        </button>
+      {sendingText && <div className={styles.messages} style={{ marginTop: 24 }}>
+        <div className={styles.user}><span className={styles.speaker}>You</span><p className={styles.messageText}>{sendingText}</p></div>
+        <p role="status" className={styles.working}>Working on your request…</p>
+      </div>}
+      {error && <p role="alert" className={styles.error}>{error}</p>}
+      {transcriptNote && <p role="status" className={styles.notice}>{transcriptNote}</p>}
       </div>
+      <ChatComposer value={input} onChange={setInput} onSend={() => send()} disabled={busy || loading} busy={busy} />
     </div>
   );
 }
