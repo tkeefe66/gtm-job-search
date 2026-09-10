@@ -73,6 +73,7 @@ const LEGEND: { dot: string; text: string }[] = [
 ];
 
 type Filter = "all" | "attention" | "due";
+type Sort = "original" | "company-asc" | "company-desc" | "next-asc" | "next-desc";
 
 export default function Watchlist() {
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
@@ -94,6 +95,7 @@ export default function Watchlist() {
   const [openRows, setOpenRows] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<Sort>("original");
   // Set when a URL was pasted into the name box. Holds the URL and the name
   // derived from it, which the user confirms or corrects before anything is
   // written — the name is a join key, so a derived one is offered, never
@@ -309,7 +311,7 @@ export default function Watchlist() {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return tracked.filter((c) => {
+    const filtered = tracked.filter((c) => {
       const state = stateOf(c);
       if (filter === "attention" && !needsYou(state)) return false;
       if (filter === "due" && state !== "due") return false;
@@ -322,8 +324,22 @@ export default function Watchlist() {
         (c.tagline ?? "").toLowerCase().includes(q)
       );
     });
+    if (sort === "original") return filtered;
+    return filtered.sort((a, b) => {
+      const nameOrder = a.company.localeCompare(b.company, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+      if (sort === "company-asc") return nameOrder;
+      if (sort === "company-desc") return -nameOrder;
+      // Never-checked companies are due immediately, ahead of dated checks.
+      const aDue = nextCheckDue(a.last_checked_at, a.crawl_interval_days)?.getTime() ?? -Infinity;
+      const bDue = nextCheckDue(b.last_checked_at, b.crawl_interval_days)?.getTime() ?? -Infinity;
+      const dueOrder = aDue === bDue ? 0 : aDue < bDue ? -1 : 1;
+      return (sort === "next-asc" ? dueOrder : -dueOrder) || nameOrder;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tracked, filter, query]);
+  }, [tracked, filter, query, sort]);
 
   function chipClass(active: boolean) {
     return `rounded-full border px-2.5 py-1 text-xs transition ${
@@ -794,12 +810,26 @@ export default function Watchlist() {
               ))}
             </div>
 
+            <label className="ml-auto flex items-center gap-2 text-xs text-ink/60">
+              Sort by
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as Sort)}
+                className="rounded-md border border-slate bg-white px-2 py-1 text-xs text-ink"
+              >
+                <option value="original">Default order</option>
+                <option value="company-asc">Company: A–Z</option>
+                <option value="company-desc">Company: Z–A</option>
+                <option value="next-asc">Next check: soonest</option>
+                <option value="next-desc">Next check: latest</option>
+              </select>
+            </label>
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter…"
-              className="ml-auto w-40 rounded-md border border-slate bg-white px-2 py-1 text-xs"
+              className="w-40 rounded-md border border-slate bg-white px-2 py-1 text-xs"
             />
           </div>
 
