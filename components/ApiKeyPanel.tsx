@@ -56,9 +56,9 @@ export default function ApiKeyPanel() {
     <section className="mt-10">
       <h2 className="font-display text-xl text-ink">Your Anthropic API key</h2>
       <p className="mt-1 max-w-2xl text-sm text-ink/60">
-        Optional. With your own key, searches bill your Anthropic account instead
-        of the included free usage, and no monthly limit applies. Usage is still
-        recorded here so you can see what you spend.
+        AI work using your key bills your Anthropic account. Manage daily and
+        monthly app limits in Spending limits below. Usage is recorded here so
+        you can see what you spend.
       </p>
 
       {/*
