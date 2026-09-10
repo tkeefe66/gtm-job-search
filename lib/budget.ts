@@ -11,17 +11,17 @@
  * what is left, rather than only before it. A pre-call check catches the NEXT
  * click, not this one.
  *
- * TWO PERIODS, and the daily one is the load-bearing half. They apply to the
- * ADMIN only — nobody else spends the platform's key. The risk a cap
+ * TWO PERIODS: admins keep their existing caps; BYO tenants opt into their own.
+ * Only the admin spends the platform's key. The risk a cap
  * protects against is a BURST — a retry loop, a bad deploy, an uncapped
  * `max_uses` doing forty searches where six were expected. A monthly ceiling is
  * a poor fit for that: set low it locks the owner out for weeks, set high enough
  * not to, it never fires. A daily ceiling contains a burst to one day and heals
  * at midnight. The monthly one is the outer bound.
  *
- * THERE IS NO UNMETERED ADMIN and NO FREE TIER. Every other tenant brings their
- * own key or cannot call anything, so the meter now protects exactly one
- * account: the owner's, against a runaway.
+ * THERE IS NO UNMETERED ADMIN and NO FREE TIER. Other tenants bring their own
+ * key and choose limits in Settings. Unset BYO limits do not inherit defaults.
+ * In-flight requests may overshoot; later requests recheck the allowance.
  */
 
 export type Tier = "admin" | "byo" | "none";
@@ -49,12 +49,11 @@ export function resolveTier(input: { isAdmin: boolean; hasOwnKey: boolean }): Ti
 }
 
 /**
- * Only the admin is metered, because only the admin spends the platform's key.
- * BYO spends their own money — recorded, never rationed. "none" never reaches a
- * call at all, so it has no meter to be under.
+ * Admin limits always apply. BYO limits apply when selected by the user.
+ * "none" never reaches a call, regardless of configured limits.
  */
-export function isMetered(tier: Tier): boolean {
-  return tier === "admin";
+export function isMetered(tier: Tier, hasChosenLimits = false): boolean {
+  return tier === "admin" || (tier === "byo" && hasChosenLimits);
 }
 
 /** What a keyless tenant is told. Not an error — a requirement. */
@@ -65,9 +64,9 @@ export function needsKeyMessage(): string {
   );
 }
 
-/** Only the admin may raise its own ceiling, and only from /admin. */
+/** All authenticated account tiers can configure their own limits. */
 export function canRaiseOwnCeiling(tier: Tier): boolean {
-  return tier === "admin";
+  return tier === "admin" || tier === "byo" || tier === "none";
 }
 
 /** Monthly period key, UTC. */
@@ -88,7 +87,7 @@ export function dailyPeriod(now: Date): string {
 
 export interface Window {
   spentCents: number;
-  ceilingCents: number;
+  ceilingCents: number | null;
 }
 
 export type ReserveVerdict =
@@ -102,7 +101,7 @@ export type ReserveVerdict =
  * BOTH windows must pass, and the cap comes from whichever has less left — the
  * tighter of the two is the one that can actually be exceeded.
  *
- * `maxSearches` is null only for BYO. For anyone metered it is always a number,
+ * `maxSearches` is null for BYO without chosen limits. Otherwise it is a number,
  * because "no cap" is exactly the state that makes a ceiling unenforceable: with
  * search billing invisible to token usage, the model can keep searching until it
  * decides to stop. Never zero either — a call that can search nothing still
@@ -112,6 +111,7 @@ export type ReserveVerdict =
  */
 export function reserveVerdict(input: {
   tier: Tier;
+  hasChosenLimits?: boolean;
   daily: Window;
   monthly: Window;
   estimateCents: number;
@@ -119,7 +119,7 @@ export function reserveVerdict(input: {
    *  shared across vendors, and a cap computed at the wrong price is not a cap. */
   centsPerSearch: number;
 }): ReserveVerdict {
-  if (!isMetered(input.tier)) return { allow: true, maxSearches: null };
+  if (!isMetered(input.tier, input.hasChosenLimits)) return { allow: true, maxSearches: null };
 
   // A search this provider prices at zero (or below) is not a cheap search, it
   // is an UNPRICEABLE one, and the metered call is refused rather than run.
@@ -147,6 +147,7 @@ export function reserveVerdict(input: {
     ["daily", input.daily],
     ["monthly", input.monthly],
   ] as const) {
+    if (w.ceilingCents === null) continue;
     const remaining = w.ceilingCents - w.spentCents;
     if (remaining <= 0 || w.spentCents + input.estimateCents > w.ceilingCents) {
       return { allow: false, reason, window: w };
@@ -154,8 +155,8 @@ export function reserveVerdict(input: {
   }
 
   const remaining = Math.min(
-    input.daily.ceilingCents - input.daily.spentCents,
-    input.monthly.ceilingCents - input.monthly.spentCents
+    input.daily.ceilingCents === null ? Infinity : input.daily.ceilingCents - input.daily.spentCents,
+    input.monthly.ceilingCents === null ? Infinity : input.monthly.ceilingCents - input.monthly.spentCents
   );
   return { allow: true, maxSearches: Math.max(1, Math.floor(remaining / input.centsPerSearch)) };
 }
@@ -176,10 +177,13 @@ export function cappedMessage(input: {
   const dollars = (input.ceilingCents / 100).toFixed(2);
   const window = input.reason === "daily" ? "today" : "this month";
 
-  // Only the admin can be capped — nobody else spends the platform's key.
+  const control = input.tier === "admin" ? "on the Accounts page" : "in Settings";
+  if (input.ceilingCents === 0) {
+    return `AI work is paused by your $0.00 ${input.reason} limit. Raise it ${control} to resume.`;
+  }
   return (
     `You've hit your $${dollars} ${input.reason} limit ${window}. ` +
-    `Raise it on the Accounts page, or wait until ${input.resetsOn}.`
+    `Raise it ${control}, or wait until ${input.resetsOn} (UTC).`
   );
 }
 

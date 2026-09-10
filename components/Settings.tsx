@@ -39,6 +39,7 @@ import {
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 import ApiKeyPanel from "./ApiKeyPanel";
+import SpendLimitsPanel from "./SpendLimitsPanel";
 import StatusEditor from "./StatusEditor";
 
 // Setting keys are written as literals rather than imported from
@@ -237,7 +238,7 @@ function parsePositiveInt(text: string): number | null {
   return Number.isInteger(n) && n >= 1 ? n : null;
 }
 
-export default function Settings() {
+export default function Settings({ isAdmin }: { isAdmin: boolean }) {
   const router = useRouter();
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -1151,6 +1152,7 @@ export default function Settings() {
         rendering mistake.
       */}
       <ApiKeyPanel />
+      <SpendLimitsPanel isAdmin={isAdmin} />
     </div>
   );
 }

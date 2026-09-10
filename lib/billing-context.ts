@@ -19,8 +19,15 @@ import type { ProviderId } from "@/lib/providers/types";
  * would be invisible to the other.
  */
 export interface BillingScope {
-  /** Cap handed to every web_search tool in this scope. null = uncapped (BYO). */
+  /** Cap handed to web_search. Null means no app cap was selected. */
   maxSearches: number | null;
+  /** Room available after other actions' reservations; checked before each model request. */
+  availableCents?: number;
+  limitMessage?: string;
+  /** Refresh other actions' usage and edited limits before starting another request. */
+  refreshAllowance?: () => Promise<{ availableCents: number; maxSearches: number | null; limitMessage: string }>;
+  /** Publish completed response cost before another action checks its allowance. */
+  flushUsage?: () => Promise<void>;
   /** The key these calls bill. */
   apiKey: string;
   /** Which adapter routes these calls, and at which model. Resolved per tenant

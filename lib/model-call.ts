@@ -36,8 +36,15 @@ export class SearchUnavailableError extends Error {
   }
 }
 
+export class SpendLimitReachedError extends Error {
+  constructor(message = "Your app spending limit has been reached. Raise it in Settings before starting more AI work.") {
+    super(message);
+    this.name = "SpendLimitReachedError";
+  }
+}
+
 /** Provider, key and model for this call: the scope's, or the platform's. */
-function routing(): { provider: Provider; apiKey: string; model: string; maxSearches: number | null } {
+async function routing(): Promise<{ provider: Provider; apiKey: string; model: string; maxSearches: number | null }> {
   const s = billingScope();
   // Null is a real state, not an error: db/apply-schema, tests and one-off
   // scripts call these helpers with no budget in play.
@@ -49,16 +56,27 @@ function routing(): { provider: Provider; apiKey: string; model: string; maxSear
       maxSearches: null,
     };
   }
+  const provider = providerFor(s.provider);
+  const allowance = s.refreshAllowance ? await s.refreshAllowance() : s;
+  let maxSearches = allowance.maxSearches;
+  if (allowance.availableCents !== undefined) {
+    const spent = provider.costCents(s, s.model);
+    const remaining = allowance.availableCents - spent;
+    if (remaining <= 0) throw new SpendLimitReachedError(allowance.limitMessage);
+    const searchPrice = provider.costCents({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1 }, s.model);
+    if (maxSearches !== null && searchPrice > 0) maxSearches = Math.min(maxSearches, Math.floor(remaining / searchPrice));
+  }
   return {
-    provider: providerFor(s.provider),
+    provider,
     apiKey: s.apiKey,
     model: s.model,
-    maxSearches: s.maxSearches,
+    maxSearches,
   };
 }
 
-function collect(c: Completion): string {
+async function collect(c: Completion): Promise<string> {
   recordUsage(c.usage);
+  await billingScope()?.flushUsage?.();
   return c.text;
 }
 
@@ -73,8 +91,9 @@ export interface DetailedResponse {
   stopReason: string | null;
 }
 
-function collectDetailed(c: Completion): DetailedResponse {
+async function collectDetailed(c: Completion): Promise<DetailedResponse> {
   recordUsage(c.usage);
+  await billingScope()?.flushUsage?.();
   return { text: c.text, stopReason: c.stopReason };
 }
 
@@ -109,11 +128,14 @@ export async function callWithWebSearchDetailed(opts: {
   maxTokens?: number;
   maxSearches?: number;
 }): Promise<DetailedResponse> {
-  const { provider, apiKey, model, maxSearches } = routing();
-  if (mustRefuseSearch(provider.searchCapEnforcement, maxSearches)) {
+  const { provider, apiKey, model, maxSearches } = await routing();
+  const cap = opts.maxSearches === undefined
+    ? maxSearches ?? undefined
+    : maxSearches === null ? opts.maxSearches : Math.min(opts.maxSearches, maxSearches);
+  if (cap !== undefined && cap <= 0) throw new SpendLimitReachedError(billingScope()?.limitMessage);
+  if (mustRefuseSearch(provider.searchCapEnforcement, cap ?? null)) {
     throw new SearchUnavailableError(provider.id);
   }
-  const cap = opts.maxSearches ?? (maxSearches === null ? undefined : maxSearches);
   return collectDetailed(
     await provider.searchAndComplete({
       apiKey,
@@ -146,7 +168,7 @@ export async function complete(opts: {
   maxTokens?: number;
   jsonSchema?: Record<string, unknown>;
 }): Promise<string> {
-  const { provider, apiKey, model } = routing();
+  const { provider, apiKey, model } = await routing();
   return collect(
     await provider.complete({
       apiKey,
@@ -179,7 +201,7 @@ export async function completeDetailed(opts: {
   maxTokens?: number;
   jsonSchema?: Record<string, unknown>;
 }): Promise<DetailedResponse> {
-  const { provider, apiKey, model } = routing();
+  const { provider, apiKey, model } = await routing();
   return collectDetailed(
     await provider.complete({
       apiKey,

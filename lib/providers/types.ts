@@ -105,8 +105,8 @@ export interface Provider {
  * A metered call on a provider that cannot cap searches inside the request is
  * REFUSED, not run uncapped.
  *
- * `maxSearches` is null only for BYO, who spend their own money and are recorded
- * rather than rationed. Any number means a ceiling is in force, and a ceiling
+ * `maxSearches` is null for BYO accounts with no chosen app limits.
+ * Any number means a ceiling is in force, and a ceiling
  * that cannot be enforced in-request is not a ceiling — search billing is
  * invisible to token usage, so nothing downstream would notice it being blown.
  */

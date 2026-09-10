@@ -3,7 +3,7 @@ import { describeWriteFailure } from "@/lib/write-failure";
 import { open } from "@/lib/secret-box";
 import { resolveTenantId } from "@/lib/tenant";
 import { runWithBilling, billingScope, type BillingScope } from "@/lib/billing-context";
-import { reserveSpend, reconcileSpend } from "@/lib/usage-store";
+import { reserveSpend, reconcileSpend, readSpent, advanceSpend } from "@/lib/usage-store";
 import {
   cappedMessage,
   isMetered,
@@ -16,7 +16,9 @@ import {
 } from "@/lib/budget";
 import { providerFor } from "@/lib/providers/registry";
 import { resolveProviderConfig, type ProviderConfig } from "@/lib/providers/resolution";
-import { SearchUnavailableError } from "@/lib/model-call";
+import { SearchUnavailableError, SpendLimitReachedError } from "@/lib/model-call";
+import { readSpendLimits } from "@/lib/spend-limit-store";
+import { hasSpendLimit } from "@/lib/spend-limits";
 
 /**
  * Runs a block of Claude work against a tenant's budget.
@@ -35,42 +37,6 @@ import { SearchUnavailableError } from "@/lib/model-call";
  * charged for the searches it issued. Charging only successful calls would make
  * a failing loop free.
  */
-
-interface Limits {
-  monthlyCents: number;
-  dailyCents: number;
-}
-
-async function limitsFor(tenantId: string, tier: Tier): Promise<Limits> {
-  const { data: settings } = await rawQuery<{ key: string; value: unknown }>(
-    `select key, value from platform_settings`
-  );
-  const num = (k: string, fallback: number) => {
-    const v = settings.find((s) => s.key === k)?.value;
-    return typeof v === "number" ? v : fallback;
-  };
-
-  const { data: rows } = await rawQuery<{
-    monthly_budget_cents: number | null;
-    daily_budget_cents: number | null;
-  }>(
-    `select monthly_budget_cents, daily_budget_cents from users where id = $1`,
-    [tenantId]
-  );
-  const own = rows[0];
-
-  // Per-tenant override, else the tier's platform default. NULL means "follow
-  // the default", so raising a default lifts everyone never given a number.
-  const admin = tier === "admin";
-  return {
-    monthlyCents:
-      own?.monthly_budget_cents ??
-      num(admin ? "adminMonthlyBudgetCents" : "defaultMonthlyBudgetCents", admin ? 10_000 : 1_000),
-    dailyCents:
-      own?.daily_budget_cents ??
-      num(admin ? "adminDailyBudgetCents" : "defaultDailyBudgetCents", admin ? 1_000 : 200),
-  };
-}
 
 export interface MeteredResult<T> {
   result?: T;
@@ -116,33 +82,33 @@ export async function withBudget<T>(opts: {
   const ownKey = lookup.key;
 
   const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: ownKey !== null });
-  const limits = await limitsFor(tenantId, tier);
 
   // No key, no call. Refused BEFORE fn runs and returned as `capped` so callers
   // render it as a sentence rather than an error — it is a requirement, not a
   // failure. Previously this fell through to the platform key with a ceiling,
   // which meant approving a tenant silently spent the owner's money.
   if (tier === "none") return { capped: needsKeyMessage() };
+  const loaded = await readSpendLimits(tenantId, tier === "admin");
+  if (loaded.error !== undefined) return { error: loaded.error };
+  const limits = loaded.limits;
+  const chosenLimits = hasSpendLimit(limits);
 
   // The admin with no stored key of their own routes to the platform's own
   // provider and model — resolveProviderConfig(null) reproduces exactly the
   // Anthropic + Sonnet routing this app has always used.
   const config: ProviderConfig = ownKey?.config ?? resolveProviderConfig(null)!;
 
-  // BYO spends its own money, so it is not rationed — but its usage is still
-  // recorded below, so the tenant can see it.
-  if (!isMetered(tier)) {
+  // BYO is uncapped only until the user chooses an app limit.
+  if (!isMetered(tier, chosenLimits)) {
     return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0, ownKey?.apiKey ?? null, config);
   }
 
-  const { data: counters } = await rawQuery<{ period: string; spent_cents: number }>(
-    `select period, spent_cents from usage_counters where tenant_id = $1`,
-    [tenantId],
-    tenantId
-  );
-  const spent = (p: string) => counters.find((c) => c.period === p)?.spent_cents ?? 0;
-  const daily = { spentCents: spent(now.toISOString().slice(0, 10)), ceilingCents: limits.dailyCents };
-  const monthly = { spentCents: spent(now.toISOString().slice(0, 7)), ceilingCents: limits.monthlyCents };
+  const dailySpend = await readSpent(tenantId, now, "daily");
+  const monthlySpend = await readSpent(tenantId, now, "monthly");
+  const countersFailure = describeWriteFailure(dailySpend.error ?? monthlySpend.error, "load your spending");
+  if (countersFailure !== undefined) return { error: countersFailure };
+  const daily = { spentCents: dailySpend.spentCents!, ceilingCents: limits.dailyCents };
+  const monthly = { spentCents: monthlySpend.spentCents!, ceilingCents: limits.monthlyCents };
 
   // One search, priced by the adapter — which is the definition of the number.
   const centsPerSearch = providerFor(config.providerId).costCents(
@@ -150,7 +116,7 @@ export async function withBudget<T>(opts: {
     config.model
   );
 
-  const verdict = reserveVerdict({ tier, daily, monthly, estimateCents: opts.estimateCents, centsPerSearch });
+  const verdict = reserveVerdict({ tier, hasChosenLimits: chosenLimits, daily, monthly, estimateCents: opts.estimateCents, centsPerSearch });
   if (!verdict.allow) {
     // A search this provider prices at zero cannot be rationed at all, so the
     // call is refused before it starts rather than run with a cap derived from
@@ -165,7 +131,7 @@ export async function withBudget<T>(opts: {
       capped: cappedMessage({
         tier,
         reason: verdict.reason,
-        ceilingCents: verdict.window.ceilingCents,
+        ceilingCents: verdict.window.ceilingCents!,
         resetsOn: resetsOn(verdict.reason, now),
       }),
     };
@@ -184,19 +150,30 @@ export async function withBudget<T>(opts: {
   if (!reserved.ok) {
     // Lost a race between the check above and the reservation. The atomic
     // statement is what makes this correct rather than the check.
+    const reason = reserved.reason ?? "daily";
     return {
       capped: cappedMessage({
         tier,
-        reason: "daily",
-        ceilingCents: limits.dailyCents,
-        resetsOn: resetsOn("daily", now),
+        reason,
+        ceilingCents: (reason === "daily" ? limits.dailyCents : limits.monthlyCents)!,
+        resetsOn: resetsOn(reason, now),
       }),
     };
   }
 
+  const dailyRemaining = limits.dailyCents === null ? Infinity : limits.dailyCents - daily.spentCents;
+  const monthlyRemaining = limits.monthlyCents === null ? Infinity : limits.monthlyCents - monthly.spentCents;
+  const availableCents = reserved.availableCents ?? Math.min(dailyRemaining, monthlyRemaining);
+  const limitingWindow = dailyRemaining <= monthlyRemaining ? "daily" : "monthly";
   return runScope(
     tier,
-    { maxSearches: verdict.maxSearches },
+    {
+      maxSearches: Math.min(verdict.maxSearches!, Math.floor(availableCents / centsPerSearch)),
+      availableCents,
+      limitMessage: cappedMessage({ tier, reason: limitingWindow,
+        ceilingCents: (limitingWindow === "daily" ? limits.dailyCents : limits.monthlyCents)!,
+        resetsOn: resetsOn(limitingWindow, now) }),
+    },
     opts,
     tenantId,
     now,
@@ -289,7 +266,7 @@ async function loadTenantKey(tenantId: string): Promise<KeyLookup> {
 
 async function runScope<T>(
   tier: Tier,
-  caps: { maxSearches: number | null },
+  caps: { maxSearches: number | null; availableCents?: number; limitMessage?: string },
   opts: { action: string; estimateCents: number; fn: () => Promise<T> },
   tenantId: string,
   now: Date,
@@ -298,8 +275,52 @@ async function runScope<T>(
   config: ProviderConfig
 ): Promise<MeteredResult<T>> {
   const provider = providerFor(config.providerId);
+  let accountedCents = reservedCents;
+  let pendingFlush = Promise.resolve();
+  const actualCost = () => provider.costCents({
+    inputTokens: scope.inputTokens, cachedInputTokens: scope.cachedInputTokens,
+    outputTokens: scope.outputTokens, searches: scope.searches,
+  }, scope.model);
   const scope: BillingScope = {
-    maxSearches: caps.maxSearches,
+    ...caps,
+    flushUsage: () => {
+      // Serial within a scope: parallel responses must not publish the same delta twice.
+      pendingFlush = pendingFlush.then(async () => {
+        const actual = actualCost();
+        if (actual <= accountedCents) return;
+        const result = await advanceSpend({ tenantId, deltaCents: actual - accountedCents, now });
+        const failure = describeWriteFailure(result.error, "record completed AI spending");
+        if (failure !== undefined) throw new Error(failure);
+        accountedCents = actual;
+      });
+      return pendingFlush;
+    },
+    // Even an initially uncapped BYO action must notice a limit saved mid-run.
+    refreshAllowance: async () => {
+      // Snapshot before reads. A parallel response may publish more usage while
+      // either query is waiting; adding its newer debit back to an older read
+      // would invent allowance. The older snapshot is conservative instead.
+      const ownAccountedCents = accountedCents;
+      const current = await readSpendLimits(tenantId, tier === "admin");
+      if (current.error !== undefined) throw new Error(current.error);
+      if (!hasSpendLimit(current.limits)) return { availableCents: Infinity, maxSearches: null, limitMessage: "" };
+      const today = await readSpent(tenantId, now, "daily");
+      const month = await readSpent(tenantId, now, "monthly");
+      const failure = describeWriteFailure(today.error ?? month.error, "check your remaining spending allowance");
+      if (failure !== undefined) throw new Error(failure);
+      const remaining = (spent: number, limit: number | null) => limit === null ? Infinity : limit - spent + ownAccountedCents;
+      const daily = remaining(today.spentCents!, current.limits.dailyCents);
+      const monthly = remaining(month.spentCents!, current.limits.monthlyCents);
+      const reason = daily <= monthly ? "daily" : "monthly";
+      const availableCents = Math.min(daily, monthly);
+      const searchPrice = provider.costCents({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1 }, config.model);
+      return { availableCents,
+        maxSearches: searchPrice > 0 ? Math.max(0, Math.floor(availableCents / searchPrice)) : 0,
+        limitMessage: cappedMessage({ tier, reason,
+          ceilingCents: (reason === "daily" ? current.limits.dailyCents : current.limits.monthlyCents)!,
+          resetsOn: resetsOn(reason, now) }),
+      };
+    },
     // The platform key is reachable ONLY by the admin, whose key it is. Every
     // other tenant arrives here with their own key, because tier "none" was
     // refused above. The `??` is not a fallback for tenants — it is the admin
@@ -320,25 +341,20 @@ async function runScope<T>(
     // A search refused because this provider cannot cap uses in-request is a
     // REFUSAL, not a crash: the caller renders it as a sentence, the same way a
     // hit ceiling is rendered. Anything else propagates untouched.
-    if (err instanceof SearchUnavailableError) return { capped: err.message };
+    if (err instanceof SearchUnavailableError || err instanceof SpendLimitReachedError) return { capped: err.message };
     throw err;
   } finally {
     // In a finally: a call that throws halfway still issued searches, and
     // charging only successful calls would make a failing loop free. Priced
     // through the adapter — never a hardcoded rate — so a tenant on a
     // different provider or model is billed at that provider's own price.
-    const actual = provider.costCents(
-      {
-        inputTokens: scope.inputTokens,
-        cachedInputTokens: scope.cachedInputTokens,
-        outputTokens: scope.outputTokens,
-        searches: scope.searches,
-      },
-      scope.model
-    );
-    await reconcileSpend({
+    // A failed incremental write is retried by final reconciliation, which also
+    // releases any unused estimate. Do not race an outstanding incremental write.
+    await pendingFlush.catch(() => {});
+    const actual = actualCost();
+    const reconciled = await reconcileSpend({
       tenantId,
-      estimateCents: reservedCents,
+      estimateCents: accountedCents,
       actualCents: actual,
       action: opts.action,
       searches: scope.searches,
@@ -347,5 +363,10 @@ async function runScope<T>(
       billedTo: tier === "byo" ? "tenant" : "platform",
       now,
     });
+    if (reconciled.error !== undefined) {
+      const failure = describeWriteFailure(reconciled.error, "record AI spending");
+      console.error(`metered: ${failure}`);
+      throw new Error(failure);
+    }
   }
 }
