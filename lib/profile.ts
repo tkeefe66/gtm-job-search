@@ -10,6 +10,7 @@
 // tailwind.config.ts scans ./app/** and ./components/** only.
 
 import type { FitInputs } from "@/lib/fit-inputs";
+import { RESUME_MAX_CHARS } from "@/lib/onboarding-prompt";
 import {
   DEFAULT_DOMAIN_BONUS,
   DEFAULT_MODERATE_TAIL,
@@ -238,7 +239,8 @@ function resolveAnswers(raw: unknown): OnboardingAnswers {
     wanted: optionalText(a.wanted, ""),
     where: optionalText(a.where, ""),
     dealbreakers: optionalText(a.dealbreakers, ""),
-    resume: optionalText(a.resume, ""),
+    // Raw source material has its own cap; profile prompt fields stay at 4k.
+    resume: typeof a.resume === "string" ? a.resume.slice(0, RESUME_MAX_CHARS) : "",
   };
 }
 
