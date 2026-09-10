@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { buildChatPrompt, type ChatMessage, type ChatPromptInput } from "./resume-chat-prompt";
+import { effectiveCareer } from "./effective-career";
 import { OPERATION_SCHEMA } from "./resume-ops";
 import { DESIGN_TOKENS } from "./resume-design-tokens";
 import type { CareerRecord, ResumeSelection, ThemeVocabulary } from "./resume-render/render";
@@ -171,7 +172,7 @@ describe("buildChatPrompt", () => {
 
   test("the bullet index carries a truncated preview, never the full bullet text", () => {
     const { system } = buildChatPrompt(FIXTURE_INPUT);
-    expect(system).not.toContain(LONG_BULLET_TEXT);
+    expect(system.split("BULLET INDEX")[1].split("CURRENT SELECTION")[0]).not.toContain(LONG_BULLET_TEXT);
     expect(system).toContain(LONG_BULLET_TEXT.slice(0, 80));
   });
 
@@ -279,4 +280,34 @@ describe("buildChatPrompt", () => {
     expect(system).toContain("Strength: 0.82");
     expect(system).not.toContain("0.8214285714285714");
   });
+});
+
+// Mutation: omitting the rendered document leaves the summary and full selected bullets inaccessible.
+test("chat receives the selected summary and complete visible bullet text", () => {
+  const career = { ...CAREER, positioning: [...CAREER.positioning,
+    { id: "alternate", themes: [], tagline: "Alternate", summary: "Leads complex platform migrations." }] };
+  const { system } = buildChatPrompt({ ...FIXTURE_INPUT, career,
+    selection: { positioningId: "alternate", bullets: { principal: ["p-b0"] } }, overrides: {} });
+  const document = system.split("CURRENT RÉSUMÉ CONTENT")[1]?.split("END CURRENT RÉSUMÉ CONTENT")[0];
+  expect(document).toContain("Leads complex platform migrations.");
+  expect(document).toContain(LONG_BULLET_TEXT);
+  expect(document).toContain("Test Candidate");
+  expect(document).not.toContain("Runs the machine.");
+  expect(document).not.toContain("Short bullet under the limit.");
+});
+
+// Mutation: using the base career instead of effective text exposes stale copy after a chat edit.
+test("chat sees edited summary and bullets and respects a cleared summary", () => {
+  const { career } = effectiveCareer(CAREER, [], {
+    summary: "Builds reliable revenue systems.", "bullet:principal:p-b0": "Reduced reporting time to 90 minutes."
+  });
+  const input = { ...FIXTURE_INPUT, career, overrides: {} };
+  const document = buildChatPrompt(input).system.split("CURRENT RÉSUMÉ CONTENT")[1]?.split("END CURRENT RÉSUMÉ CONTENT")[0];
+  expect(document).toContain("Builds reliable revenue systems.");
+  expect(document).toContain("Reduced reporting time to 90 minutes.");
+  expect(document).not.toContain("Runs the machine.");
+  const cleared = effectiveCareer(career, [], { summary: "" }).career;
+  const clearedDocument = buildChatPrompt({ ...input, career: cleared }).system.split("CURRENT RÉSUMÉ CONTENT")[1]?.split("END CURRENT RÉSUMÉ CONTENT")[0];
+  expect(clearedDocument).toBeDefined();
+  expect(clearedDocument).not.toContain("Builds reliable revenue systems.");
 });
