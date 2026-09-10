@@ -13,17 +13,17 @@ export default function ChatComposer({ value, onChange, onSend, disabled, busy =
     field.current.style.height = `${Math.min(field.current.scrollHeight, 144)}px`;
   }, [value]);
   return <div className={styles.composerArea}>
-    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); if (!disabled && value.trim()) onSend(); }}>
+    <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); if (!disabled && !busy && value.trim()) onSend(); }}>
       <textarea ref={field} rows={2} aria-label="Message résumé assistant" placeholder="Ask a question or describe a change…"
         value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
-            if (!disabled && value.trim()) onSend();
+            if (!disabled && !busy && value.trim()) onSend();
           }
         }}/>
-      <div className={styles.composerFooter}><span>Shift + Enter for a new line</span>
-        <button type="submit" disabled={disabled || !value.trim()} aria-label={busy ? "Working on your request" : "Send message"}>
+      <div className={styles.composerFooter}><span>{busy ? "Reply in progress · you can keep typing" : "Shift + Enter for a new line"}</span>
+        <button type="submit" disabled={disabled || busy || !value.trim()} aria-label={busy ? "Working on your request" : "Send message"}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
         </button>
       </div>
