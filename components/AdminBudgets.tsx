@@ -7,7 +7,8 @@ import { Spinner } from "./ui";
 const dollars = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 /** A spend bar. Amber past 75%, red at the ceiling — the point is to see it coming. */
-function Meter({ spent, ceiling }: { spent: number; ceiling: number }) {
+function Meter({ spent, ceiling }: { spent: number; ceiling: number | null }) {
+  if (ceiling === null) return <span className="text-xs text-ink/60">{dollars(spent)}</span>;
   const pct = ceiling > 0 ? Math.min(100, (spent / ceiling) * 100) : 0;
   const tone = pct >= 100 ? "bg-[#B42318]" : pct >= 75 ? "bg-[#B54708]" : "bg-ink/60";
   return (
@@ -56,9 +57,8 @@ export default function AdminBudgets() {
     <div className="mt-10">
       <h2 className="font-display text-xl text-ink">Spend</h2>
       <p className="mt-1 text-sm text-ink/60">
-        Daily contains a runaway; monthly is the outer bound. Raising your own
-        limit takes effect immediately — a loop cannot press this button, which is
-        why the cap can be hard without locking you out.
+        Daily and monthly caps apply to admin accounts. Other accounts use their
+        own API key; limits set with their provider are not available here.
       </p>
 
       {error && (
@@ -83,13 +83,17 @@ export default function AdminBudgets() {
                 <td className="py-3 pr-4">
                   <div className="text-ink">{t.email}</div>
                   <div className="text-xs text-ink/50">
-                    {t.role === "admin" ? "admin" : t.hasOwnKey ? "own API key — not metered" : "free"}
+                    {t.role === "admin" ? "admin" : t.hasOwnKey ? "own API key" : "API key required"}
                   </div>
                 </td>
                 <td className="py-3 pr-4"><Meter spent={t.spentTodayCents} ceiling={t.dailyCents} /></td>
                 <td className="py-3 pr-4"><Meter spent={t.spentMonthCents} ceiling={t.monthlyCents} /></td>
                 <td className="py-3">
-                  {editing === t.id ? (
+                  {t.role !== "admin" ? (
+                    <span className="text-xs text-ink/50">
+                      {t.hasOwnKey ? "Provider limit unavailable" : "AI calls disabled"}
+                    </span>
+                  ) : editing === t.id ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <label className="text-xs text-ink/60">
                         daily $
@@ -123,8 +127,8 @@ export default function AdminBudgets() {
                       onClick={() => {
                         setEditing(t.id);
                         setDraft({
-                          daily: (t.dailyCents / 100).toFixed(2),
-                          monthly: (t.monthlyCents / 100).toFixed(2),
+                          daily: t.dailyCents === null ? "" : (t.dailyCents / 100).toFixed(2),
+                          monthly: t.monthlyCents === null ? "" : (t.monthlyCents / 100).toFixed(2),
                         });
                       }}
                       className="rounded border border-slate px-2 py-1 text-xs hover:border-ink"
