@@ -1,3 +1,6 @@
+import { assertModelComplete } from "./model-response";
+import { parseModelJson } from "./json-response";
+import { DEFAULT_ROLE_SEARCH_MAX_SEARCHES, ROLE_SEARCH_MAX_TOKENS } from "./role-search-policy";
 import { billingScope, recordUsage } from "./billing-context";
 import { providerFor } from "./providers/registry";
 import { mustRefuseSearch } from "./providers/types";
@@ -110,7 +113,9 @@ export async function callWithWebSearch(opts: {
   maxTokens?: number;
   maxSearches?: number;
 }): Promise<string> {
-  return (await callWithWebSearchDetailed(opts)).text;
+  const result = await callWithWebSearchDetailed(opts);
+  assertModelComplete(result.stopReason);
+  return result.text;
 }
 
 /**
@@ -128,9 +133,8 @@ export async function callWithWebSearchDetailed(opts: {
   maxSearches?: number;
 }): Promise<DetailedResponse> {
   const { provider, apiKey, model, maxSearches } = await routing();
-  const cap = opts.maxSearches === undefined
-    ? maxSearches ?? undefined
-    : maxSearches === null ? opts.maxSearches : Math.min(opts.maxSearches, maxSearches);
+  const requested = opts.maxSearches ?? DEFAULT_ROLE_SEARCH_MAX_SEARCHES;
+  const cap = maxSearches === null ? requested : Math.min(requested, maxSearches);
   if (cap !== undefined && cap <= 0) throw new SpendLimitReachedError(billingScope()?.limitMessage);
   if (mustRefuseSearch(provider.searchCapEnforcement, cap ?? null)) {
     throw new SearchUnavailableError(provider.id);
@@ -141,7 +145,7 @@ export async function callWithWebSearchDetailed(opts: {
       model,
       system: opts.system,
       prompt: opts.prompt,
-      maxTokens: opts.maxTokens ?? 2000,
+      maxTokens: opts.maxTokens ?? ROLE_SEARCH_MAX_TOKENS,
       ...(cap !== undefined ? { maxSearches: cap } : {}),
     })
   );
@@ -168,25 +172,24 @@ export async function complete(opts: {
   jsonSchema?: Record<string, unknown>;
 }): Promise<string> {
   const { provider, apiKey, model } = await routing();
-  return collect(
-    await provider.complete({
+  const result = await provider.complete({
       apiKey,
       model,
       system: opts.system,
       prompt: opts.prompt,
       maxTokens: opts.maxTokens ?? 4000,
       ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
-    })
-  );
+    });
+  const text = await collect(result);
+  assertModelComplete(result.stopReason, !!opts.jsonSchema);
+  return text;
 }
 
 /**
  * The same call as `complete`, keeping the stop reason.
  *
- * `complete` discards it via `collect()`, which is fine for every caller that
- * predates the résumé chat agent (app/actions/resume-chat.ts) — but that
- * caller forces a schema-constrained tool call and MUST tell a response
- * genuinely truncated at `max_tokens` apart from one that finished cleanly:
+ * `complete` validates it before returning text. The résumé chat
+ * caller also needs the status to explain why it rejected a response:
  * the forced-tool path (lib/providers/anthropic.ts:96-104) returns
  * `JSON.stringify(toolBlock.input)` regardless of how the call stopped, so a
  * cut-off response still parses into a valid-LOOKING object with fields
@@ -214,37 +217,9 @@ export async function completeDetailed(opts: {
 }
 
 /**
- * Strips markdown code fences and extracts the first JSON value (array or
- * object) from a model response, then parses it.
+ * Extracts one complete JSON value from a framed model answer, ignoring
+ * bracketed citations and rejecting incomplete or ambiguous containers.
  */
 export function parseJson<T>(raw: string): T {
-  let text = raw.trim();
-
-  // Remove markdown fences if present.
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    text = fenceMatch[1].trim();
-  }
-
-  // Find the first array or object boundary.
-  const firstBracket = text.indexOf("[");
-  const firstBrace = text.indexOf("{");
-  let start = -1;
-  if (firstBracket === -1) start = firstBrace;
-  else if (firstBrace === -1) start = firstBracket;
-  else start = Math.min(firstBracket, firstBrace);
-
-  if (start > 0) {
-    text = text.slice(start);
-  }
-
-  // Trim trailing non-JSON content.
-  const lastBracket = text.lastIndexOf("]");
-  const lastBrace = text.lastIndexOf("}");
-  const end = Math.max(lastBracket, lastBrace);
-  if (end !== -1) {
-    text = text.slice(0, end + 1);
-  }
-
-  return JSON.parse(text) as T;
+  return parseModelJson<T>(raw);
 }

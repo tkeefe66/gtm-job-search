@@ -42,7 +42,7 @@
  * pause_turn, refusal. Only the first two mean "complete" for Anthropic.
  * OpenAI Responses uses completed; Google Gemini uses STOP.
  */
-const COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence", "completed", "STOP"]);
+import { isModelComplete } from "./model-response";
 
 export type SalvageDecision = "salvage" | "fail";
 
@@ -65,7 +65,7 @@ export type SalvageDecision = "salvage" | "fail";
  * map its own vocabulary onto these values, not a permissive default here.
  */
 export function salvageDecisionFor(stopReason: string | null): SalvageDecision {
-  return stopReason !== null && COMPLETE_STOP_REASONS.has(stopReason)
+  return isModelComplete(stopReason)
     ? "salvage"
     : "fail";
 }
@@ -122,7 +122,11 @@ export function salvageSchemaFor(
   const items: Record<string, unknown> = itemFields?.length
     ? {
         type: "object",
-        properties: Object.fromEntries(itemFields.map((f) => [f, { type: "string" }])),
+        properties: Object.fromEntries(itemFields.map((f) => [f,
+          f === "requirements" || f === "nice_to_haves"
+            ? { type: "array", items: { type: "string" } }
+            : f === "ic_flag" ? { type: "boolean" } : { type: "string" },
+        ])),
       }
     : { type: "object" };
 

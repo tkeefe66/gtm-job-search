@@ -27,7 +27,8 @@ import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { untrackedFromWatched } from "@/lib/untracked-companies";
 import { getWatchedCompanyKeys } from "@/app/actions/watchlist";
-import { ROLE_SEARCH_MAX_TOKENS } from "@/lib/role-search-policy";
+import { runRoleSearchBatches } from "@/lib/role-search-batches";
+import { ROLE_SEARCH_BATCH_SIZE, ROLE_SEARCH_MAX_TOKENS } from "@/lib/role-search-policy";
 
 export interface RoleSearchResult {
   matches: RoleMatch[];
@@ -189,42 +190,31 @@ async function findRolesByCriteriaInner(
         `(${reason}) — ${queries.join(" | ")}`
     );
 
-    const { text: raw, stopReason } = await callWithWebSearchDetailed({
-      system: roleSearchSystem(profile.searchSubject),
-      prompt: buildRoleSearchPrompt({
-        family,
-        queries,
-        criteria,
-        stackFamilyIntro: profile.stackFamilyIntro,
-        persona: profile.candidatePersona,
-        buildingConcept: profile.buildingConcept,
-        buildingUpside: profile.buildingUpside,
-      }),
-      // Many searches per call; search narration counts against the budget.
-      maxTokens: ROLE_SEARCH_MAX_TOKENS,
-      // The prompt's query list is advisory — the model decides how many
-      // searches to actually run, and each one is billed. This is the only
-      // hard ceiling on that bill (max_uses on the web_search tool block).
-      maxSearches,
+    const searched = await runRoleSearchBatches(queries, maxSearches, async (batch, batchCap) => {
+      const { text: raw, stopReason } = await callWithWebSearchDetailed({
+        system: roleSearchSystem(profile.searchSubject),
+        prompt: buildRoleSearchPrompt({
+          family, queries: batch, criteria,
+          stackFamilyIntro: profile.stackFamilyIntro,
+          persona: profile.candidatePersona,
+          buildingConcept: profile.buildingConcept,
+          buildingUpside: profile.buildingUpside,
+          resultLimit: Math.max(1, Math.floor(25 / Math.ceil(queries.length / ROLE_SEARCH_BATCH_SIZE))),
+        }),
+        maxTokens: ROLE_SEARCH_MAX_TOKENS,
+        maxSearches: batchCap,
+      });
+      const { items } = await parseOrSalvage<RoleMatch>({
+        raw, stopReason, key: "matches", itemNoun: "role match",
+        itemFields: ROLE_MATCH_FIELDS, label: `findRolesByCriteria(${family})`,
+        extract: arrayUnder<RoleMatch>("matches", ["company", "role_title"]),
+      });
+      return items;
     });
-
-    // Recovered rather than thrown: this call is one of the most expensive in
-    // the app, so discarding it over a formatting slip throws away everything
-    // it just paid for. A max_tokens response remains incomplete and is refused
-    // with the user-facing message owned by parseOrSalvage.
-    const { items } = await parseOrSalvage<RoleMatch>({
-      raw,
-      stopReason,
-      key: "matches",
-      itemNoun: "role match",
-      itemFields: ROLE_MATCH_FIELDS,
-      label: `findRolesByCriteria(${family})`,
-      extract: arrayUnder<RoleMatch>("matches"),
-    });
-    const matches = items.filter((m) => m.company && m.role_title);
+    const matches = searched.items;
 
     const fetchedAt = new Date().toISOString();
-    const { error: cacheError } = await supabase.forTenant(await resolveTenantId()).from("role_searches").upsert(
+    const { error: cacheError } = searched.error !== undefined ? { error: null } : await supabase.forTenant(await resolveTenantId()).from("role_searches").upsert(
       { family, search_term: "", roles: matches, fetched_at: fetchedAt },
       { onConflict: "tenant_id,family,search_term" }
     );
@@ -286,7 +276,7 @@ async function findRolesByCriteriaInner(
       matches,
       untrackedCompanies: await untrackedFrom(matches),
       fetchedAt,
-      error: cacheWriteError,
+      error: searched.error ?? cacheWriteError,
     };
   } catch (err) {
     console.error("findRolesByCriteria error:", err);

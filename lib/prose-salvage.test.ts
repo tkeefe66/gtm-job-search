@@ -101,6 +101,14 @@ describe("buildSalvagePrompt", () => {
 });
 
 describe("salvageSchemaFor", () => {
+  test("recovery preserves requirement arrays and the IC boolean", () => {
+    // Mutation: describe every field as a string, changing recovered facts' types.
+    const schema = salvageSchemaFor("roles", "role", ["requirements", "nice_to_haves", "ic_flag"]);
+    const props = schema.properties as Record<string, { items: { properties: Record<string, unknown> } }>;
+    expect(props.roles.items.properties.requirements).toEqual({ type: "array", items: { type: "string" } });
+    expect(props.roles.items.properties.nice_to_haves).toEqual({ type: "array", items: { type: "string" } });
+    expect(props.roles.items.properties.ic_flag).toEqual({ type: "boolean" });
+  });
   test("puts the array under the caller's key", () => {
     // Mutation this catches: returning a fixed `roles` key regardless of the
     // argument. Discover would then get {roles: [...]} for startups and its

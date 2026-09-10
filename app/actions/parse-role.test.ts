@@ -74,6 +74,14 @@ describe("scoreFit runs through the provider registry, not the raw SDK", () => {
     domainBonus: DEFAULT_DOMAIN_BONUS,
   };
 
+  test.each([null, "", false, "2", -1, 6, 2.5])("rejects invalid score %s", async score => {
+    // Mutation: coerce/clamp arbitrary values into a valid low score.
+    model.mockResolvedValue(JSON.stringify({ score, rationale: "Unavailable" }));
+    const result = await scoreFit({ ...role, fitInputs });
+    expect(result.score).toBe(0);
+    expect(result.error).toBeDefined();
+  });
+
   test("a score comes back through the facade", async () => {
     model.mockResolvedValue(JSON.stringify({ score: 4, rationale: "close fit" }));
     const res = await scoreFit({ ...role, fitInputs });

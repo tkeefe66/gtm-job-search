@@ -82,9 +82,8 @@ async function findAndSaveRolesInner(
     // Bound and logged rather than dropped. Falling through to the billed
     // search is the right BEHAVIOR — a cache that cannot be read cannot be
     // served — but doing it silently is how an unreachable database turns into
-    // an uncapped web search on every single click with nothing in the log to
-    // explain the bill. See the maxSearches note below: this path sets no
-    // ceiling at all.
+    // a billed web search on every click with nothing in the log to explain
+    // the bill. The shared facade applies its default search limit here.
     if (cacheReadError) {
       console.error(
         `findAndSaveRoles(${startup.company}): could not read the discovered_roles cache — ` +
@@ -120,7 +119,7 @@ async function findAndSaveRolesInner(
       // truncated the response before the JSON was ever emitted (stop_reason
       // max_tokens), so parseJson got prose and returned nothing. 8000 gives
       // the model room to finish its searches AND output the JSON array.
-      maxTokens: 8000,
+      maxTokens: 16000,
     });
 
     // A prose answer is recovered rather than thrown: without this the outer
@@ -133,13 +132,13 @@ async function findAndSaveRolesInner(
       itemNoun: "role",
       itemFields: ROLE_FIELDS,
       label: `findAndSaveRoles(${startup.company})`,
-      extract: arrayUnder<Role>("roles"),
+      extract: arrayUnder<Role>("roles", ["role_title"]),
     });
 
     // Persist roles to discovered_roles table.
     //
     // The result was discarded here, which made this the most expensive
-    // silence in the app: the web search above is UNCAPPED (no maxSearches),
+    // silence in the app: the web search above has already been billed,
     // so every repeat click re-bills the full set. A missing table after a
     // deploy without `node db/apply-schema.mjs` produced exactly that, with
     // nothing in the log connecting the two. Same treatment as

@@ -232,16 +232,16 @@ describe("pickQueries", () => {
 });
 
 describe("planQueries", () => {
-  const list = Array.from({ length: 39 }, (_, i) => `q${i}`);
+  const list = Array.from({ length: 60 }, (_, i) => `q${i}`);
 
-  test("no stored ceiling uses the 32-search default", () => {
+  test("no stored ceiling uses the 50-search default", () => {
     // Mutation this catches: restoring the old no-ceiling branch that offered
-    // all 39 queries and allowed 78 searches; production reached 34 searches
+    // all 60 queries and allowed 120 searches; production reached 34 searches
     // and truncated the response before its JSON array finished.
     const plan = planQueries(list, null);
-    expect(plan.queries).toHaveLength(32);
-    expect(plan.maxSearches).toBe(32);
-    expect(plan.reason).toContain("default ceiling 32");
+    expect(plan.queries).toHaveLength(50);
+    expect(plan.maxSearches).toBe(50);
+    expect(plan.reason).toContain("default ceiling 50");
   });
 
   test("a ceiling narrows the offer AND becomes the hard cap", () => {
@@ -256,7 +256,7 @@ describe("planQueries", () => {
 
   test("a ceiling above the query count cannot inflate the offer", () => {
     const plan = planQueries(list, 500);
-    expect(plan.queries.length).toBe(39);
+    expect(plan.queries.length).toBe(60);
     // An explicit user setting remains authoritative even above the default.
     expect(plan.maxSearches).toBe(500);
   });
@@ -295,13 +295,13 @@ describe("planQueries", () => {
     // (max_uses 0) — inconsistent, and the combination silently returns no
     // results. Whichever way 0 is resolved, the two must agree.
     const plan = planQueries(list, 0);
-    expect(plan.queries.length).toBe(32);
-    expect(plan.maxSearches).toBe(32);
+    expect(plan.queries.length).toBe(50);
+    expect(plan.maxSearches).toBe(50);
   });
 
   test("a negative stored ceiling uses the default too", () => {
     const plan = planQueries(list, -5);
-    expect(plan.queries.length).toBe(32);
+    expect(plan.queries.length).toBe(50);
     expect(plan.maxSearches).toBeGreaterThan(0);
   });
 

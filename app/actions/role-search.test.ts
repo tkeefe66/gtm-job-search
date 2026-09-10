@@ -30,7 +30,7 @@ vi.mock("@/lib/search-criteria", async (importOriginal) => {
       criteria: {
         titles: ["Director of Operations"],
         locations: ["Remote"],
-        stackTerms: Array.from({ length: 40 }, (_, i) => `Tool ${i + 1}`),
+        stackTerms: Array.from({ length: 60 }, (_, i) => `Tool ${i + 1}`),
         locationRule: "Remote roles only.",
         fitBrain: "An operations leader.",
       },
@@ -81,6 +81,18 @@ beforeEach(() => {
 });
 
 describe("findRolesByCriteria search boundaries", () => {
+  test("partial batches reach the user without replacing the complete cache", async () => {
+    // Mutation: cache a partial run as complete, or discard its successful first batch.
+    mocks.callWithWebSearchDetailed
+      .mockResolvedValueOnce({ text: '[{"company":"Acme","role_title":"Director"}]', stopReason: "end_turn" })
+      .mockResolvedValueOnce({ text: "[]", stopReason: "max_tokens" });
+    const result = await findRolesByCriteria("stack", true);
+    expect(result.matches).toEqual([{ company: "Acme", role_title: "Director" }]);
+    expect(result.error).toContain("Partial results");
+    expect(result.fetchedAt).not.toBeNull();
+    expect(mocks.upsert).not.toHaveBeenCalled();
+    expect(mocks.callWithWebSearchDetailed).toHaveBeenCalledTimes(2);
+  });
   test("uses the larger output allowance and default search ceiling", async () => {
     // Mutation this catches: restoring 8,000 output tokens or allowing an
     // unset setting to fan out beyond the new 32-search default.
@@ -91,8 +103,9 @@ describe("findRolesByCriteria search boundaries", () => {
 
     await findRolesByCriteria("stack", true);
 
+    expect(mocks.callWithWebSearchDetailed).toHaveBeenCalledTimes(5);
     expect(mocks.callWithWebSearchDetailed).toHaveBeenCalledWith(
-      expect.objectContaining({ maxTokens: 16000, maxSearches: 32 })
+      expect.objectContaining({ maxTokens: 16000, maxSearches: 10 })
     );
   });
 

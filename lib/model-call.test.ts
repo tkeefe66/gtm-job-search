@@ -102,12 +102,12 @@ describe("a metered call on a provider that cannot cap in-request", () => {
     expect(searchAndComplete).not.toHaveBeenCalled();
   });
 
-  test("does not affect an uncapped BYO call", async () => {
+  test("the default ceiling also applies to BYO calls", async () => {
     enforcement = "none";
-    await runWithBilling(scope({ maxSearches: null }), () =>
+    await expect(runWithBilling(scope({ maxSearches: null }), () =>
       callWithWebSearch({ system: "s", prompt: "p" })
-    );
-    expect(searchAndComplete).toHaveBeenCalled();
+    )).rejects.toBeInstanceOf(SearchUnavailableError);
+    expect(searchAndComplete).not.toHaveBeenCalled();
   });
 
   test("does not affect a non-search call", async () => {
@@ -129,4 +129,18 @@ describe("completeDetailed", () => {
     expect(complete.mock.calls[0][0]).toMatchObject({ jsonSchema: schema, maxTokens: 2000 });
     expect(res).toEqual({ text: '{"a":1}', stopReason: "max_tokens" });
   });
+});
+
+
+test("all search callers inherit the 50-search default", async () => {
+  // Mutation: leave an omitted per-call ceiling uncapped.
+  await runWithBilling(scope(), () => callWithWebSearch({ system: "s", prompt: "p" }));
+  expect(searchAndComplete.mock.calls[0][0].maxSearches).toBe(50);
+});
+test("text-only completion refuses incomplete JSON after recording usage", async () => {
+  // Mutation: discard stopReason while returning parseable partial output.
+  complete.mockResolvedValue({ text: '{"roles":[]}', usage, stopReason: "max_tokens" });
+  const s = scope();
+  await expect(runWithBilling(s, () => completeCall({ system: "s", prompt: "p" }))).rejects.toThrow();
+  expect(s.outputTokens).toBe(usage.outputTokens);
 });

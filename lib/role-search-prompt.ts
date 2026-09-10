@@ -31,6 +31,8 @@ export function buildRoleSearchPrompt(args: {
   persona: string;
   buildingConcept: string;
   buildingUpside: string;
+  /** Distribute the usual result target across independently bounded batches. */
+  resultLimit?: number;
   /** Injected so the date line is pinnable. Defaults to now, as it did inline. */
   now?: Date;
 }): string {
@@ -43,5 +45,5 @@ Run as many of these searches as you can and combine the results. ${dateContextL
 ${roleExtractionSchema(args.persona, args.buildingConcept, args.buildingUpside)}
 - company (string, the hiring company name — REQUIRED, never empty)
 
-Return up to 25 roles. Deduplicate identical postings. Return ONLY the JSON array.`;
+Return up to ${args.resultLimit ?? 25} roles. Deduplicate identical postings. Return ONLY the JSON array.`;
 }

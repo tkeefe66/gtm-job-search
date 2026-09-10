@@ -99,6 +99,7 @@ export const ROLE_FIELDS = [
   "salary_range",
   "description_summary",
   "fit_signal",
+  "ic_flag",
   "requirements",
   "nice_to_haves",
   "department",
@@ -302,4 +303,3 @@ export interface SavedResume extends SavedResumeSummary {
   // text into the RSC payload of every saved-resume view for nobody.
   // restoreSavedVersion reads content with its own tenant-scoped query.
 }
-

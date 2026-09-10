@@ -69,9 +69,8 @@ beforeEach(() => {
 
 describe("discoverStartups search limits", () => {
   test("allows a complete 20-company response without allowing an unbounded search fan-out", async () => {
-    // Mutation this catches: restoring the 4,000-token ceiling or omitting the
-    // explicit search ceiling, which reproduced as 28 searches followed by a
-    // response cut off halfway through its JSON array.
+    // Mutation: restore the smaller output budget. The shared facade's
+    // default search ceiling is separately asserted in model-call.test.ts.
     mocks.callWithWebSearchDetailed.mockResolvedValue({
       text: "[]",
       stopReason: "end_turn",
@@ -80,7 +79,7 @@ describe("discoverStartups search limits", () => {
     await discoverStartups(undefined, "7d");
 
     expect(mocks.callWithWebSearchDetailed).toHaveBeenCalledWith(
-      expect.objectContaining({ maxTokens: 8000, maxSearches: 12 })
+      expect.objectContaining({ maxTokens: 16000 })
     );
   });
 

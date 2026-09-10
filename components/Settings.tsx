@@ -1084,7 +1084,7 @@ export default function Settings({ isAdmin = false }: { isAdmin?: boolean }) {
 
       <SectionCard
         label={LABELS.ceiling}
-        help="A limit on one By Role run, counted in web searches. The default is 32; set a custom value when you want a different coverage/cost tradeoff."
+        help="A limit on one By Role run, counted in web searches. The default is 50; set a custom value when you want a different coverage/cost tradeoff."
         error={errors.ceiling}
         notice={notices.ceiling}
       >
@@ -1097,7 +1097,7 @@ export default function Settings({ isAdmin = false }: { isAdmin?: boolean }) {
                 setDraft((d) => ({ ...d, ceilingEnabled: !e.target.checked }))
               }
             />
-            Use default (32)
+            Use default (50)
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input

@@ -110,3 +110,12 @@ describe("tailorResumeForJob when the theme-derivation call fails", () => {
     expect(h.state.upsertCalled).toBe(true);
   });
 });
+
+
+test.each([{error: "No answer"}, {themes: ["invented-theme"]}, {themes: [null]}])("rejects invalid theme result %s before saving", async answer => {
+  // Mutation: default a missing array to [] or silently filter unknown IDs.
+  model.mockResolvedValue(JSON.stringify(answer));
+  const result = await tailorResumeForJob("11111111-1111-1111-1111-111111111111");
+  expect(result.error).toBeDefined();
+  expect(h.state.upsertCalled).toBe(false);
+});

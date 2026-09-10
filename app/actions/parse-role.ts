@@ -83,7 +83,11 @@ async function scoreFitInner(
     });
 
     const result = parseJson<{ score: number; rationale: string }>(raw);
-    return { score: Math.min(5, Math.max(1, Math.round(result.score))), rationale: result.rationale };
+    if (!result || typeof result.score !== "number" || !Number.isInteger(result.score) ||
+        result.score < 1 || result.score > 5 || typeof result.rationale !== "string") {
+      throw new Error("Invalid fit-score response");
+    }
+    return { score: result.score, rationale: result.rationale };
   } catch (err) {
     // The real error is logged, and logged is the only place it goes.
     console.error("scoreFit error:", err);

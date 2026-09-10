@@ -9,11 +9,10 @@
 // the gate lives here once and each caller supplies only the part that is
 // genuinely its own: how to read its own shape out of the parsed JSON.
 
-import { complete, parseJson } from "@/lib/model-call";
+import { completeDetailed, parseJson } from "@/lib/model-call";
 import {
   SALVAGE_SYSTEM,
   buildSalvagePrompt,
-  salvageDecisionFor,
   salvageSchemaFor,
 } from "@/lib/prose-salvage";
 
@@ -24,21 +23,15 @@ export interface SalvageOutcome<T> {
   salvaged: boolean;
 }
 
-export const SEARCH_RESPONSE_TOO_LARGE =
-  "The search produced too much data to finish. Please retry.";
+export { SEARCH_RESPONSE_TOO_LARGE } from "./model-response";
+import { assertModelComplete, ModelResponseError } from "./model-response";
+import { ROLE_SEARCH_MAX_TOKENS } from "./role-search-policy";
+import { ROLE_MATCH_FIELDS, STARTUP_FIELDS } from "./types";
 
 /**
- * Parse a web-search response, recovering it under constrained decoding if the
- * model answered in prose.
- *
- * `extract` is the caller's own shape logic and runs against BOTH the original
- * parse and the salvaged one, so a caller cannot accidentally accept a shape on
- * the recovery path that it would have rejected on the normal one.
- *
- * Truncation is NOT recoverable and rethrows — see salvageDecisionFor. The
- * caller's existing error handling then behaves exactly as it did before this
- * function existed, which is the point: nothing about the failure path changes
- * except that non-truncated prose now gets a second, cheap chance.
+ * Validate completion before parsing. Recover formatting once with the same
+ * output allowance, then validate completion and shape again. Wrong envelopes
+ * never become empty listings; recovered results retain separate provenance.
  */
 export async function parseOrSalvage<T>(opts: {
   raw: string;
@@ -57,49 +50,32 @@ export async function parseOrSalvage<T>(opts: {
   label: string;
   extract: (parsed: unknown) => { items: T[]; message?: string };
 }): Promise<SalvageOutcome<T>> {
+  assertModelComplete(opts.stopReason);
+  let parsed: unknown;
   try {
-    return { ...opts.extract(parseJson<unknown>(opts.raw)), salvaged: false };
-  } catch (err) {
-    if (salvageDecisionFor(opts.stopReason) === "fail") {
-      console.error(
-        `${opts.label}: response was truncated (stop_reason=${opts.stopReason}); not salvaging — ` +
-          `raise maxTokens if this recurs. Raw head: ${opts.raw.slice(0, 200)}`
-      );
-      if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(opts.stopReason ?? "")) {
-        throw new Error(SEARCH_RESPONSE_TOO_LARGE);
-      }
-      throw err;
-    }
-    console.warn(
-      `${opts.label}: response was prose, not JSON (stop_reason=${opts.stopReason}); ` +
-        `re-reading it under constrained decoding. Raw head: ${opts.raw.slice(0, 200)}`
-    );
-
-    // A salvage that itself fails rethrows the ORIGINAL parse error, not its
-    // own: the first failure is what actually happened to this call, and
-    // replacing it would hide the real response behind a second-order message.
-    let salvagedRaw: string;
+    parsed = parseJson<unknown>(opts.raw);
+  } catch {
+    console.warn(`${opts.label}: invalid JSON; attempting one format recovery (${opts.raw.length} characters)`);
     try {
-      salvagedRaw = await complete({
+      const recovery = await completeDetailed({
         system: SALVAGE_SYSTEM,
         prompt: buildSalvagePrompt(opts.raw, opts.itemNoun, opts.itemFields),
-        // No search, and the input is one already-generated answer, so this is
-        // small and cheap next to the call that produced the prose.
-        maxTokens: 4000,
+        maxTokens: ROLE_SEARCH_MAX_TOKENS,
         jsonSchema: salvageSchemaFor(opts.key, opts.itemNoun, opts.itemFields),
       });
-    } catch (salvageErr) {
-      console.error(
-        `${opts.label}: salvage call failed — ` +
-          `${salvageErr instanceof Error ? salvageErr.message : String(salvageErr)}`
-      );
-      throw err;
+      assertModelComplete(recovery.stopReason, true);
+      const extracted = opts.extract(parseJson<unknown>(recovery.text));
+      console.log(`${opts.label}: recovered ${extracted.items.length} item(s)`);
+      return { ...extracted, salvaged: true };
+    } catch (error) {
+      console.error(`${opts.label}: response recovery failed (${error instanceof Error ? error.name : "unknown"})`);
+      if (error instanceof ModelResponseError) throw error;
+      throw new ModelResponseError("The search response could not be recovered. Please retry.");
     }
-
-    const extracted = opts.extract(parseJson<unknown>(salvagedRaw));
-    console.log(`${opts.label}: salvaged ${extracted.items.length} item(s) from a prose response`);
-    return { ...extracted, salvaged: true };
   }
+  // An explicit error/wrong envelope is not a formatting slip. Do not ask
+  // recovery to turn an error object into a successful empty listing.
+  return { ...opts.extract(parsed), salvaged: false };
 }
 
 /**
@@ -109,15 +85,35 @@ export async function parseOrSalvage<T>(opts: {
  * SALVAGED one differ by construction — the prompts ask for a bare array, while
  * the salvage schema must nest it under a key to also carry `message`.
  */
-export function arrayUnder<T>(key: string) {
+export function arrayUnder<T>(key: string, requiredFields: readonly string[] = []) {
   return (parsed: unknown): { items: T[]; message?: string } => {
-    if (Array.isArray(parsed)) return { items: parsed as T[] };
-    if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
-      const items = Array.isArray(obj[key]) ? (obj[key] as T[]) : [];
-      const message = typeof obj.message === "string" ? obj.message : undefined;
-      return { items, message };
-    }
-    return { items: [] };
+    const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown> : null;
+    if (obj && ("error" in obj || "errors" in obj)) throw new ModelResponseError();
+    const items = Array.isArray(parsed) ? parsed : obj?.[key];
+    if (!Array.isArray(items) || items.some(item =>
+      !item || typeof item !== "object" || Array.isArray(item) ||
+      requiredFields.some(field => typeof item[field] !== "string" || !item[field].trim()) ||
+      !validItemFields(item, key)
+    )) throw new ModelResponseError();
+    const message = typeof obj?.message === "string" ? obj.message : undefined;
+    return Array.isArray(parsed) ? { items: items as T[] } : { items: items as T[], message };
   };
+}
+
+function validItemFields(item: Record<string, unknown>, key: string): boolean {
+  const fields: readonly string[] = key === "roles" || key === "matches"
+    ? ROLE_MATCH_FIELDS : key === "startups" ? STARTUP_FIELDS : [];
+  for (const field of fields) {
+    if (!(field in item)) continue;
+    const value = item[field];
+    if (field === "requirements" || field === "nice_to_haves") {
+      if (!Array.isArray(value) || value.some(v => typeof v !== "string")) return false;
+    } else if (field === "ic_flag") {
+      if (typeof value !== "boolean") return false;
+    } else if (typeof value !== "string") return false;
+  }
+  if ("extras" in item && (!item.extras || typeof item.extras !== "object" ||
+      Array.isArray(item.extras) || Object.values(item.extras).some(v => typeof v !== "string"))) return false;
+  return true;
 }

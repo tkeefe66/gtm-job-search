@@ -119,7 +119,11 @@ async function deriveThemes(job: JobSummaryFields): Promise<{ themes: string[]; 
     const raw = await complete({ system, prompt, maxTokens: 500 });
     const parsed = parseJson<ThemeResponse>(raw);
     const validIds = new Set((themeVocabulary as ThemeVocabulary).themes.map((t) => t.id));
-    const themes = Array.isArray(parsed.themes) ? parsed.themes.filter((id) => validIds.has(id)) : [];
+    if (!parsed || !Array.isArray(parsed.themes) ||
+        parsed.themes.some(id => typeof id !== "string" || !validIds.has(id))) {
+      throw new Error("Invalid theme-selection response");
+    }
+    const themes = parsed.themes;
     return { themes };
   } catch (err) {
     // The real error is logged, and logged is the only place it goes — same

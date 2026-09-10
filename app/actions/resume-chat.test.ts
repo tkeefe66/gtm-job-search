@@ -171,6 +171,17 @@ beforeEach(() => {
 });
 
 describe("sendChatTurn: truncation", () => {
+  test.each(["pause_turn", "refusal", null])("rejects valid-looking operations without a complete answer (%s)", async stopReason => {
+    // Mutation: check only the token-limit denylist and apply an unfinished operation.
+    completeDetailed.mockResolvedValue({
+      text: JSON.stringify({ reply: "Done", operations: [{ op: "add_bullet", roleId: "principal", bulletId: "p-b1" }] }),
+      stopReason,
+    });
+    const result = await sendChatTurn("job-1", "add the reporting bullet");
+    expect(result.rejected).toBeDefined();
+    expect(result.applied).toEqual([]);
+    expect(h.state.tailoredResumesUpsertCalled).toBe(false);
+  });
   test("a response cut off at max_tokens is refused, not partially applied", async () => {
     completeDetailed.mockResolvedValue({
       // Deliberately not valid JSON — a truncated response never reaches

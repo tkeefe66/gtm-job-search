@@ -98,7 +98,7 @@ audit and a dedicated sweep still missed four.
 
 **Search criteria are user-editable at `/settings`** — target titles, location terms, stack terms (labeled "Tools of the trade" on the page — the key stays `stackTerms`, only the label changed), the location rule, the fit brain, an optional search ceiling, and an optional minimum base compensation. They are stored one row per key in `app_settings` (key/value jsonb, so a new setting needs no migration) and resolved by `loadCriteria()` in `lib/search-criteria.ts`, which overlays saved rows on the shipped `DEFAULT_*` constants in that same file. Nothing is duplicated across prompts any more: every consumer takes the resolved `Criteria` as a parameter. The 1–5 rubric is `buildFitPrompt` in **`lib/fit-prompt.ts`**, not `parse-role.ts`: `"use server"` forbids non-async exports, so nothing in `parse-role.ts` can be exported pure or reached from a test. `scoreFit` itself stays in `app/actions/parse-role.ts` (model, system prompt, JSON parsing) and takes the brain plus the floor as an argument (`FitInputs`, from `loadScoringInputs()`). The fit prompt's other career-specific fragments — the 2/3/4 scoring-guide clause tails (`weakFitTail`/`moderateTail`/`strongTail`), `titleScope`, and `domainBonus` — now arrive through that same `FitInputs` rather than being read off a module constant, and `scoringInputsFrom` in `lib/search-criteria.ts` now fills them from the tenant's own profile — `profileFrom(rows)` in `lib/settings-store.ts` reads the `PROFILE_KEY` row and `resolveProfile()` repairs it, falling back field-by-field to the shipped GTM text (`DEFAULT_WEAK_FIT_TAIL`, `DEFAULT_TITLE_SCOPE`, `DEFAULT_DOMAIN_BONUS`, etc., all still in `lib/fit-prompt.ts` as `DEFAULT_PROFILE`'s values) only where a stored value is missing or the wrong shape. See the profile paragraph below for the full mechanism, including the one field — `fitBrain` — that does NOT fall back to anyone's career. Two checked-in fixtures in `lib/__fixtures__/` (`fit-prompt.no-floor.txt` and `.with-floor.txt`) staying byte-identical through that extraction is what proves it changed no behaviour: they pin the rendered prompt itself, not just the builder that produces it, so a change to what the model receives shows up as a diff even if every unit test around the builder still passes. The third fixture, `.empty-blocks.txt`, is NOT part of that proof and cannot be — it was created by the extraction commit itself, so it has no pre-extraction state to be identical to; it pins a configuration (both optional blocks empty) that had no rendering before. Its guard is the cross-fixture drift test instead. Changing what "a good fit" means = edit the fit brain on `/settings`, then accept the rescore offer. A save clears only the caches that change invalidates and, for crawler-relevant keys only, stamps `criteria_changed_at` — both decided in `lib/settings-effects.ts`. With `app_settings` empty every search runs on the same criteria it did before the settings page existed, with ONE deliberate exception: the By Role run is now uncapped by default rather than capped at 15 searches (~$1.13 against ~$0.55 — see `MAX_QUERY_MULTIPLIER` below).
 
-**Current By Role ceiling (supersedes the older uncapped-default sentence above):** with no saved search ceiling, a run uses the app default of at most 32 web searches. An explicit positive ceiling remains authoritative.
+**Current By Role ceiling (supersedes the older uncapped-default sentence above):** with no saved search ceiling, a run uses the app default of at most 50 web searches. An explicit positive ceiling remains authoritative.
 
 **The fit prompt is pinned by checked-in fixtures** (`lib/__fixtures__/fit-prompt.no-floor.txt`, `.with-floor.txt` and `.empty-blocks.txt`, rendered from `fit-prompt-inputs.ts`), so any change to the prompt shows up as a diff in the rendered text rather than only in the builder. **Regenerating a fixture requires reading the diff in the same commit** — regeneration blesses whatever the code currently emits, so a commit that touches only fixtures is a red flag, not a routine refresh.
 
@@ -295,12 +295,11 @@ set, `pickQueries` strides the enumeration down to it (advisory — the model
 decides what to run) and that same number becomes `callWithWebSearch`'s
 `maxSearches`, which sets the `web_search` block's `max_uses` and is the actual
 ceiling on billed searches. With no saved ceiling, `pickQueries` offers a
-proportional spread of at most 32 queries and `max_uses` is at most 32 (for a
+proportional spread of at most 50 queries and the total search allowance is at most 50 (for a
 smaller grid, `MAX_QUERY_MULTIPLIER ×` the query count may be lower). A stored
 ceiling below 1 is ignored with a warning and falls back to that default; an
-explicit positive ceiling, including one above 32, remains authoritative.
-Both the sent list and the searches Claude
-actually issued are logged. Results cache
+explicit positive ceiling, including one above 50, remains authoritative.
+By Role splits the grid into requests of at most 10 queries/searches each; the sum of request caps never exceeds the selected ceiling. A failed later batch returns earlier results with a warning, without replacing the complete search cache. Both the sent list and the searches actually issued are logged. Results cache
 in `role_searches` per family and route through the same `lib/ingest-roles.ts`
 path as the crawler. The Discover tab has two modes: by company (funding) and
 by role.
@@ -356,21 +355,14 @@ plan was written on top of the wrong figure; the same file then carried a
 60–120s crawl estimate nobody had ever measured. Full design, measurements and
 caveats: `docs/superpowers/specs/2026-08-17-crawl-throughput-design.md`.
 
-**A careers page dead for a week stops being tracked.** `lib/dead-tracking.ts`
-plus `watchlist.failing_since` (migration 010): the clock starts on the first
-failure of a run and is cleared by any success, and after
-`DEAD_PAGE_GRACE_DAYS` (7) with at least `DEAD_PAGE_MIN_FAILURES` (2) the row is
-set `tracking_enabled = false`. Two failures minimum because at a 14-day interval
-a single failure is the only evidence available at day 7, and it is as likely a
-timeout as a dead page. `"empty"` is NOT a failure — a page that loads and lists
-nothing is working. This REPLACED a proposed exponential backoff, deliberately:
-backing off delays the very evidence that proves a page is dead. A manual
-tracking toggle clears `failing_since` in both directions, which is the only
-thing distinguishing "the crawler gave up" from "the user switched it off" —
-`components/Watchlist.tsx` renders different copy for each, and
-`lib/crawl-health.ts` announces the dropped count above the fold because the
-`Not tracked` section is COLLAPSED by default and the notice was otherwise
-invisible.
+**Model failures never disable company tracking.** The old generic crawl-error
+counter treated token exhaustion, malformed JSON and provider failures as
+unreachable careers pages. That automatic-disable path was removed on
+2026-09-10: the current pipeline has no verified page-unavailability result.
+Failed and missing-URL runs retain their diagnostic status without advancing
+dead-page counters; successful listings clear the old counters. Historical
+disabled rows are not automatically re-enabled because they may reflect a
+user's choice. Manual tracking toggles remain available.
 
 **Roles are
 never DISCOVERED through ATS vendor or job-aggregator APIs** — the HTML path
@@ -841,3 +833,17 @@ All three were closed in one pass. Recorded rather than deleted, because each on
 The repo was inherited from a previous owner (git history before `d2bed2d` contains his `.claude/skills/` job-search workflow and an accidentally committed `.env.production`). Don't resurrect anything from that era; this app is the multi-tenant, career-agnostic tool described above, not that owner's single-career job-search workflow.
 
 **That `.env.production` is NOT a credential leak, and the history is safe to push or open-source.** Audited 2026-08-15: it is a `vercel env pull` scaffold, added in `a304725` and deleted in `165b2c0`, and its sensitive values are EMPTY — `ANTHROPIC_API_KEY` and the Supabase keys are zero-length, and `DATABASE_URL` and `CRON_SECRET` were never in it at all. Its one real value is a `VERCEL_OIDC_TOKEN` belonging to `chadholdorfs-projects` (the previous owner, not this one) that expired 2026-06-29. **Measure values before calling something a leak** — this file's alarming name alone drove a rotation and a "can never be public" claim that were both unnecessary, and the wrong conclusion was repeated across a whole session before anyone ran `git show`.
+
+## Model response integrity (2026-09-10)
+
+All web-search calls inherit a default cap of 50 through `lib/model-call.ts`;
+explicit smaller limits and remaining spending allowances still bind.
+Providers unable to enforce that cap refuse the search. Text-only completions
+now verify completion before returning text; detailed callers must use
+`assertModelComplete` before parsing (forced tools permit `tool_use`).
+`parseOrSalvage` checks completion on both the original and recovery responses,
+uses 16,000 tokens for recovery, validates list envelopes and supplied field
+types, and keeps recovered output excluded from crawler closure evidence.
+Unexpected envelopes are errors, never empty lists. JSON extraction handles
+balanced values and bracketed narration without accepting nested fragments.
+Fit scores must be integer numbers 1–5; résumé themes must be known IDs.

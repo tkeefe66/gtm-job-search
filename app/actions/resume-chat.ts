@@ -20,6 +20,7 @@ import { requireResumeAdmin } from "@/lib/require-resume-admin";
 import { parseGeometry } from "@/lib/page-geometry";
 import { evaluateHouseStyle } from "@/lib/house-style";
 import { withBudget } from "@/lib/metered";
+import { isModelComplete } from "@/lib/model-response";
 import { completeDetailed, parseJson, type DetailedResponse } from "@/lib/model-call";
 import { supabase } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
@@ -462,19 +463,21 @@ export async function sendChatTurn(jobId: string, message: string, geometry?: un
   // response cut off at max_tokens still parses into a valid-LOOKING object
   // with operations silently missing — a turn like that is refused outright,
   // never partially applied.
-  if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(completion!.stopReason ?? "")) {
+  if (!isModelComplete(completion!.stopReason, true)) {
+    const refusal = ["max_tokens", "MAX_TOKENS", "incomplete"].includes(completion!.stopReason ?? "")
+      ? TRUNCATED_REPLY : UNREADABLE_REPLY;
     const updated: StoredChatMessage[] = [
       ...priorMessages,
       { role: "user", text: message },
-      { role: "assistant", text: TRUNCATED_REPLY },
+      { role: "assistant", text: refusal },
     ];
     const persisted = await persistTurn(actor.tenantId, jobId, updated);
     return {
-      reply: TRUNCATED_REPLY,
+      reply: refusal,
       applied: [],
       changedDocument: false,
       career: null,
-      rejected: TRUNCATED_REPLY,
+      rejected: refusal,
       selection: currentSelection,
       overrides,
       coverage: context.coverage,

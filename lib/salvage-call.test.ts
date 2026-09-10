@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 // vi.hoisted rather than a top-level await import: vi.mock is hoisted above
 // const declarations, and a top-level await here fails tsc under this repo's
 // module target even though vitest runs it happily.
-const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
+const { completeDetailed: complete } = vi.hoisted(() => ({ completeDetailed: vi.fn() }));
 
 vi.mock("@/lib/model-call", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./model-call")>();
-  return { ...actual, complete };
+  return { ...actual, completeDetailed: complete };
 });
 
 import { arrayUnder, parseOrSalvage } from "./salvage-call";
@@ -43,7 +43,7 @@ describe("parseOrSalvage on a response that parses", () => {
 
 describe("parseOrSalvage on prose", () => {
   test("recovers the items through a constrained-decoding call", async () => {
-    complete.mockResolvedValue(JSON.stringify({ roles: [{ role_title: "Head of RevOps" }] }));
+    complete.mockResolvedValue({ text: JSON.stringify({ roles: [{ role_title: "Head of RevOps" }] }), stopReason: "tool_use" });
 
     const out = await parseOrSalvage({
       raw: PROSE,
@@ -63,7 +63,7 @@ describe("parseOrSalvage on prose", () => {
     // would then be free to answer in prose again — the exact failure it exists
     // to fix — and the test would still pass on the happy path because the mock
     // returns JSON regardless. Asserting the schema is what discriminates.
-    complete.mockResolvedValue(JSON.stringify({ startups: [] }));
+    complete.mockResolvedValue({ text: JSON.stringify({ startups: [] }), stopReason: "tool_use" });
 
     await parseOrSalvage({
       raw: PROSE,
@@ -82,7 +82,7 @@ describe("parseOrSalvage on prose", () => {
   });
 
   test("a stop_sequence response salvages", async () => {
-    complete.mockResolvedValue(JSON.stringify({ roles: [] }));
+    complete.mockResolvedValue({ text: JSON.stringify({ roles: [] }), stopReason: "tool_use" });
 
     const out = await parseOrSalvage({
       raw: PROSE, stopReason: "stop_sequence", key: "roles", itemNoun: "role",
@@ -137,10 +137,8 @@ describe("parseOrSalvage on an incomplete response", () => {
 });
 
 describe("parseOrSalvage when the salvage itself fails", () => {
-  test("rethrows the ORIGINAL parse error, not the salvage error", async () => {
-    // Mutation this catches: rethrowing salvageErr. The user- or log-facing
-    // message would then describe a follow-up call nobody knows happened,
-    // hiding what the search actually returned.
+  test("returns a safe recovery failure instead of raw provider or parser text", async () => {
+    // Mutation: propagate raw provider errors instead of a safe recovery failure.
     complete.mockRejectedValue(new Error("rate limited"));
 
     await expect(
@@ -148,11 +146,11 @@ describe("parseOrSalvage when the salvage itself fails", () => {
         raw: PROSE, stopReason: "end_turn", key: "roles", itemNoun: "role",
         label: "test", extract: arrayUnder("roles"),
       })
-    ).rejects.toThrow(/is not valid JSON/);
+    ).rejects.toThrow("The search response could not be recovered. Please retry.");
   });
 
   test("rethrows the original error when the salvage returns prose too", async () => {
-    complete.mockResolvedValue("Still prose, sorry.");
+    complete.mockResolvedValue({ text: "Still prose, sorry.", stopReason: "tool_use" });
 
     await expect(
       parseOrSalvage({
@@ -182,8 +180,8 @@ describe("arrayUnder", () => {
     expect(arrayUnder("roles")({ roles: [], message: "none open" }).message).toBe("none open");
   });
 
-  test("a keyed object whose array is missing yields no items rather than throwing", () => {
-    expect(arrayUnder("roles")({ message: "none" })).toEqual({ items: [], message: "none" });
+  test("a keyed object whose array is missing is invalid", () => {
+    expect(() => arrayUnder("roles")({ message: "none" })).toThrow();
   });
 
   test("ignores a non-string message", () => {

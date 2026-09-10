@@ -1,3 +1,4 @@
+import { ModelResponseError } from "./model-response";
 import {
   callStructured,
   callWithWebSearch,
@@ -18,7 +19,7 @@ import {
   fetchBoardPostings,
   resolveBoardForCompany,
 } from "@/lib/resolve-job-link";
-import { parseOrSalvage } from "@/lib/salvage-call";
+import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_FIELDS } from "@/lib/types";
 import { NORMALIZED_COMPANY_SQL, normalizeCompanyName, normalizeTitle } from "@/lib/role-key";
 import type { FitInputs } from "@/lib/fit-inputs";
@@ -31,13 +32,11 @@ import {
   type Criteria,
 } from "@/lib/search-criteria";
 import { readCriteriaChangedAt } from "@/lib/settings-store";
-import { shouldStopTracking, stoppedTrackingReason } from "@/lib/dead-tracking";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type {
   CrawlMethod,
   CrawlStatus,
   Role,
-  RolesResult,
   TrackedCompany,
 } from "@/lib/types";
 
@@ -220,9 +219,10 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
   });
   try {
     const parsed = parseJson<{ careers_url: string }>(raw);
-    return parsed.careers_url?.trim() || null;
+    if (!parsed || typeof parsed.careers_url !== "string") throw new ModelResponseError();
+    return parsed.careers_url.trim() || null;
   } catch {
-    return null;
+    throw new ModelResponseError("The careers-page lookup returned an invalid answer. Please retry.");
   }
 }
 
@@ -230,37 +230,15 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
 // network involved, so the parse-failure logging (fix 7, 2026-08-12
 // consolidated wave) can be pinned directly.
 export function rolesFrom(parsed: unknown): { items: Role[]; message?: string } {
-  if (Array.isArray(parsed)) return { items: parsed as Role[] };
-  if (parsed && typeof parsed === "object" && "roles" in parsed) {
-    const obj = parsed as RolesResult;
-    return { items: obj.roles ?? [], message: obj.message };
-  }
-  return { items: [] };
+  return arrayUnder<Role>("roles", ["role_title"])(parsed);
 }
 
 export function rolesFromRaw(raw: string): Role[] {
-  let parsed: Role[] | RolesResult;
-  try {
-    parsed = parseJson<Role[] | RolesResult>(raw);
-  } catch (err) {
-    // parseJson throwing straight through here left this failure mode with
-    // no diagnostic trail — err.message alone doesn't say what the model
-    // actually returned. Truncation-before-JSON is a failure this codebase
-    // has already hit once (see the maxTokens comment on extractViaSearch's
-    // call); log enough of the raw response to tell that case apart from a
-    // genuinely malformed one, then let the caller's existing error handling
-    // (crawlCompany's try/catch → status "error") take over.
-    console.error(
-      `crawler: failed to parse roles JSON — ${err instanceof Error ? err.message : String(err)}. ` +
-        `Raw response (first 500 chars): ${raw.slice(0, 500)}`
-    );
-    throw err;
+  try { return rolesFrom(parseJson<unknown>(raw)).items; }
+  catch (error) {
+    console.error(`crawler: invalid roles response (${raw.length} characters)`);
+    throw error;
   }
-  if (Array.isArray(parsed)) return parsed;
-  if (parsed && typeof parsed === "object" && "roles" in parsed) {
-    return parsed.roles ?? [];
-  }
-  return [];
 }
 
 /**
@@ -517,13 +495,13 @@ async function extractViaSearch(
     prompt,
     // Search narration counts against the budget; 2000 has truncated the
     // response before the JSON was emitted.
-    maxTokens: 8000,
+    maxTokens: 16000,
   });
 
   // A prose response is recoverable; a TRUNCATED one is not, and parseOrSalvage
   // is where that distinction lives for all four search surfaces. Rethrowing on
-  // truncation preserves the old behaviour exactly — the run scores "error" and
-  // stamps failing_since, which is correct when the model genuinely got cut off.
+  // truncation makes the run score "error" and
+  // records the failed run without claiming the careers page is unreachable.
   const { items, salvaged } = await parseOrSalvage<Role>({
     raw,
     stopReason,
@@ -983,59 +961,23 @@ export async function crawlCompany(
       }
     }
 
-    const failed = status === "error" || status === "needs_url";
-    // `failing_since` starts the clock on the FIRST failure of a run and is
-    // cleared by any success. coalesce, not now(), or every failure would reset
-    // the clock and a page could never be dead for a week. Note "empty" is NOT
-    // a failure: a careers page that loads and lists nothing is working.
-    const { data: updated, error: watchlistUpdateError } = await rawQuery<{
-      tracking_enabled: boolean;
-      consecutive_failures: number;
-      failing_since: string | null;
-    }>(
+    // Neither a model error nor failure to discover a URL proves a page is
+    // unreachable. Preserve health evidence on those outcomes; clear old
+    // counters only after a successful listing. This pipeline has no typed,
+    // verified page-unavailability result, so it cannot auto-disable tracking.
+    const healthy = status === "ok" || status === "empty";
+    const { error: watchlistUpdateError } = await rawQuery(
       `update watchlist
           set last_checked_at = now(),
               crawl_method = coalesce($2, crawl_method),
               last_crawl_status = $3,
               last_crawl_error = $4,
-              consecutive_failures = case when $5 then consecutive_failures + 1 else 0 end,
-              failing_since = case when $5 then coalesce(failing_since, now()) else null end
-        where company = $1 and tenant_id = $6
-    returning tracking_enabled, consecutive_failures, failing_since`,
-      [company, learnedMethod, status, errorMessage ?? null, failed, await resolveTenantId()],
+              consecutive_failures = case when $5 then 0 else consecutive_failures end,
+              failing_since = case when $5 then null else failing_since end
+        where company = $1 and tenant_id = $6`,
+      [company, learnedMethod, status, errorMessage ?? null, healthy, await resolveTenantId()],
       await resolveTenantId()
     );
-    // A page dead long enough stops being crawled at all. The decision lives in
-    // lib/dead-tracking.ts rather than in this statement's WHERE clause,
-    // deliberately: a rule expressed in SQL here and in TypeScript on the
-    // Watchlist page is the drift CLAUDE.md warns about, and only one of the two
-    // can be unit-tested. The row read back above is the POST-update state, so
-    // the first failure of a run always evaluates to false.
-    const after = updated[0];
-    if (failed && after && shouldStopTracking({
-      trackingEnabled: after.tracking_enabled,
-      consecutiveFailures: after.consecutive_failures,
-      failingSince: after.failing_since,
-    })) {
-      const { error: untrackError } = await rawQuery(
-        `update watchlist set tracking_enabled = false
-          where company = $1 and tenant_id = $2`,
-        [company, await resolveTenantId()],
-        await resolveTenantId()
-      );
-      if (untrackError) {
-        // Not fatal: the crawl itself succeeded in being recorded, and the row
-        // will be reconsidered on its next check. Logged because a company that
-        // should have been dropped and was not will otherwise keep taking slots
-        // with nothing saying why.
-        console.error(
-          `crawler: ${company} should have been untracked but the write failed — ${untrackError.message}`
-        );
-      } else {
-        console.log(`crawler: ${company} — ${stoppedTrackingReason(after.consecutive_failures)}`);
-      }
-    }
-
     if (watchlistUpdateError) {
       // last_checked_at did not advance, so the batch scheduler will see this
       // company as still due and may re-crawl (and re-bill ~10 searches for

@@ -204,11 +204,8 @@ async function discoverStartupsInner(
     const { text: raw, stopReason } = await callWithWebSearchDetailed({
       system: hiringSignalSystem(signal),
       prompt,
-      maxTokens: 8000,
-      // The 7-day funding run issued 28 searches before its response was cut
-      // off. Twelve still lets the model vary sources and wording while
-      // preventing one click from fanning out without a bound.
-      maxSearches: 12,
+      // Shared default: up to 50 searches, with a bounded output allowance.
+      maxTokens: 16000,
     });
 
     // parseOrSalvage deliberately refuses an incomplete response rather than
@@ -224,7 +221,7 @@ async function discoverStartupsInner(
         itemNoun: "company",
         itemFields: STARTUP_FIELDS,
         label: `discoverStartups(${dateRange})`,
-        extract: arrayUnder<Startup>("startups"),
+        extract: arrayUnder<Startup>("startups", ["company"]),
       }));
     } catch (err) {
       if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(stopReason ?? "")) {

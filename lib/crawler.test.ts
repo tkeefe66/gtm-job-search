@@ -496,9 +496,9 @@ describe("rolesFromRaw", () => {
     expect(rolesFromRaw(raw)).toEqual([{ role_title: "Head of RevOps" }]);
   });
 
-  test("treats a {roles: null} object as empty", () => {
+  test("rejects a {roles: null} object", () => {
     const raw = JSON.stringify({ roles: null });
-    expect(rolesFromRaw(raw)).toEqual([]);
+    expect(() => rolesFromRaw(raw)).toThrow();
   });
 
   // Fix 7 (2026-08-12 consolidated wave): parseJson failures used to throw
@@ -506,13 +506,14 @@ describe("rolesFromRaw", () => {
   // raw response head before rethrowing, so this failure mode is
   // diagnosable from logs instead of just "JSON parse error" with no
   // context on what the model actually returned.
-  test("logs the raw response head and rethrows on malformed JSON", () => {
+  test("logs response length and rethrows on malformed JSON", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const raw = "Sorry, I could not find any roles for this company.";
     expect(() => rolesFromRaw(raw)).toThrow();
     expect(spy).toHaveBeenCalledTimes(1);
     const logged = spy.mock.calls[0][0] as string;
-    expect(logged).toContain(raw.slice(0, 500));
+    expect(logged).toContain(`${raw.length} characters`);
+    expect(logged).not.toContain(raw);
     spy.mockRestore();
   });
 });
