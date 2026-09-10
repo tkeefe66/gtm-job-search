@@ -160,6 +160,7 @@ export default function ChatPanel({
     turnStarted.current = true;
     followLatest.current = true;
     setSendingText(text);
+    setInput("");
     startTransition(async () => {
       // Measured at SEND time, not on render: the document may have been
       // re-laid-out by fonts loading or a window resize since it was drawn, and
@@ -180,8 +181,8 @@ export default function ChatPanel({
         // Presence, not truthiness — res.error can legitimately be "".
         if (res.error !== undefined) {
           setError(res.error || UNDESCRIBED_DB_ERROR);
-        } else {
-          setInput("");
+          // Preserve a new draft typed while waiting; restore the failed message only into an empty composer.
+          setInput((draft) => draft || text);
         }
 
         // A SEPARATE field from `error`: the change already applied and saved,
@@ -224,6 +225,7 @@ export default function ChatPanel({
         }
       } catch {
         setError("The connection was interrupted. Refresh to check whether your change was applied before sending it again.");
+        setInput((draft) => draft || text);
       } finally {
         setSendingText(null);
       }
@@ -367,7 +369,7 @@ export default function ChatPanel({
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {transcriptNote && <p role="status" className={styles.notice}>{transcriptNote}</p>}
       </div>
-      <ChatComposer value={input} onChange={setInput} onSend={() => send()} disabled={busy || loading} busy={busy} />
+      <ChatComposer value={input} onChange={setInput} onSend={() => send()} disabled={loading} busy={busy} />
     </div>
   );
 }
