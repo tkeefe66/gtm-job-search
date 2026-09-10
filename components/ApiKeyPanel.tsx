@@ -78,7 +78,7 @@ export default function ApiKeyPanel({ onReady, onStatusChange, compact = false, 
       <h2 className="font-display text-xl text-ink">Your AI API key</h2>
       <p className="mt-1 max-w-2xl text-sm text-ink/60">
         Choose Anthropic, OpenAI, or Google Gemini. AI usage is billed by your selected provider.
-        A paid chat subscription does not include API usage. This app records estimated usage costs; provider invoices and free allowances may differ.
+        A paid chat subscription does not include API usage. Manage daily and monthly app limits in Spending limits below. This app records estimated usage costs; provider invoices and free allowances may differ.
       </p>
 
       {/*
