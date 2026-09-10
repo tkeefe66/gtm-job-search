@@ -21,3 +21,14 @@ export function providerLabel(id: string | undefined): string {
 export function isSupportedProvider(id: string): id is ProviderId {
   return PROVIDER_CHOICES.some(choice => choice.id === id);
 }
+
+export function modelLabel(model: string): string {
+  const labels: Record<string, string> = {
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "claude-haiku-4-5-20251001": "Claude Haiku 4.5 (lower cost)",
+    "gpt-4.1": "GPT-4.1",
+    "gpt-4.1-mini": "GPT-4.1 mini (lower cost)",
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+  };
+  return labels[model] ?? model;
+}

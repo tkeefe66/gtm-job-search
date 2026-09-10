@@ -14,6 +14,7 @@ export const ANTHROPIC_PRICES: Record<
   { input: number; cachedInput: number; output: number }
 > = {
   "claude-sonnet-4-6": { input: 3, cachedInput: 0.3, output: 15 },
+  "claude-haiku-4-5-20251001": { input: 1, cachedInput: 0.1, output: 5 },
 };
 
 export const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6";

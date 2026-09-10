@@ -4,8 +4,8 @@ The app accepts keys for registered providers, not arbitrary AI endpoints. Users
 
 | Provider | Model | Support |
 | --- | --- | --- |
-| Anthropic | Claude Sonnet 4.6 | Existing complete and search flows |
-| OpenAI | GPT-4.1 | Complete, structured output, and capped web search through Responses |
+| Anthropic | Claude Sonnet 4.6 / Haiku 4.5 | Existing complete and search flows |
+| OpenAI | GPT-4.1 / GPT-4.1 mini | Complete, structured output, and capped web search through Responses |
 | Google Gemini | Gemini 2.5 Flash | Complete, structured output, and uncapped grounded search; By Role unavailable |
 
 By Role always requests an enforced search cap. Gemini does not expose the needed cap, so that operation refuses before calling the provider. Administrator accounts also have ambient search limits, which means other Gemini searches refuse for them. Ordinary BYO users may use uncapped Gemini searches. Never silently discard a caller or account cap; when both exist, use the smaller cap.

@@ -37,7 +37,7 @@ export function rescoreErrorText(error: string): string {
 /** What rescoring `count` rows costs, rounded to whole cents for display. */
 export function rescoreCostDollars(count: number, config: EstimateProvider = {}): number {
   if (!Number.isFinite(count) || count <= 0) return 0;
-  return config.provider && config.provider !== "anthropic"
+  return (config.provider && config.provider !== "anthropic") || (config.model && config.model !== "claude-sonnet-4-6")
     ? providerRescoreCostDollars(count, config)
     : Math.round(count * DOLLARS_PER_RESCORE * 100) / 100;
 }

@@ -81,7 +81,7 @@ export function estimateRunCost(input: EstimateInput): Estimate {
         searches * TOKENS_PER_SEARCH_RESULT * DOLLARS_PER_INPUT_TOKEN +
         FIT_SCORING_DOLLARS;
 
-  if (searches > 0 && input.provider !== undefined && input.provider !== "anthropic") {
+  if (searches > 0 && ((input.provider !== undefined && input.provider !== "anthropic") || (input.model !== undefined && input.model !== ANTHROPIC_DEFAULT_MODEL))) {
     // One By Role request contains the query grid. 5k context tokens/query and
     // 1k output tokens/run are planning assumptions, not a guaranteed ceiling.
     // Gemini 2.5 bills ONE grounded prompt even when it issues many queries;
@@ -154,7 +154,7 @@ const DOLLARS_PER_OUTPUT_TOKEN = anthropicPrice(ANTHROPIC_DEFAULT_MODEL).output 
 export function readingCostDollars(rows: number, config: EstimateProvider = {}): number {
   estimateModelCostDollars({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 0 }, config);
   if (rows <= 0) return 0;
-  if (config.provider !== undefined && config.provider !== "anthropic") {
+  if (((config.provider !== undefined && config.provider !== "anthropic") || (config.model !== undefined && config.model !== ANTHROPIC_DEFAULT_MODEL))) {
     return estimateModelCostDollars({ inputTokens: rows * TOKENS_PER_POSTING_READ, cachedInputTokens: 0, outputTokens: rows * TOKENS_PER_POSTING_ANSWER, searches: 0 }, config);
   }
   return (

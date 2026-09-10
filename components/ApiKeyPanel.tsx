@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getApiKeyStatus, saveApiKey, removeApiKey, type ApiKeyStatus } from "@/app/actions/api-key";
-import { PROVIDER_CHOICES, providerChoice, providerLabel, isSupportedProvider } from "@/lib/providers/catalog";
+import { PROVIDER_CHOICES, modelLabel, providerChoice, providerLabel, isSupportedProvider } from "@/lib/providers/catalog";
 import type { ProviderId } from "@/lib/providers/types";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
@@ -143,7 +143,7 @@ export default function ApiKeyPanel({ onReady, onStatusChange, compact = false, 
           </label>
           <label className="text-sm font-medium">Model
             <select aria-label="AI model" disabled={busy} value={modelDraft || choice.defaultModel} onChange={e => {setModelDraft(e.target.value); setSaved(false); onReady?.(false);}} className="mt-1 block w-full rounded-lg border border-slate bg-white px-3 py-2">
-              {choice.models.map(model => <option key={model} value={model}>{model}</option>)}
+              {choice.models.map(model => <option key={model} value={model}>{modelLabel(model)}</option>)}
             </select>
           </label>
         </div>
