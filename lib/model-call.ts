@@ -28,9 +28,8 @@ import type { Completion, Provider } from "./providers/types";
 export class SearchUnavailableError extends Error {
   constructor(providerId: string) {
     super(
-      `Search is not available on ${providerId} for a metered account, because that ` +
-        `provider cannot limit how many searches one request runs. Add your own API key ` +
-        `to use search, or choose a provider that supports a per-request limit.`
+      `This search requires a per-request limit that ${providerId} cannot enforce. ` +
+        `Use a provider that supports search limits for this operation.`
     );
     this.name = "SearchUnavailableError";
   }
@@ -82,9 +81,9 @@ function collectDetailed(c: Completion): DetailedResponse {
  * A call with the provider's native search tool.
  *
  * `maxSearches` sets the per-request ceiling — the only hard limit on how many
- * individually billed searches a call can run. An explicit argument wins (the
- * role-search path computes one from the user's ceiling); otherwise the
- * budget's cap applies.
+ * individually billed searches a call can run. A caller can tighten the
+ * ambient budget's cap, never raise it. With no ambient cap, the caller's
+ * explicit ceiling still applies (including on a BYO account).
  */
 export async function callWithWebSearch(opts: {
   system: string;
@@ -110,10 +109,12 @@ export async function callWithWebSearchDetailed(opts: {
   maxSearches?: number;
 }): Promise<DetailedResponse> {
   const { provider, apiKey, model, maxSearches } = routing();
-  if (mustRefuseSearch(provider.searchCapEnforcement, maxSearches)) {
+  const cap = opts.maxSearches === undefined
+    ? maxSearches ?? undefined
+    : maxSearches === null ? opts.maxSearches : Math.min(opts.maxSearches, maxSearches);
+  if (mustRefuseSearch(provider.searchCapEnforcement, cap ?? null)) {
     throw new SearchUnavailableError(provider.id);
   }
-  const cap = opts.maxSearches ?? (maxSearches === null ? undefined : maxSearches);
   return collectDetailed(
     await provider.searchAndComplete({
       apiKey,

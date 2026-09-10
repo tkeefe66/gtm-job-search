@@ -65,7 +65,7 @@ export async function parseOrSalvage<T>(opts: {
         `${opts.label}: response was truncated (stop_reason=${opts.stopReason}); not salvaging — ` +
           `raise maxTokens if this recurs. Raw head: ${opts.raw.slice(0, 200)}`
       );
-      if (opts.stopReason === "max_tokens") {
+      if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(opts.stopReason ?? "")) {
         throw new Error(SEARCH_RESPONSE_TOO_LARGE);
       }
       throw err;

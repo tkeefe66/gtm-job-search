@@ -28,20 +28,11 @@ export default function NeedsKeyBanner() {
           This app searches the web for roles and scores each one 1–5 against
           your background using an AI model. It runs on <strong>your</strong>{" "}
           model API key, so the usage is billed to your account and nothing is
-          charged to anyone else. Your search requests are sent to Anthropic.
+          charged to anyone else. Your search requests are sent to your selected AI provider.
         </p>
         <p className="mt-2 max-w-2xl text-sm text-[#92400E]/90">
-          You&apos;ll need a key from{" "}
-          <a
-            className="underline"
-            href="https://console.anthropic.com/settings/keys"
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            console.anthropic.com
-          </a>
-          . A typical search costs a little over a dollar; the app shows you what
-          each run spends.
+          Choose Anthropic, OpenAI, or Google Gemini in Settings, then connect its API key.
+          Costs depend on the provider, model, and amount of searching. The app records estimated usage costs.
         </p>
         <Link
           href="/settings"

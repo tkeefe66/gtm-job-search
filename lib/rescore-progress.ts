@@ -6,6 +6,7 @@
 // none of them can be tested through the component (this repo does not unit
 // test React) or through the action (it calls Claude). They live here.
 
+import { rescoreCostDollars as providerRescoreCostDollars, type EstimateProvider } from "@/lib/cost-estimate";
 import { DEFAULT_RESCORE_LIMIT } from "@/lib/rescore-scope";
 
 /**
@@ -34,9 +35,11 @@ export function rescoreErrorText(error: string): string {
 }
 
 /** What rescoring `count` rows costs, rounded to whole cents for display. */
-export function rescoreCostDollars(count: number): number {
+export function rescoreCostDollars(count: number, config: EstimateProvider = {}): number {
   if (!Number.isFinite(count) || count <= 0) return 0;
-  return Math.round(count * DOLLARS_PER_RESCORE * 100) / 100;
+  return config.provider && config.provider !== "anthropic"
+    ? providerRescoreCostDollars(count, config)
+    : Math.round(count * DOLLARS_PER_RESCORE * 100) / 100;
 }
 
 /**
@@ -327,8 +330,8 @@ export function rescoreOffers(
  * constructor above; shadowing it here would make a hardcoded literal inside
  * this function compile again.
  */
-export function rescorePromptQuestion(why: RescoreReason, count: number): string {
-  const dollars = rescoreCostDollars(count).toFixed(2);
+export function rescorePromptQuestion(why: RescoreReason, count: number, config: EstimateProvider = {}): string {
+  const dollars = rescoreCostDollars(count, config).toFixed(2);
   const roles = `${count} role${count === 1 ? "" : "s"}`;
   const them = count === 1 ? "it" : "them";
 

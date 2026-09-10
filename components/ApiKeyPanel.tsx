@@ -3,20 +3,23 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getApiKeyStatus, saveApiKey, removeApiKey, type ApiKeyStatus } from "@/app/actions/api-key";
-import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/providers/anthropic-pricing";
+import { PROVIDER_CHOICES, providerChoice, providerLabel, isSupportedProvider } from "@/lib/providers/catalog";
+import type { ProviderId } from "@/lib/providers/types";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { Spinner } from "./ui";
 
 /**
- * Bring-your-own Anthropic key.
+ * Bring-your-own provider key.
  *
  * The field is write-only: the stored key is never rendered back, only its last
  * four characters, which are stored separately so displaying them never requires
  * decrypting anything.
  */
-export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (ready: boolean) => void; compact?: boolean }) {
+export default function ApiKeyPanel({ onReady, onStatusChange, compact = false, isAdmin = false }: { onReady?: (ready: boolean) => void; onStatusChange?: (status: ApiKeyStatus | null) => void; compact?: boolean; isAdmin?: boolean }) {
   const router = useRouter();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
+  const [providerDraft, setProviderDraft] = useState<ProviderId>("anthropic");
+  const choice = providerChoice(providerDraft)!;
   const [draft, setDraft] = useState("");
   const [modelDraft, setModelDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,11 +31,14 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
       const res = await getApiKeyStatus();
       setError(describeWriteFailure(res.error, "check your API key") ?? null);
       setStatus(res);
+      onStatusChange?.(res.error === undefined ? res : null);
+      setProviderDraft(isSupportedProvider(res.provider ?? "") ? res.provider as ProviderId : "anthropic");
       setModelDraft(res.model ?? "");
       onReady?.(res.error === undefined && res.present && res.status === "ok");
     } catch {
       setError("Could not check your API key. Reload this page to try again.");
       setStatus({ present: false });
+      onStatusChange?.(null);
       onReady?.(false);
     }
   }
@@ -41,7 +47,7 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
   async function save() {
     setBusy(true); setSaved(false); setError(null);
     try {
-      const res = await saveApiKey(draft, { model: modelDraft });
+      const res = await saveApiKey(draft, { model: modelDraft, provider: providerDraft });
       const failure = describeWriteFailure(res.error, "save your API key");
       if (failure !== undefined) { setError(failure); return; }
       setDraft(""); setSaved(true); await load();
@@ -69,10 +75,10 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
 
   return (
     <section className={compact ? "mt-4" : "mt-10"}>
-      <h2 className="font-display text-xl text-ink">Your Anthropic API key</h2>
+      <h2 className="font-display text-xl text-ink">Your AI API key</h2>
       <p className="mt-1 max-w-2xl text-sm text-ink/60">
-        Required for AI features. Profile generation and searches bill your Anthropic account.
-        Usage is recorded here so you can see what you spend. A Claude chat subscription does not cover API usage.
+        Choose Anthropic, OpenAI, or Google Gemini. AI usage is billed by your selected provider.
+        A paid chat subscription does not include API usage. This app records estimated usage costs; provider invoices and free allowances may differ.
       </p>
 
       {/*
@@ -87,25 +93,26 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
         the people who operate this server.
       </p>
 
+      {providerDraft === "google" && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Gemini has limited support: By Role search is unavailable because Gemini cannot enforce its search limit. Choose Anthropic or OpenAI for the full job-search flow.{isAdmin && " Your administrator account also requires these limits for other searches."}</p>}
       {error !== null && (
         <p className="mt-3 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2 text-sm text-[#991B1B]">
           {error}
         </p>
       )}
       {saved && error === null && (
-        <p className="mt-3 text-sm text-[#166534]">Key verified with Anthropic and saved.</p>
+        <p className="mt-3 text-sm text-[#166534]">Key verified with {providerLabel(status.provider)} and saved.</p>
       )}
 
       {status.present && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <span className="rounded border border-slate px-2 py-1 font-mono text-sm text-ink/70">
-            sk-ant-…{status.lastFour}
+            ••••{status.lastFour}
           </span>
           <span className="text-xs text-ink/50">
             added {status.addedAt?.slice(0, 10)}
             {status.status !== "ok" && ` · ${status.status}`}
             {status.provider && ` · ${status.provider}`}
-            {` · ${status.model ?? ANTHROPIC_DEFAULT_MODEL}`}
+            {` · ${status.model ?? providerChoice(status.provider)?.defaultModel ?? "default model"}`}
           </span>
           <button
             disabled={busy}
@@ -126,22 +133,29 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
         applied. Only the copy differs now.
       */}
       <div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-medium">AI provider
+            <select aria-label="AI provider" disabled={busy} value={providerDraft} onChange={e => {
+              setProviderDraft(e.target.value as ProviderId); setModelDraft(""); setDraft(""); setSaved(false); setError(null); onReady?.(false);
+            }} className="mt-1 block w-full rounded-lg border border-slate bg-white px-3 py-2">
+              {PROVIDER_CHOICES.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-medium">Model
+            <select aria-label="AI model" disabled={busy} value={modelDraft || choice.defaultModel} onChange={e => {setModelDraft(e.target.value); setSaved(false); onReady?.(false);}} className="mt-1 block w-full rounded-lg border border-slate bg-white px-3 py-2">
+              {choice.models.map(model => <option key={model} value={model}>{model}</option>)}
+            </select>
+          </label>
+        </div>
+        <p className="mt-3 text-sm text-ink/70">Create your key in <a href={choice.keyUrl} target="_blank" rel="noreferrer noopener" className="underline">{choice.keySite}</a> and enable API billing or an eligible API quota. Verification makes a small API request.</p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <input
-            aria-label="Anthropic API key"
+            aria-label={`${choice.label} API key`}
             type="password"
+            disabled={busy}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="sk-ant-…"
-            autoComplete="off"
-            className="w-full max-w-sm rounded-lg border border-slate px-3 py-2 font-mono text-sm"
-          />
-          <input
-            aria-label="Model (optional)"
-            type="text"
-            value={modelDraft}
-            onChange={(e) => setModelDraft(e.target.value)}
-            placeholder={ANTHROPIC_DEFAULT_MODEL}
+            placeholder={choice.placeholder}
             autoComplete="off"
             className="w-full max-w-sm rounded-lg border border-slate px-3 py-2 font-mono text-sm"
           />
@@ -156,10 +170,10 @@ export default function ApiKeyPanel({ onReady, compact = false }: { onReady?: (r
         <p className="mt-2 text-sm text-ink/60">
           {status.present ? (
             <>
-              To change your model, enter its name and paste your key again so we can verify access.
+              Changing provider or model replaces the saved connection. Paste the matching key again to verify it.
             </>
           ) : (
-            <>Optional. Leave blank for the default, {ANTHROPIC_DEFAULT_MODEL}.</>
+            <>Only supported models with usage pricing are listed.</>
           )}
         </p>
       </div>

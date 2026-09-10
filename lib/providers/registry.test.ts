@@ -6,10 +6,10 @@ describe("providerFor", () => {
     expect(providerFor("anthropic").id).toBe("anthropic");
   });
 
-  // Step 1 ships one provider. A stored row naming another one must fail loudly
-  // at the routing decision, not fall back to Anthropic and bill the wrong key.
-  test("a provider that is not implemented throws rather than falling back", () => {
-    expect(() => providerFor("openai")).toThrow(ProviderNotImplementedError);
+  test("routes additional providers without falling back", () => {
+    expect(providerFor("openai").id).toBe("openai");
+    expect(providerFor("google").id).toBe("google");
+    expect(() => providerFor("toString")).toThrow(ProviderNotImplementedError);
   });
 
   test("an unrecognised string throws too", () => {

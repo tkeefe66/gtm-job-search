@@ -1,5 +1,6 @@
 "use client";
 
+import type { EstimateProvider } from "@/lib/cost-estimate";
 import { rescorePromptQuestion, type RescoreReason } from "@/lib/rescore-progress";
 
 /**
@@ -30,16 +31,18 @@ export default function RescorePrompt({
   onRescore,
   onDismiss,
   busy,
+  provider,
+  model,
 }: {
   count: number;
   reason: RescoreReason;
   onRescore: () => void;
   onDismiss: () => void;
   busy: boolean;
-}) {
+} & EstimateProvider) {
   return (
     <div className="mt-3 rounded-md border border-[#92400E]/30 bg-[#92400E]/5 p-3">
-      <p className="text-sm text-ink/70">{rescorePromptQuestion(reason, count)}</p>
+      <p className="text-sm text-ink/70">{rescorePromptQuestion(reason, count, { provider, model })}</p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           onClick={onRescore}

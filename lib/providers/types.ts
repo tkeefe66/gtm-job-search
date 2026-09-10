@@ -26,6 +26,8 @@ export interface Usage {
   outputTokens: number;
   /** Counted by the adapter from what the model ISSUED, never from the cap. */
   searches: number;
+  /** Gemini 2.5 bills grounded prompts, independently of issued query count. */
+  groundedRequests?: number;
 }
 
 export interface Completion {

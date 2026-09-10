@@ -1,5 +1,34 @@
 import { describe, expect, test } from "vitest";
-import { estimateRunCost, formatEstimate, type EstimateInput, formatReadingCost, readingCostDollars } from "./cost-estimate";
+import { estimateRunCost, formatEstimate, type EstimateInput, formatReadingCost, readingCostDollars, estimateModelCostDollars, rescoreCostDollars } from "./cost-estimate";
+
+describe("provider-aware estimates", () => {
+  const input = { titles: 10, locations: 1, stackTerms: 0, ceiling: null };
+  test("prices normalized usage with each selected provider's own table", () => {
+    const usage = { inputTokens: 1000000, cachedInputTokens: 1000000, outputTokens: 1000000, searches: 2, groundedRequests: 1 };
+    expect(estimateModelCostDollars(usage, { provider: "openai" })).toBe(10.55);
+    expect(estimateModelCostDollars(usage, { provider: "google" })).toBe(2.87);
+  });
+  test("unknown models cannot inherit a price for another model", () => {
+    expect(() => estimateRunCost({ ...input, provider: "google", model: "unknown" })).toThrow(/model/i);
+    expect(() => estimateModelCostDollars({ inputTokens: 1, cachedInputTokens: 0, outputTokens: 0, searches: 0 }, { model: "unknown" })).toThrow(/model/i);
+  });
+  test("Google run estimate charges one grounded prompt even for ten queries", () => {
+    // 50k input + 1k output research; 50k input + 2.5k output scoring;
+    // one $0.035 grounded prompt. Rounded separately at the pricing boundary.
+    expect(estimateRunCost({ ...input, provider: "google" }).dollars).toBeCloseTo(0.09);
+    expect(estimateRunCost({ ...input, provider: "openai" }).dollars).toBeCloseTo(0.48);
+  });
+  test("new-provider reading and rescore estimates do not use Anthropic prices", () => {
+    expect(readingCostDollars(100, { provider: "openai" })).toBe(0.44);
+    expect(readingCostDollars(100, { provider: "google" })).toBe(0.1);
+    expect(rescoreCostDollars(100, { provider: "openai" })).toBe(0.48);
+  });
+  test("non-enforceable search limits are identified as assumptions", () => {
+    expect(formatEstimate({ ...input, ceiling: 2, provider: "google" })).toContain("assuming 2 searches; not an enforced cap");
+    expect(formatEstimate({ ...input, ceiling: 2, provider: "google" })).not.toContain("capped at");
+    expect(formatEstimate({ ...input, ceiling: 2, provider: "openai" })).toContain("capped at 2");
+  });
+});
 
 describe("estimateRunCost", () => {
   test("counts the title and stack grids separately", () => {

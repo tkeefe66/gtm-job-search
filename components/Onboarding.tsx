@@ -12,6 +12,8 @@ import {
   saveProfile,
 } from "@/app/actions/onboarding";
 import { readResumeUpload } from "@/app/actions/resume-upload";
+import type { ApiKeyStatus } from "@/app/actions/api-key";
+import { isSupportedProvider } from "@/lib/providers/catalog";
 import { getApiKeyStatus } from "@/app/actions/api-key";
 import { scoreFit } from "@/app/actions/parse-role";
 import { getSettings, markCompScoringRescored, rescoreAll } from "@/app/actions/settings";
@@ -77,6 +79,7 @@ export default function Onboarding() {
   // Read once, at mount, before this run can have changed it. A first run has
   // nothing to rescore — see onboardingRescoreOffer in lib/rescore-progress.ts.
   const [wasAlreadyOnboarded, setWasAlreadyOnboarded] = useState(false);
+  const [connectedKey, setConnectedKey] = useState<ApiKeyStatus | null>(null);
   const [keyReady, setKeyReady] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [compFloor, setCompFloor] = useState("");
@@ -136,6 +139,7 @@ export default function Onboarding() {
         setWasAlreadyOnboarded(
           state.onboardedAt !== null && state.onboardedAt.length > 0
         );
+        setConnectedKey(keyStatus.error === undefined ? keyStatus : null);
         setKeyReady(keyStatus.error === undefined && keyStatus.present && keyStatus.status === "ok");
         setIsAdmin(state.isAdmin);
         setCompFloor(state.compFloor === null ? "" : String(state.compFloor));
@@ -162,7 +166,7 @@ export default function Onboarding() {
       }
       if (!isAdmin && (!status.present || status.status !== "ok")) {
         setKeyReady(false);
-        setErrors(e => ({ ...e, key: "Save and verify your Anthropic API key before continuing." }));
+        setErrors(e => ({ ...e, key: "Save and verify your selected provider’s API key before continuing." }));
         return;
       }
       setStep("generating");
@@ -466,8 +470,8 @@ export default function Onboarding() {
             Connect your AI account
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-ink/60">{keyStepCopy()}</p>
-          <ApiKeyPanel compact onReady={setKeyReady} />
-          <p className="mt-4 text-sm text-ink/70">Create a key in the <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer noopener" className="underline">Anthropic Console</a>, add API billing there, then paste the key above. Verification makes a small billed request.</p>
+          <ApiKeyPanel compact isAdmin={isAdmin} onReady={setKeyReady} onStatusChange={setConnectedKey} />
+
           {errors.key !== undefined && <p role="alert" className="mt-3 text-sm text-[#92400E]">{errors.key}</p>}
           <div className="mt-4 flex items-center gap-4">
             <button className="text-sm underline" onClick={() => setStep("preferences")}>Back</button>
@@ -525,7 +529,7 @@ export default function Onboarding() {
               <p className="mt-2 max-w-2xl text-sm text-ink/60">
                 Uploaded files are read on this server to extract text; the original file is not stored.
                 Review the text below before continuing. Your answers are saved when you continue
-                from preferences and sent to Anthropic when you generate your profile.
+                from preferences and sent to your selected AI provider when you generate your profile.
               </p>
               <Field label="Upload your résumé" help="PDF, DOCX, or TXT. Up to 1 MB; PDF up to 10 pages. You can also paste below.">
                 <input type="file" accept=".pdf,.docx,.txt" disabled={uploading} onChange={e => { void handleUpload(e.target.files?.[0]); e.target.value = ""; }} className="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-ink file:px-4 file:py-2 file:text-white" />
@@ -636,7 +640,7 @@ export default function Onboarding() {
             <div className="mt-4 rounded-md border border-ink/20 bg-ink/5 p-4">
               <p className="text-sm text-ink">{cappedMessage}</p>
               <div className="mt-3">
-                <ApiKeyPanel compact onReady={setKeyReady} />
+                <ApiKeyPanel compact isAdmin={isAdmin} onReady={setKeyReady} onStatusChange={setConnectedKey} />
               </div>
             </div>
           )}
@@ -962,7 +966,7 @@ export default function Onboarding() {
           <h2 className="font-heading text-lg font-semibold">Your existing pipeline</h2>
           <p className="mt-2 max-w-2xl text-sm text-ink/70">
             {rescoreReason !== null
-              ? rescorePromptQuestion(rescoreReason, rescoreCount)
+              ? rescorePromptQuestion(rescoreReason, rescoreCount, { provider: isSupportedProvider(connectedKey?.provider ?? "") ? connectedKey?.provider as "anthropic" | "openai" | "google" : undefined, model: connectedKey?.model ?? undefined })
               : "Your profile just changed, but this app could not confirm how many " +
                 "of your existing roles are already scored. Rescoring now keeps your " +
                 "pipeline scored consistently against your new profile rather than " +

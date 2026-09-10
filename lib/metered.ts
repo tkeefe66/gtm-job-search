@@ -146,7 +146,7 @@ export async function withBudget<T>(opts: {
 
   // One search, priced by the adapter — which is the definition of the number.
   const centsPerSearch = providerFor(config.providerId).costCents(
-    { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1 },
+    { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1, groundedRequests: 1 },
     config.model
   );
 
@@ -333,6 +333,7 @@ async function runScope<T>(
         cachedInputTokens: scope.cachedInputTokens,
         outputTokens: scope.outputTokens,
         searches: scope.searches,
+        groundedRequests: scope.groundedRequests ?? 0,
       },
       scope.model
     );

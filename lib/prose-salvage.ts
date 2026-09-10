@@ -39,9 +39,10 @@
  * the same reason.
  *
  * Full stop_reason vocabulary: end_turn, stop_sequence, max_tokens, tool_use,
- * pause_turn, refusal. Only the first two mean "complete".
+ * pause_turn, refusal. Only the first two mean "complete" for Anthropic.
+ * OpenAI Responses uses completed; Google Gemini uses STOP.
  */
-const COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence"]);
+const COMPLETE_STOP_REASONS = new Set(["end_turn", "stop_sequence", "completed", "STOP"]);
 
 export type SalvageDecision = "salvage" | "fail";
 

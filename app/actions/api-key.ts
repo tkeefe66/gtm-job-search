@@ -6,16 +6,10 @@ import { rawQuery } from "@/lib/supabase";
 import { seal, lastFour } from "@/lib/secret-box";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { providerFor } from "@/lib/providers/registry";
+import type { Provider } from "@/lib/providers/types";
 
 /**
- * Step 1 ships one provider, so this is a constant rather than an argument.
- * It is stored, bound into the AAD, and read back by lib/metered.ts, so adding
- * a second one later is a form field — not a migration and not a re-seal.
- */
-const PROVIDER = "anthropic";
-
-/**
- * Bring-your-own Anthropic key.
+ * Bring-your-own provider key.
  *
  * WRITE-ONLY by construction. The plaintext is never read back for display —
  * not for the tenant, and not for the admin. What the UI shows is `last_four`,
@@ -80,10 +74,15 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus & { error?: string
  */
 export async function saveApiKey(
   key: string,
-  opts: { model?: string } = {}
+  opts: { model?: string; provider?: string } = {}
 ): Promise<{ error?: string }> {
   await requireActor();
   const tenantId = await resolveTenantId();
+  const providerId = opts.provider ?? "anthropic";
+  let provider: Provider;
+  try { provider = providerFor(providerId); }
+  catch { return { error: "Choose a supported provider: Anthropic, OpenAI, or Google Gemini." }; }
+  const providerName = providerId === "anthropic" ? "Anthropic" : providerId === "openai" ? "OpenAI" : "Google Gemini";
   const trimmed = key.trim();
   const model = opts.model?.trim() || null;
 
@@ -97,7 +96,6 @@ export async function saveApiKey(
     return { error: "Please wait a minute before trying another key." };
   }
 
-  const provider = providerFor(PROVIDER);
 
   // The model the key will ACTUALLY run on — `null` means "the provider's
   // default", so that is what gets probed. Validating against the default
@@ -126,17 +124,22 @@ export async function saveApiKey(
   // accepts this one on this model. What comes back is a REASON, never the
   // SDK's text — that embeds request URLs and sometimes the key itself, and
   // this string is rendered to a browser.
-  const verdict = await provider.validateKey(trimmed, probeModel);
+  let verdict;
+  try { verdict = await provider.validateKey(trimmed, probeModel); }
+  catch {
+    console.warn(`api-key: ${providerId} verification request failed`);
+    return { error: `Could not verify your ${providerName} key. Check the provider's service status and try again.` };
+  }
   if (!verdict.ok) {
     return {
       error:
         verdict.reason === "format"
-          ? "That does not look like an Anthropic API key (they start with sk-ant-)."
-          : `Anthropic rejected that key on ${probeModel}. Check both the key and the model, then try again.`,
+          ? `That does not look like a ${providerName} API key. Check the selected provider and paste its API key.`
+          : `Could not verify this ${providerName} key on ${probeModel}. Check API billing, model access, and the key, then try again.`,
     };
   }
 
-  const sealed = seal(trimmed, { tenantId, provider: PROVIDER, model });
+  const sealed = seal(trimmed, { tenantId, provider: providerId, model });
   const { error } = await rawQuery(
     `insert into tenant_api_keys
        (tenant_id, key_id, aad_version, ciphertext, nonce, auth_tag, last_four,
@@ -154,7 +157,7 @@ export async function saveApiKey(
            status = 'ok',
            last_verified_at = now()`,
     [tenantId, sealed.keyId, sealed.aadVersion, sealed.ciphertext, sealed.nonce,
-     sealed.authTag, lastFour(trimmed), PROVIDER, model],
+     sealed.authTag, lastFour(trimmed), providerId, model],
     tenantId
   );
   const described = describeWriteFailure(error ? error.message : undefined, "save your API key");

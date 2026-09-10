@@ -26,7 +26,9 @@ export function resolveProviderConfig(row: StoredKeyRow | null): ProviderConfig 
   }
   try {
     const provider = providerFor(row.provider);
-    return { providerId: provider.id, model: row.model ?? provider.defaultModel };
+    const model = row.model ?? provider.defaultModel;
+    if (!provider.pricedModels.includes(model)) return null;
+    return { providerId: provider.id, model };
   } catch {
     return null;
   }

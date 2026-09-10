@@ -67,11 +67,18 @@ describe("the facade routes through the scope's provider", () => {
     expect(searchAndComplete.mock.calls[0][0].maxSearches).toBe(6);
   });
 
-  test("an explicit cap from the caller still wins — the role-search path computes its own", async () => {
+  test("a stricter explicit cap tightens the ambient cap", async () => {
     await runWithBilling(scope({ maxSearches: 6 }), () =>
       callWithWebSearch({ system: "s", prompt: "p", maxSearches: 2 })
     );
     expect(searchAndComplete.mock.calls[0][0].maxSearches).toBe(2);
+  });
+
+  test("a caller cannot raise the ambient budget ceiling", async () => {
+    await runWithBilling(scope({ maxSearches: 6 }), () =>
+      callWithWebSearch({ system: "s", prompt: "p", maxSearches: 32 })
+    );
+    expect(searchAndComplete.mock.calls[0][0].maxSearches).toBe(6);
   });
 
   test("outside any scope it still runs, on the platform key — cron dry runs and scripts do this", async () => {
@@ -82,6 +89,11 @@ describe("the facade routes through the scope's provider", () => {
 });
 
 describe("a metered call on a provider that cannot cap in-request", () => {
+  test("an explicit caller ceiling is refused even on an uncapped BYO account", async () => {
+    enforcement = "none";
+    await expect(runWithBilling(scope(), () => callWithWebSearch({ system: "s", prompt: "p", maxSearches: 32 }))).rejects.toBeInstanceOf(SearchUnavailableError);
+    expect(searchAndComplete).not.toHaveBeenCalled();
+  });
   test("is refused before the adapter is reached", async () => {
     enforcement = "none";
     await expect(

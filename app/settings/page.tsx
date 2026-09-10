@@ -7,6 +7,6 @@ import { requireActorPage } from "@/lib/require-actor";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  await requireActorPage();
-  return <Settings />;
+  const actor = await requireActorPage();
+  return <Settings isAdmin={actor.isAdmin} />;
 }

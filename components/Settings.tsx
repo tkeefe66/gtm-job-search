@@ -39,6 +39,8 @@ import {
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 import ApiKeyPanel from "./ApiKeyPanel";
+import type { ApiKeyStatus } from "@/app/actions/api-key";
+import { isSupportedProvider, providerChoice } from "@/lib/providers/catalog";
 import StatusEditor from "./StatusEditor";
 
 // Setting keys are written as literals rather than imported from
@@ -237,7 +239,9 @@ function parsePositiveInt(text: string): number | null {
   return Number.isInteger(n) && n >= 1 ? n : null;
 }
 
-export default function Settings() {
+export default function Settings({ isAdmin = false }: { isAdmin?: boolean }) {
+  const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const estimateProvider = keyStatus?.present && isSupportedProvider(keyStatus.provider ?? "") && (!keyStatus.model || providerChoice(keyStatus.provider)?.models.some(model => model === keyStatus.model)) ? keyStatus.provider as "anthropic" | "openai" | "google" : isAdmin ? "anthropic" : undefined;
   const router = useRouter();
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -645,7 +649,7 @@ export default function Settings() {
       <>
         {rescoring && (
           <div className="mt-2">
-            <Spinner label="Rescoring — one Claude call per role, in batches of 25." />
+            <Spinner label="Rescoring — one AI call per role, in batches of 25." />
           </div>
         )}
         {/* Both, not either. A batch that failed part-way still rescored rows,
@@ -660,12 +664,14 @@ export default function Settings() {
   }
 
   const estimateInput: EstimateInput = {
+    provider: estimateProvider,
+    model: estimateProvider === keyStatus?.provider ? keyStatus?.model ?? undefined : undefined,
     titles: toList(draft.titles).length,
     locations: toList(draft.locations).length,
     stackTerms: toList(draft.stackTerms).length,
     ceiling: draft.ceilingEnabled ? parsePositiveInt(draft.ceiling) : null,
   };
-  const estimateLine = formatEstimate(estimateInput);
+  const estimateLine = estimateProvider === "google" ? "By Role search is unavailable with Gemini. Connect Anthropic or OpenAI to use this search." : estimateProvider ? formatEstimate(estimateInput) : "Connect your AI provider below to see a cost estimate.";
 
   const fitCheck = validateText(draft.fitBrain, LABELS.fitBrain, FIT_BRAIN_MAX_CHARS);
 
@@ -833,6 +839,8 @@ export default function Settings() {
             owners. */}
         {view && offers.fitBrain && scoringOfferOwner === "fitBrain" && (
           <RescorePrompt
+          provider={estimateProvider}
+          model={estimateProvider === keyStatus?.provider ? keyStatus?.model ?? undefined : undefined}
             count={view.scoredJobCount}
             reason={offers.fitBrain}
             busy={rescoring}
@@ -918,6 +926,8 @@ export default function Settings() {
         {/* Same gate as the fit-brain card above, pointed the other way. */}
         {view && offers.fitBrain && scoringOfferOwner === "profileScoring" && (
           <RescorePrompt
+          provider={estimateProvider}
+          model={estimateProvider === keyStatus?.provider ? keyStatus?.model ?? undefined : undefined}
             count={view.scoredJobCount}
             reason={offers.fitBrain}
             busy={rescoring}
@@ -1048,6 +1058,8 @@ export default function Settings() {
              Its own reason and wording still come from rescoreOffers, so this
              call site states nothing about why it is on screen. */
           <RescorePrompt
+          provider={estimateProvider}
+          model={estimateProvider === keyStatus?.provider ? keyStatus?.model ?? undefined : undefined}
             count={view.scoredJobCount}
             reason={offers.enrichment}
             busy={rescoring}
@@ -1057,6 +1069,8 @@ export default function Settings() {
         )}
         {view && offers.compensation && (
           <RescorePrompt
+          provider={estimateProvider}
+          model={estimateProvider === keyStatus?.provider ? keyStatus?.model ?? undefined : undefined}
             count={view.scoredJobCount}
             reason={offers.compensation}
             busy={rescoring}
@@ -1098,8 +1112,7 @@ export default function Settings() {
             searches per run
           </label>
           <span className="text-xs text-ink/40">
-            ≈ ${estimateRunCost(estimateInput).dollars.toFixed(2)} per run at this
-            setting
+            {estimateProvider === "google" ? "By Role search requires Anthropic or OpenAI." : estimateProvider ? `≈ $${estimateRunCost(estimateInput).dollars.toFixed(2)} per run at this setting` : "Connect an AI provider for a cost estimate."}
           </span>
         </div>
         <SectionActions
@@ -1150,7 +1163,7 @@ export default function Settings() {
         tenant_id, so there was only ever one key; the duplication was purely a
         rendering mistake.
       */}
-      <ApiKeyPanel />
+      <ApiKeyPanel isAdmin={isAdmin} onStatusChange={setKeyStatus} />
     </div>
   );
 }

@@ -33,8 +33,8 @@ export default function SignupIntro({ returning = false, children }: {
         </p>
         {children}
         <div className="mt-6 rounded-lg bg-canvas p-4 text-sm leading-relaxed text-ink/70">
-          <p className="font-medium text-ink">Bring your own Anthropic API key</p>
-          <p className="mt-1">You’ll connect your key during setup. AI usage is billed to your Anthropic account; no AI usage is included.</p>
+          <p className="font-medium text-ink">Bring your own AI API key</p>
+          <p className="mt-1">Connect an Anthropic, OpenAI, or Google Gemini key during setup. Usage is billed by your chosen provider; no AI usage is included by this app.</p>
         </div>
         <p className="mt-6 text-center text-sm text-ink/60">
           {returning ? "New here? " : "Already have an account? "}

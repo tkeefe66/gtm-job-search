@@ -83,8 +83,8 @@ export function generationFailure(): string {
  */
 /** Shown to accounts that need to connect their own key. */
 export function keyStepCopy(): string {
-  return "Your own Anthropic API key is required to build your profile and search for jobs. " +
-    "Usage is billed directly to your Anthropic account. There is no included AI usage.";
+  return "Your own AI API key is required to build your profile and search for jobs. Choose Anthropic, OpenAI, or Google Gemini. " +
+    "Usage is billed by your selected provider. There is no AI usage included by this app.";
 }
 
 export function sampleRoleFor(input: {

@@ -1,4 +1,6 @@
 import { createAnthropicProvider } from "./anthropic";
+import { createOpenAIProvider } from "./openai";
+import { createGoogleProvider } from "./google";
 import type { Provider, ProviderId } from "./types";
 
 export class ProviderNotImplementedError extends Error {
@@ -15,6 +17,8 @@ export class ProviderNotImplementedError extends Error {
  */
 const PROVIDERS: Partial<Record<ProviderId, Provider>> = {
   anthropic: createAnthropicProvider(),
+  openai: createOpenAIProvider(),
+  google: createGoogleProvider(),
 };
 
 /**
@@ -23,7 +27,7 @@ const PROVIDERS: Partial<Record<ProviderId, Provider>> = {
  * send that tenant's key, and their bill, to a vendor they did not choose.
  */
 export function providerFor(id: string): Provider {
-  const p = PROVIDERS[id as ProviderId];
+  const p = Object.prototype.hasOwnProperty.call(PROVIDERS, id) ? PROVIDERS[id as ProviderId] : undefined;
   if (!p) throw new ProviderNotImplementedError(id);
   return p;
 }

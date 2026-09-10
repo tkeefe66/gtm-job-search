@@ -462,7 +462,7 @@ export async function sendChatTurn(jobId: string, message: string, geometry?: un
   // response cut off at max_tokens still parses into a valid-LOOKING object
   // with operations silently missing — a turn like that is refused outright,
   // never partially applied.
-  if (completion!.stopReason === "max_tokens") {
+  if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(completion!.stopReason ?? "")) {
     const updated: StoredChatMessage[] = [
       ...priorMessages,
       { role: "user", text: message },

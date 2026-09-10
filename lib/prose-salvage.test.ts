@@ -182,3 +182,12 @@ describe("SALVAGE_SYSTEM", () => {
     expect(SALVAGE_SYSTEM.toLowerCase()).toContain("transcrib");
   });
 });
+
+// Mutation: leave non-Anthropic completed turns out of the allowlist.
+test.each(["completed", "STOP"])("salvages a completed %s response", reason => {
+  expect(salvageDecisionFor(reason)).toBe("salvage");
+});
+// Mutation: mistake any new provider status for a complete answer.
+test.each(["incomplete", "MAX_TOKENS", "SAFETY", "failed"])("refuses unfinished or blocked %s responses", reason => {
+  expect(salvageDecisionFor(reason)).toBe("fail");
+});

@@ -28,21 +28,21 @@ vi.mock("@/lib/tenant", () => ({ resolveTenantId: async () => "test-user" }));
 const rawQuery = vi.fn();
 vi.mock("@/lib/supabase", () => ({ rawQuery: (...a: unknown[]) => rawQuery(...a) }));
 
-vi.mock("@/lib/secret-box", () => ({
-  seal: () => ({
+const sealKey = vi.fn((_key: string, _aad: unknown) => ({
     keyId: "k", aadVersion: 2, ciphertext: "c", nonce: "n", authTag: "t",
-  }),
+  }));
+vi.mock("@/lib/secret-box", () => ({
+  seal: (...args: unknown[]) => sealKey(args[0] as string, args[1]),
   lastFour: (k: string) => k.slice(-4),
 }));
 
 const validateKey = vi.fn();
 vi.mock("@/lib/providers/registry", () => ({
-  providerFor: () => ({
-    id: "anthropic",
-    defaultModel: "claude-sonnet-4-6",
-    pricedModels: ["claude-sonnet-4-6"],
-    validateKey,
-  }),
+  providerFor: (id: string) => {
+    const models: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4.1", google: "gemini-2.5-flash" };
+    if (!models[id]) throw new Error("unsupported");
+    return { id, defaultModel: models[id], pricedModels: [models[id]], validateKey };
+  },
 }));
 
 import { saveApiKey } from "./api-key";
@@ -80,5 +80,35 @@ describe("a model the provider cannot price is not storable", () => {
 
     expect(res.error).toBeUndefined();
     expect(validateKey).toHaveBeenCalledWith("sk-ant-plausible", "claude-sonnet-4-6");
+  });
+});
+
+
+describe("selected API provider", () => {
+  // Mutation: persist or seal every key as Anthropic regardless of selection.
+  test.each([["openai", "gpt-4.1"], ["google", "gemini-2.5-flash"]])("keeps %s routing bound to the saved key", async (provider, model) => {
+    expect(await saveApiKey("test-provider-key", { provider })).toEqual({});
+    expect(validateKey).toHaveBeenCalledWith("test-provider-key", model);
+    const insert = rawQuery.mock.calls.find(c => String(c[0]).includes("insert into"));
+    expect(insert?.[1][7]).toBe(provider);
+    expect(sealKey).toHaveBeenCalledWith("test-provider-key", { tenantId: "test-user", provider, model: null });
+  });
+  // Mutation: route unknown provider names to the default vendor.
+  test("rejects unknown providers without transmitting the key", async () => {
+    expect((await saveApiKey("secret-key", { provider: "unknown" })).error).toMatch(/supported provider/);
+    expect(validateKey).not.toHaveBeenCalled();
+    expect(sealKey).not.toHaveBeenCalled();
+  });
+  // Mutation: allow a model belonging to another vendor.
+  test("rejects a model from another provider before validation", async () => {
+    expect((await saveApiKey("secret-key", { provider: "google", model: "gpt-4.1" })).error).toBeDefined();
+    expect(validateKey).not.toHaveBeenCalled();
+  });
+  // Mutation: return the provider SDK exception (which may contain a key).
+  test("does not expose a failed verification request", async () => {
+    validateKey.mockRejectedValue(new Error("https://example.invalid/?key=secret-key"));
+    const result = await saveApiKey("secret-key", { provider: "openai" });
+    expect(result.error).toMatch(/try again/i);
+    expect(result.error).not.toContain("secret-key");
   });
 });

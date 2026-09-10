@@ -29,6 +29,8 @@ export interface BillingScope {
   model: string;
   /** Accumulated, by the facade in lib/model-call.ts. */
   searches: number;
+  /** Billable grounded prompts, distinct from the search queries they issue. */
+  groundedRequests?: number;
   inputTokens: number;
   /** Separate from inputTokens because providers disagree about whether their
    *  input count includes cached reads, and they are priced ~10x apart. */
@@ -58,6 +60,7 @@ export function billingScope(): BillingScope | null {
 /** Called by the Anthropic helpers as usage is observed. */
 export function recordUsage(u: {
   searches?: number;
+  groundedRequests?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -65,6 +68,7 @@ export function recordUsage(u: {
   const s = store.getStore();
   if (!s) return;
   s.searches += u.searches ?? 0;
+  s.groundedRequests = (s.groundedRequests ?? 0) + (u.groundedRequests ?? 0);
   s.inputTokens += u.inputTokens ?? 0;
   s.cachedInputTokens += u.cachedInputTokens ?? 0;
   s.outputTokens += u.outputTokens ?? 0;

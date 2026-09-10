@@ -227,7 +227,7 @@ async function discoverStartupsInner(
         extract: arrayUnder<Startup>("startups"),
       }));
     } catch (err) {
-      if (stopReason === "max_tokens") {
+      if (["max_tokens", "MAX_TOKENS", "incomplete"].includes(stopReason ?? "")) {
         throw new Error(SEARCH_RESPONSE_TOO_LARGE);
       }
       throw err;
