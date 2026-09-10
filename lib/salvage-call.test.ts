@@ -130,7 +130,7 @@ describe("parseOrSalvage on an incomplete response", () => {
         raw: PROSE, stopReason: "max_tokens", key: "roles", itemNoun: "role",
         label: "test", extract: arrayUnder("roles"),
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow("The search produced too much data to finish. Please retry.");
 
     expect(complete).not.toHaveBeenCalled();
   });

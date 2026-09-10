@@ -234,11 +234,14 @@ describe("pickQueries", () => {
 describe("planQueries", () => {
   const list = Array.from({ length: 39 }, (_, i) => `q${i}`);
 
-  test("no ceiling sends every query and sets max_uses to the multiple", () => {
+  test("no stored ceiling uses the 32-search default", () => {
+    // Mutation this catches: restoring the old no-ceiling branch that offered
+    // all 39 queries and allowed 78 searches; production reached 34 searches
+    // and truncated the response before its JSON array finished.
     const plan = planQueries(list, null);
-    expect(plan.queries).toBe(list);
-    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
-    expect(plan.reason).toContain("no ceiling set");
+    expect(plan.queries).toHaveLength(32);
+    expect(plan.maxSearches).toBe(32);
+    expect(plan.reason).toContain("default ceiling 32");
   });
 
   test("a ceiling narrows the offer AND becomes the hard cap", () => {
@@ -254,6 +257,8 @@ describe("planQueries", () => {
   test("a ceiling above the query count cannot inflate the offer", () => {
     const plan = planQueries(list, 500);
     expect(plan.queries.length).toBe(39);
+    // An explicit user setting remains authoritative even above the default.
+    expect(plan.maxSearches).toBe(500);
   });
 
   test("a rejected ceiling is reported as ignored, not as absent", () => {
@@ -284,19 +289,19 @@ describe("planQueries", () => {
     }
   });
 
-  test("a stored ceiling of 0 reads as 'no ceiling', never as 'zero searches'", () => {
+  test("a stored ceiling of 0 uses the default, never 'zero searches'", () => {
     // The precedence trap this function exists to close. `ceiling ? a : b` is
     // falsy at 0 (sends all 39) while `ceiling ?? c` is NOT nullish at 0
     // (max_uses 0) — inconsistent, and the combination silently returns no
     // results. Whichever way 0 is resolved, the two must agree.
     const plan = planQueries(list, 0);
-    expect(plan.queries.length).toBe(39);
-    expect(plan.maxSearches).toBe(39 * MAX_QUERY_MULTIPLIER);
+    expect(plan.queries.length).toBe(32);
+    expect(plan.maxSearches).toBe(32);
   });
 
-  test("a negative stored ceiling reads as 'no ceiling' too", () => {
+  test("a negative stored ceiling uses the default too", () => {
     const plan = planQueries(list, -5);
-    expect(plan.queries.length).toBe(39);
+    expect(plan.queries.length).toBe(32);
     expect(plan.maxSearches).toBeGreaterThan(0);
   });
 

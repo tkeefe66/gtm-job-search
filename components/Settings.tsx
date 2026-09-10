@@ -226,7 +226,7 @@ const SEP = "\n";
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
- * A positive whole number, or null for "off". Shared by the search ceiling
+ * A positive whole number, or null for the default. Shared by the search ceiling
  * and the comp floor — both reject 0 and non-integers the same way
  * saveCeiling and saveCompFloor do server-side.
  */
@@ -1069,7 +1069,7 @@ export default function Settings() {
 
       <SectionCard
         label={LABELS.ceiling}
-        help="A runaway rail on a single By Role run, counted in web searches. Off by default — a run then issues one search per query."
+        help="A limit on one By Role run, counted in web searches. The default is 32; set a custom value when you want a different coverage/cost tradeoff."
         error={errors.ceiling}
         notice={notices.ceiling}
       >
@@ -1082,7 +1082,7 @@ export default function Settings() {
                 setDraft((d) => ({ ...d, ceilingEnabled: !e.target.checked }))
               }
             />
-            No ceiling
+            Use default (32)
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -1106,7 +1106,7 @@ export default function Settings() {
           busy={!!busy.ceiling}
           onSave={handleSaveCeiling}
           onReset={() => void run("ceiling", () => saveCeiling(null))}
-          resetLabel="Turn off"
+          resetLabel="Use default"
         />
       </SectionCard>
 

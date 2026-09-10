@@ -5,7 +5,7 @@ import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
 
 import { callWithWebSearchDetailed } from "@/lib/model-call";
-import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
+import { arrayUnder, parseOrSalvage, SEARCH_RESPONSE_TOO_LARGE } from "@/lib/salvage-call";
 import { STARTUP_FIELDS } from "@/lib/types";
 import { cacheWriteWarning, countPhrase } from "@/lib/cache-write-warning";
 import { supabase } from "@/lib/supabase";
@@ -228,7 +228,7 @@ async function discoverStartupsInner(
       }));
     } catch (err) {
       if (stopReason === "max_tokens") {
-        throw new Error("The search produced too much data to finish. Please retry.");
+        throw new Error(SEARCH_RESPONSE_TOO_LARGE);
       }
       throw err;
     }

@@ -3,6 +3,7 @@ import {
   ANTHROPIC_DEFAULT_MODEL,
   anthropicPrice,
 } from "@/lib/providers/anthropic-pricing";
+import { DEFAULT_ROLE_SEARCH_MAX_SEARCHES } from "@/lib/role-search-policy";
 
 // Deliberately approximate — surfaced in the UI as "~$X". Its job is making the
 // Denver/Colorado overlap visible, not precise billing. The RATES, though, come
@@ -34,7 +35,10 @@ export function estimateRunCost(input: EstimateInput): Estimate {
   const stackQueries = input.stackTerms * input.locations;
   // A run is one family at a time; the larger grid is the worst case.
   const grid = Math.max(titleQueries, stackQueries);
-  const searches = input.ceiling != null ? Math.min(grid, input.ceiling) : grid;
+  const searches = Math.min(
+    grid,
+    input.ceiling ?? DEFAULT_ROLE_SEARCH_MAX_SEARCHES
+  );
 
   const dollars =
     searches === 0
@@ -73,7 +77,11 @@ export function formatEstimate(input: EstimateInput): string {
     ? plural(input.stackTerms, "stack term")
     : plural(input.titles, "title");
   const capped =
-    input.ceiling !== null && e.searches < e.grid ? ` (capped at ${e.searches})` : "";
+    e.searches < e.grid
+      ? input.ceiling === null
+        ? ` (default cap ${DEFAULT_ROLE_SEARCH_MAX_SEARCHES})`
+        : ` (capped at ${e.searches})`
+      : "";
   return (
     `${factor} × ${plural(input.locations, "location")} = ` +
     `${plural(e.grid, "query", "queries")}${capped} · ` +

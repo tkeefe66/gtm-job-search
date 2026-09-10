@@ -27,6 +27,7 @@ import { supabase } from "@/lib/supabase";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { untrackedFromWatched } from "@/lib/untracked-companies";
 import { getWatchedCompanyKeys } from "@/app/actions/watchlist";
+import { ROLE_SEARCH_MAX_TOKENS } from "@/lib/role-search-policy";
 
 export interface RoleSearchResult {
   matches: RoleMatch[];
@@ -178,10 +179,9 @@ async function findRolesByCriteriaInner(
       };
     }
 
-    // Every web search Claude issues is billed separately. With no user
-    // ceiling set the full enumeration is sent (coverage beats sixty cents,
-    // see MAX_QUERY_MULTIPLIER); a ceiling narrows it to a proportional
-    // spread. planQueries decides both the offer and the hard cap together.
+    // Every web search Claude issues is billed separately. The default ceiling
+    // keeps a large title/tool grid bounded; a user-set ceiling overrides it.
+    // planQueries decides both the offered spread and the hard cap together.
     const allQueries = allQueriesFor(family, criteria, profile);
     const { queries, maxSearches, reason } = planQueries(allQueries, ceiling);
     console.log(
@@ -201,16 +201,17 @@ async function findRolesByCriteriaInner(
         buildingUpside: profile.buildingUpside,
       }),
       // Many searches per call; search narration counts against the budget.
-      maxTokens: 8000,
+      maxTokens: ROLE_SEARCH_MAX_TOKENS,
       // The prompt's query list is advisory — the model decides how many
       // searches to actually run, and each one is billed. This is the only
       // hard ceiling on that bill (max_uses on the web_search tool block).
       maxSearches,
     });
 
-    // Recovered rather than thrown: this call is the most expensive in the app
-    // (uncapped searches unless the user set a ceiling), so discarding it over
-    // a formatting slip throws away everything it just paid for.
+    // Recovered rather than thrown: this call is one of the most expensive in
+    // the app, so discarding it over a formatting slip throws away everything
+    // it just paid for. A max_tokens response remains incomplete and is refused
+    // with the user-facing message owned by parseOrSalvage.
     const { items } = await parseOrSalvage<RoleMatch>({
       raw,
       stopReason,

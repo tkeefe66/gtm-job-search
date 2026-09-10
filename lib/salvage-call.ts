@@ -24,6 +24,9 @@ export interface SalvageOutcome<T> {
   salvaged: boolean;
 }
 
+export const SEARCH_RESPONSE_TOO_LARGE =
+  "The search produced too much data to finish. Please retry.";
+
 /**
  * Parse a web-search response, recovering it under constrained decoding if the
  * model answered in prose.
@@ -62,6 +65,9 @@ export async function parseOrSalvage<T>(opts: {
         `${opts.label}: response was truncated (stop_reason=${opts.stopReason}); not salvaging — ` +
           `raise maxTokens if this recurs. Raw head: ${opts.raw.slice(0, 200)}`
       );
+      if (opts.stopReason === "max_tokens") {
+        throw new Error(SEARCH_RESPONSE_TOO_LARGE);
+      }
       throw err;
     }
     console.warn(

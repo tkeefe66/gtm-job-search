@@ -20,6 +20,7 @@ import {
   readAllSettings,
   type SettingRow,
 } from "@/lib/settings-store";
+import { DEFAULT_ROLE_SEARCH_MAX_SEARCHES } from "@/lib/role-search-policy";
 import type { RoleSearchFamily } from "@/lib/types";
 
 export const DEFAULT_TARGET_TITLES = [
@@ -189,12 +190,9 @@ export function stackQueries(criteria: Criteria, querySubject: string): string[]
   return queries;
 }
 
-// The runaway rail, not a coverage ration. Measured cost of an uncapped title
-// run is ~$1.13 against ~$0.55 capped — the old fixed cap of 15 rationed
-// coverage on the most central titles to save about sixty cents, which is the
-// wrong trade for a job search. When the user sets no ceiling, max_uses is
-// this multiple of the query count: high enough never to bind in normal use,
-// low enough to stop a loop. When the user does set a ceiling, that wins.
+// Below the default ceiling, allow more than one search per offered query: the
+// model may vary wording or sources. DEFAULT_ROLE_SEARCH_MAX_SEARCHES remains
+// the hard outer bound when the user has not chosen an explicit ceiling.
 export const MAX_QUERY_MULTIPLIER = 2;
 
 // Web searches are billed per search, so a call gets a bounded subset of the
@@ -228,7 +226,7 @@ export type QueryPlan = {
  * precedence rule below is pinned by lib/search-criteria.test.ts.
  *
  * A stored ceiling of 0 or a negative — a bad hand-write, or a settings form
- * that lets an empty field through as 0 — is treated as "no ceiling set", not
+ * that lets an empty field through as 0 — is treated as "use the default", not
  * as "run zero searches". The two decisions must agree: a naive
  * `ceiling ? pickQueries(...) : all` is *falsy* at 0 and sends the full list,
  * while a naive `ceiling ?? all.length * MULT` is *not nullish* at 0 and caps
@@ -247,22 +245,31 @@ export function planQueries(
     // it exists to explain — the user set a value, and the run ignored it.
     console.warn(
       `search-criteria: ignoring a stored search ceiling of ${ceiling} — a ceiling ` +
-        `must be at least 1. Running with no ceiling. Set a positive value on the ` +
-        `Settings page, or clear the field to run uncapped on purpose.`
+        `must be at least 1. Using the default ceiling of ` +
+        `${DEFAULT_ROLE_SEARCH_MAX_SEARCHES}. Set a positive value on the Settings page.`
     );
   }
   const cap = ignored || ceiling === null ? null : ceiling;
-  const queries = cap === null ? allQueries : pickQueries(allQueries, cap);
+  const queryCap = cap ?? DEFAULT_ROLE_SEARCH_MAX_SEARCHES;
+  const queries = pickQueries(allQueries, queryCap);
   // Floored at 1: max_uses: 0 is a request the API would reject outright, and
   // an empty criteria list (every title deleted) would otherwise produce it.
-  const maxSearches = Math.max(1, cap ?? allQueries.length * MAX_QUERY_MULTIPLIER);
+  const maxSearches = Math.max(
+    1,
+    cap ??
+      Math.min(
+        DEFAULT_ROLE_SEARCH_MAX_SEARCHES,
+        allQueries.length * MAX_QUERY_MULTIPLIER
+      )
+  );
   return {
     queries,
     maxSearches,
     reason: ignored
-      ? `stored ceiling ${ceiling} ignored (must be >= 1), max_uses ${maxSearches}`
+      ? `stored ceiling ${ceiling} ignored (must be >= 1), default ceiling ` +
+        `${DEFAULT_ROLE_SEARCH_MAX_SEARCHES}, max_uses ${maxSearches}`
       : cap === null
-        ? `no ceiling set, max_uses ${maxSearches}`
+        ? `default ceiling ${DEFAULT_ROLE_SEARCH_MAX_SEARCHES}, max_uses ${maxSearches}`
         : `ceiling ${cap}, max_uses ${maxSearches}`,
   };
 }

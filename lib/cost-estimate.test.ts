@@ -8,9 +8,11 @@ describe("estimateRunCost", () => {
     expect(e.stackQueries).toBe(24);
   });
 
-  test("without a ceiling, searches equal the larger grid", () => {
+  test("without a stored ceiling, the estimate applies the 32-search default", () => {
+    // Mutation this catches: pricing the full grid when the server now applies
+    // its default ceiling, which would overstate the cost shown in Settings.
     const e = estimateRunCost({ titles: 13, locations: 3, stackTerms: 8, ceiling: null });
-    expect(e.searches).toBe(39);
+    expect(e.searches).toBe(32);
   });
 
   test("a ceiling caps the searches", () => {
@@ -34,8 +36,8 @@ describe("estimateRunCost", () => {
     // at 0.1) passes every other test in this suite. This is the only one that
     // catches it.
     const e = estimateRunCost({ titles: 13, locations: 3, stackTerms: 8, ceiling: null });
-    expect(e.dollars).toBeGreaterThan(1.0);
-    expect(e.dollars).toBeLessThan(1.3);
+    expect(e.dollars).toBeGreaterThan(0.9);
+    expect(e.dollars).toBeLessThan(1.1);
   });
 
   test("an empty grid costs nothing", () => {
@@ -49,7 +51,7 @@ describe("formatEstimate", () => {
   test("renders the shipped defaults as one line", () => {
     expect(
       formatEstimate({ titles: 13, locations: 3, stackTerms: 8, ceiling: null })
-    ).toBe("13 titles × 3 locations = 39 queries · ~$1.17 per By Role run");
+    ).toBe("13 titles × 3 locations = 39 queries (default cap 32) · ~$0.99 per By Role run");
   });
 
   test("names the grid the price is actually for", () => {
@@ -58,7 +60,7 @@ describe("formatEstimate", () => {
     // queries" beside a price for 60 searches — a line that contradicts
     // itself. The factors shown must multiply out to the priced grid.
     const s = formatEstimate({ titles: 2, locations: 3, stackTerms: 20, ceiling: null });
-    expect(s).toContain("20 stack terms × 3 locations = 60 queries");
+    expect(s).toContain("20 stack terms × 3 locations = 60 queries (default cap 32)");
     expect(s).not.toContain("= 6 queries");
   });
 
@@ -108,9 +110,9 @@ describe("formatEstimate", () => {
     expect(s).not.toContain("capped");
   });
 
-  test("says nothing about a cap when there is no ceiling", () => {
+  test("states the default cap when no stored ceiling binds", () => {
     const s = formatEstimate({ titles: 13, locations: 3, stackTerms: 8, ceiling: null });
-    expect(s).not.toContain("capped");
+    expect(s).toContain("default cap 32");
   });
 
   test("singularizes each of the three counts", () => {
