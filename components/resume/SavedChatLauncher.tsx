@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import ChatComposer, { ChatWelcome } from "./ChatComposer";
+import styles from "./chat.module.css";
 
 /**
  * The chat composer shown on a SAVED résumé.
@@ -31,7 +33,7 @@ export default function SavedChatLauncher({
   const [text, setText] = useState("");
 
   if (blockedNote) {
-    return <p className="text-xs text-ink/60">{blockedNote}</p>;
+    return <div className={styles.transcript}><p className={styles.notice}>{blockedNote}</p></div>;
   }
 
   function submit() {
@@ -41,33 +43,16 @@ export default function SavedChatLauncher({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-xs text-ink/60">
-        Sending opens this version as your working draft and asks there. Your current draft is
-        saved as a checkpoint first.
-      </p>
-      <div className="flex items-center gap-2">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          placeholder="Ask for a change, e.g. “cut every role to three bullets”"
-          disabled={isPending}
-          className="flex-1 rounded border border-slate px-3 py-1.5 text-sm"
-        />
-        <button
-          onClick={submit}
-          disabled={isPending || text.trim() === ""}
-          className="rounded border border-slate px-3 py-1.5 text-sm hover:border-ink disabled:opacity-50"
-        >
-          {isPending ? "Opening…" : "Send"}
-        </button>
+    <div className={styles.panel}>
+      <div className={styles.transcript}>
+        <ChatWelcome onChoose={setText} disabled={isPending} />
+        <p className={styles.notice}>
+          Sending opens this version as your working draft and asks there. Your current draft is
+          saved as a checkpoint first.
+        </p>
+        {isPending && <p role="status" className={styles.working}>Opening your working draft…</p>}
       </div>
+      <ChatComposer value={text} onChange={setText} onSend={submit} disabled={isPending} busy={isPending} />
     </div>
   );
 }
