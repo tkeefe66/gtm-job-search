@@ -174,8 +174,8 @@ export interface TenantBudget {
   id: string;
   email: string;
   role: string;
-  dailyCents: number;
-  monthlyCents: number;
+  dailyCents: number | null;
+  monthlyCents: number | null;
   spentTodayCents: number;
   spentMonthCents: number;
   hasOwnKey: boolean;
@@ -213,9 +213,11 @@ export async function getBudgetOverview(): Promise<{
   );
   if (described !== undefined) return { tenants: [], error: described };
 
-  const { data: defaults } = await rawQuery<{ key: string; value: unknown }>(
+  const { data: defaults, error: defaultsError } = await rawQuery<{ key: string; value: unknown }>(
     `select key, value from platform_settings`
   );
+  const defaultsFailure = describeWriteFailure(defaultsError?.message, "load budget defaults");
+  if (defaultsFailure !== undefined) return { tenants: [], error: defaultsFailure };
   const num = (k: string, f: number) => {
     const v = defaults.find((d) => d.key === k)?.value;
     return typeof v === "number" ? v : f;
@@ -229,28 +231,29 @@ export async function getBudgetOverview(): Promise<{
   for (const u of users) {
     const admin = u.role === "admin";
     // Scoped to THIS tenant, so the policy permits the read.
-    const { data: counters } = await rawQuery<{ period: string; spent_cents: number }>(
+    const { data: counters, error: countersError } = await rawQuery<{ period: string; spent_cents: number }>(
       `select period, spent_cents from usage_counters where tenant_id = $1`,
       [u.id],
       u.id
     );
-    const { data: keys } = await rawQuery<{ tenant_id: string }>(
+    const countersFailure = describeWriteFailure(countersError?.message, "load account spending");
+    if (countersFailure !== undefined) return { tenants: [], error: countersFailure };
+    const { data: keys, error: keysError } = await rawQuery<{ tenant_id: string }>(
       `select tenant_id from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
       [u.id],
       u.id
     );
+    const keysFailure = describeWriteFailure(keysError?.message, "load account API key status");
+    if (keysFailure !== undefined) return { tenants: [], error: keysFailure };
     const spent = (p: string) => counters.find((c) => c.period === p)?.spent_cents ?? 0;
 
     tenants.push({
       id: u.id,
       email: u.email,
       role: u.role,
-      dailyCents:
-        u.daily_budget_cents ??
-        num(admin ? "adminDailyBudgetCents" : "defaultDailyBudgetCents", admin ? 1000 : 200),
-      monthlyCents:
-        u.monthly_budget_cents ??
-        num(admin ? "adminMonthlyBudgetCents" : "defaultMonthlyBudgetCents", admin ? 10_000 : 1000),
+      // Only admin ceilings are enforced. Provider limits for BYO keys are unknown.
+      dailyCents: admin ? u.daily_budget_cents ?? num("adminDailyBudgetCents", 1000) : null,
+      monthlyCents: admin ? u.monthly_budget_cents ?? num("adminMonthlyBudgetCents", 10_000) : null,
       spentTodayCents: spent(today),
       spentMonthCents: spent(month),
       hasOwnKey: keys.length > 0,
