@@ -5,6 +5,8 @@ import { requireActor } from "@/lib/require-actor";
 import { isPlatform } from "@/lib/platform-context";
 import { rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
+import { readSpendLimits } from "@/lib/spend-limit-store";
+import { readSpent } from "@/lib/usage-store";
 
 /**
  * Waitlist administration.
@@ -213,30 +215,16 @@ export async function getBudgetOverview(): Promise<{
   );
   if (described !== undefined) return { tenants: [], error: described };
 
-  const { data: defaults, error: defaultsError } = await rawQuery<{ key: string; value: unknown }>(
-    `select key, value from platform_settings`
-  );
-  const defaultsFailure = describeWriteFailure(defaultsError?.message, "load budget defaults");
-  if (defaultsFailure !== undefined) return { tenants: [], error: defaultsFailure };
-  const num = (k: string, f: number) => {
-    const v = defaults.find((d) => d.key === k)?.value;
-    return typeof v === "number" ? v : f;
-  };
-
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const month = now.toISOString().slice(0, 7);
 
   const tenants: TenantBudget[] = [];
   for (const u of users) {
     const admin = u.role === "admin";
-    // Scoped to THIS tenant, so the policy permits the read.
-    const { data: counters, error: countersError } = await rawQuery<{ period: string; spent_cents: number }>(
-      `select period, spent_cents from usage_counters where tenant_id = $1`,
-      [u.id],
-      u.id
-    );
-    const countersFailure = describeWriteFailure(countersError?.message, "load account spending");
+    const loaded = await readSpendLimits(u.id, admin);
+    if (loaded.error !== undefined) return { tenants: [], error: loaded.error };
+    const daily = await readSpent(u.id, now, "daily");
+    const monthly = await readSpent(u.id, now, "monthly");
+    const countersFailure = describeWriteFailure(daily.error ?? monthly.error, "load account spending");
     if (countersFailure !== undefined) return { tenants: [], error: countersFailure };
     const { data: keys, error: keysError } = await rawQuery<{ tenant_id: string }>(
       `select tenant_id from tenant_api_keys where tenant_id = $1 and status = 'ok'`,
@@ -245,17 +233,14 @@ export async function getBudgetOverview(): Promise<{
     );
     const keysFailure = describeWriteFailure(keysError?.message, "load account API key status");
     if (keysFailure !== undefined) return { tenants: [], error: keysFailure };
-    const spent = (p: string) => counters.find((c) => c.period === p)?.spent_cents ?? 0;
 
     tenants.push({
       id: u.id,
       email: u.email,
       role: u.role,
-      // Only admin ceilings are enforced. Provider limits for BYO keys are unknown.
-      dailyCents: admin ? u.daily_budget_cents ?? num("adminDailyBudgetCents", 1000) : null,
-      monthlyCents: admin ? u.monthly_budget_cents ?? num("adminMonthlyBudgetCents", 10_000) : null,
-      spentTodayCents: spent(today),
-      spentMonthCents: spent(month),
+      ...loaded.limits,
+      spentTodayCents: daily.spentCents!,
+      spentMonthCents: monthly.spentCents!,
       hasOwnKey: keys.length > 0,
     });
   }

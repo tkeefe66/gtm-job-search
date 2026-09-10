@@ -8,7 +8,7 @@ const dollars = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 /** A spend bar. Amber past 75%, red at the ceiling — the point is to see it coming. */
 function Meter({ spent, ceiling }: { spent: number; ceiling: number | null }) {
-  if (ceiling === null) return <span className="text-xs text-ink/60">{dollars(spent)}</span>;
+  if (ceiling === null) return <div className="flex justify-between gap-3 text-xs text-ink/60"><span>{dollars(spent)}</span><span>Not set</span></div>;
   const pct = ceiling > 0 ? Math.min(100, (spent / ceiling) * 100) : 0;
   const tone = pct >= 100 ? "bg-[#B42318]" : pct >= 75 ? "bg-[#B54708]" : "bg-ink/60";
   return (
@@ -57,8 +57,8 @@ export default function AdminBudgets() {
     <div className="mt-10">
       <h2 className="font-display text-xl text-ink">Spend</h2>
       <p className="mt-1 text-sm text-ink/60">
-        Daily and monthly caps apply to admin accounts. Other accounts use their
-        own API key; limits set with their provider are not available here.
+        App spending and saved limits. Users manage their own limits in Settings.
+        Provider limits are separate. Periods reset at midnight UTC.
       </p>
 
       {error && (
@@ -91,7 +91,7 @@ export default function AdminBudgets() {
                 <td className="py-3">
                   {t.role !== "admin" ? (
                     <span className="text-xs text-ink/50">
-                      {t.hasOwnKey ? "Provider limit unavailable" : "AI calls disabled"}
+                      {t.hasOwnKey ? "User managed" : "AI calls disabled"}
                     </span>
                   ) : editing === t.id ? (
                     <div className="flex flex-wrap items-center gap-2">

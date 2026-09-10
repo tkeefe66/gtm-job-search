@@ -39,6 +39,7 @@ import {
 import RescorePrompt from "./RescorePrompt";
 import { Spinner } from "./ui";
 import ApiKeyPanel from "./ApiKeyPanel";
+import SpendLimitsPanel from "./SpendLimitsPanel";
 import type { ApiKeyStatus } from "@/app/actions/api-key";
 import { isSupportedProvider, providerChoice } from "@/lib/providers/catalog";
 import StatusEditor from "./StatusEditor";
@@ -1164,6 +1165,7 @@ export default function Settings({ isAdmin = false }: { isAdmin?: boolean }) {
         rendering mistake.
       */}
       <ApiKeyPanel isAdmin={isAdmin} onStatusChange={setKeyStatus} />
+      <SpendLimitsPanel isAdmin={isAdmin} provider={keyStatus?.provider} />
     </div>
   );
 }

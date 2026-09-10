@@ -25,10 +25,11 @@ describe("tiers", () => {
   // rather than metered against the platform's key. The previous shape resolved
   // them to the owner's key with a ceiling, which meant approving somebody
   // silently spent the owner's money.
-  test("only the admin is metered, because only the admin spends the platform key", () => {
+  test("admin is metered by default; BYO opts in", () => {
     expect(isMetered("admin")).toBe(true);
     expect(isMetered("byo")).toBe(false);
     expect(isMetered("none")).toBe(false);
+    expect(isMetered("byo", true)).toBe(true);
   });
 
   test("a keyless tenant is told what to do, not shown an error", () => {
@@ -36,10 +37,11 @@ describe("tiers", () => {
     expect(needsKeyMessage()).toContain("Settings");
   });
 
-  test("only admin may raise its own ceiling", () => {
+  // Mutation: keep BYO users excluded from their own controls.
+  test("all authenticated tiers may configure their own ceilings", () => {
     expect(canRaiseOwnCeiling("admin")).toBe(true);
-    expect(canRaiseOwnCeiling("none")).toBe(false);
-    expect(canRaiseOwnCeiling("byo")).toBe(false);
+    expect(canRaiseOwnCeiling("none")).toBe(true);
+    expect(canRaiseOwnCeiling("byo")).toBe(true);
   });
 });
 
@@ -58,7 +60,7 @@ describe("period keys", () => {
 });
 
 describe("reserveVerdict", () => {
-  test("BYO is never blocked and gets no search cap", () => {
+  test("BYO without chosen limits gets no search cap", () => {
     expect(
       reserveVerdict({
         tier: "byo",
@@ -198,8 +200,12 @@ describe("reserveVerdict", () => {
 });
 
 describe("the message a capped tenant sees", () => {
-  // There is no longer a non-admin capped message: nobody else spends the
-  // platform's key, so nobody else can be capped.
+  // Mutation: suggest waiting for a reset when a zero cap will still block.
+  test("a zero limit needs an edit, not a reset", () => {
+    const message = cappedMessage({ tier: "byo", reason: "daily", ceilingCents: 0, resetsOn: "2026-09-11" });
+    expect(message).toContain("Settings");
+    expect(message).not.toContain("wait");
+  });
   test("the monthly cap names the amount and the reset", () => {
     const m = cappedMessage({ tier: "admin", reason: "monthly", ceilingCents: 1000, resetsOn: "2026-09-01" });
     expect(m).toContain("$10.00");

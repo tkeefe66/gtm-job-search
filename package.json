@@ -24,6 +24,7 @@
     "unpdf": "^1.4.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^20.16.11",
     "@types/pg": "^8.20.0",
     "@types/react": "^18.3.11",
