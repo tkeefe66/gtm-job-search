@@ -74,6 +74,8 @@ async function handleCrawlNext(req: Request) {
     });
   }
 
+  const tenantsWithWork = candidates.filter((c) => c.company !== null).length;
+
     // Finish missing grades before buying more searches. This also prevents a
     // capped, still-due crawl candidate from starving other tenants' recovery.
     // Keep the existing caller's loop alive for one bounded recovery at a time.
@@ -82,7 +84,7 @@ async function handleCrawlNext(req: Request) {
         try {
           const recovery = await runAsTenant(tenant.id, () => recoverMissingGrade(tenant.isAdmin));
           if (recovery.attempted > 0) {
-            return NextResponse.json({ crawled: true, kind: "grading-recovery", recovery, tenantsWithWork: 0 });
+            return NextResponse.json({ crawled: true, kind: "grading-recovery", recovery, tenantsWithWork, tenantsCapped: 0 });
           }
           if (recovery.error !== undefined) console.warn(`cron/grading: ${recovery.error}`);
         } catch (error) {
@@ -90,25 +92,24 @@ async function handleCrawlNext(req: Request) {
         }
       }
     }
-  const pick = pickNextTenant(candidates);
-  if (!pick || pick.company === null) {
-    console.log(`cron/crawl-next: nothing due across ${candidates.length} tenant(s)`);
-    return NextResponse.json({ crawled: false, tenantsWithWork: 0 });
-  }
+  let remaining = candidates;
+  let tenantsCapped = 0;
+  // Each candidate is considered at most once per request. Removing a capped
+  // tenant preserves the same fairness ordering among the remaining tenants.
+  while (remaining.length > 0) {
+    const pick = pickNextTenant(remaining);
+    if (!pick || pick.company === null) break;
+    remaining = remaining.filter((c) => c.tenantId !== pick.tenantId);
+    const isAdmin = tenants.find((t) => t.id === pick.tenantId)?.isAdmin ?? false;
+    const company = pick.company;
 
-  const tenantsWithWork = candidates.filter((c) => c.company !== null).length;
-  const isAdmin = tenants.find((t) => t.id === pick.tenantId)?.isAdmin ?? false;
-  const company = pick.company;
-
-  return runAsTenant(pick.tenantId, async () => {
     // Metered exactly like the batch route. This is work that spends while
     // nobody is watching, and the loop makes it spend more often, so the
     // ceiling matters more here than anywhere a human is clicking.
     //
     // A capped tenant is SKIPPED, not failed — an exhausted budget is a normal
-    // state. It reports crawled:false so the caller's loop ends rather than
-    // spinning on a tenant that can never proceed; the next window picks it up.
-    const budget = await withBudget({
+    // state. Try the next candidate before ending the caller's loop.
+    const budget = await runAsTenant(pick.tenantId, () => withBudget({
       action: "crawl",
       estimateCents: 10,
       isAdmin,
@@ -116,15 +117,16 @@ async function handleCrawlNext(req: Request) {
         const ctx = await loadRunContext();
         return crawlCompany(company, { dryRun, ctx });
       },
-    });
+    }));
 
     if (budget.capped) {
       console.log(`cron/crawl-next: skipped a tenant — ${budget.capped}`);
-      return NextResponse.json({ crawled: false, capped: true, tenantsWithWork });
+      tenantsCapped++;
+      continue;
     }
     if (budget.error !== undefined) {
       console.error(`cron/crawl-next: budget check failed — ${budget.error}`);
-      return NextResponse.json({ crawled: false, error: budget.error }, { status: 500 });
+      return NextResponse.json({ crawled: false, error: budget.error, tenantsWithWork, tenantsCapped }, { status: 500 });
     }
 
     const result = budget.result ?? null;
@@ -133,6 +135,13 @@ async function handleCrawlNext(req: Request) {
         `newRoles=${result?.newRoles ?? 0} tenantsWithWork=${tenantsWithWork}`
     );
 
-    return NextResponse.json({ crawled: true, company, result, tenantsWithWork });
+    return NextResponse.json({ crawled: true, company, result, tenantsWithWork, tenantsCapped });
+  }
+  console.log(`cron/crawl-next: no eligible crawl across ${candidates.length} tenant(s); capped=${tenantsCapped}`);
+  return NextResponse.json({
+    crawled: false,
+    ...(tenantsCapped > 0 ? { capped: true } : {}),
+    tenantsWithWork,
+    tenantsCapped,
   });
 }
