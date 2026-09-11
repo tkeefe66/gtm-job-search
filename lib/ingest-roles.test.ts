@@ -59,6 +59,11 @@ vi.mock("@/app/actions/jobs", async () => ({
   updateJob: vi.fn(async () => ({})),
   getJobStatuses: vi.fn(async () => ({ statuses: h.statuses })),
 }));
+vi.mock("@/lib/grading-store", () => ({
+  gradingPaused: vi.fn(async () => null),
+  recordGradeFailure: vi.fn(async () => undefined),
+  updateMissingGrade: vi.fn(async () => ({saved:true})),
+}));
 vi.mock("@/lib/tenant", () => ({
   resolveTenantId: async () => "00000000-0000-0000-0000-000000000001",
 }));
@@ -82,7 +87,8 @@ vi.mock("@/lib/resolve-job-link", () => ({
 import { MAX_INGEST_READS, ingestRoles } from "./ingest-roles";
 import { readPosting } from "@/lib/posting-read";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
-import { addJob, updateJob } from "@/app/actions/jobs";
+import { addJob } from "@/app/actions/jobs";
+import { updateMissingGrade as updateJob, recordGradeFailure, gradingPaused } from "@/lib/grading-store";
 import { scoreFit } from "@/app/actions/parse-role";
 import { resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
 import { INGEST_EXEMPT_COLUMNS, SCORING_INPUT_COLUMNS } from "@/lib/rescore-scope";
@@ -105,6 +111,26 @@ const OPTS = {
   source: "Crawl",
   fitInputs: {} as never,
 };
+
+// Mutation: discard an unsuccessful initial score instead of recording recovery state.
+test("a failed initial grade is persisted for recovery", async () => {
+  h.addJobResult = {job:{id:"job-failed"}};
+  vi.mocked(scoreFit).mockResolvedValueOnce({score:0,rationale:"",error:"Failed to score fit."});
+  await ingestRoles(OPTS);
+  expect(recordGradeFailure).toHaveBeenCalledWith("job-failed",expect.any(String),1,
+    {kind:"transient",message:"Failed to score fit."});
+  expect(updateJob).not.toHaveBeenCalled();
+});
+
+// Mutation: skip the pause check in ingestion and keep buying doomed grades.
+test("a paused provider prevents initial grading too", async () => {
+  h.addJobResult = {job:{id:"job-paused"}};
+  vi.mocked(gradingPaused).mockResolvedValueOnce("Add API credits");
+  await ingestRoles(OPTS);
+  expect(scoreFit).not.toHaveBeenCalled();
+  expect(recordGradeFailure).toHaveBeenCalledWith("job-paused",expect.any(String),1,
+    {kind:"blocked",message:"Add API credits"});
+});
 
 beforeEach(() => {
   h.addJobResult = { job: undefined, error: undefined };

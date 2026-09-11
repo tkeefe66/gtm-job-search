@@ -170,6 +170,7 @@ export async function complete(opts: {
   prompt: string;
   maxTokens?: number;
   jsonSchema?: Record<string, unknown>;
+  timeoutMs?: number;
 }): Promise<string> {
   const { provider, apiKey, model } = await routing();
   const result = await provider.complete({
@@ -179,6 +180,7 @@ export async function complete(opts: {
       prompt: opts.prompt,
       maxTokens: opts.maxTokens ?? 4000,
       ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
     });
   const text = await collect(result);
   assertModelComplete(result.stopReason, !!opts.jsonSchema);

@@ -1,7 +1,9 @@
 import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { addJob, getJobStatuses, updateJob } from "@/app/actions/jobs";
+import { addJob, getJobStatuses } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
+import { randomUUID } from "node:crypto";
+import { gradingPaused, recordGradeFailure, updateMissingGrade } from "./grading-store";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
@@ -286,6 +288,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       const department = (wasRead?.department || role.department || "").trim();
       const summary = wasRead?.summary || role.description_summary || "";
       const isDead = deadUrl || links[i].unlisted;
+      const gradingLease = randomUUID();
 
       // The employer's own spelling, when the read found one and it is the same
       // name written better. Per-ROW rather than per-ingest: the correction
@@ -329,6 +332,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         posting: wasRead ? readDetail(wasRead) : postingDetailFrom(role),
         ic_flag: role.ic_flag ?? false,
         source,
+        grading_chosen: opts.chosenByUser === true,
+        grading_state: isDead ? "skipped" : "running",
+        grading_attempts: isDead ? 0 : 1,
+        grading_lease: isDead ? null : gradingLease,
+        grading_next_at: isDead ? null : new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       });
 
       // describeWriteFailure, not `if (jobRes.error)`. Presence, not
@@ -348,6 +356,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       added.push(role);
 
       if (jobRes.job && !isDead) {
+        const paused = await gradingPaused();
+        if (paused) {
+          await recordGradeFailure(jobRes.job.id, gradingLease, 1, {kind:"blocked", message:paused});
+          return;
+        }
         const scored = await scoreFit({
           company: storedCompany,
           role_title: role.role_title,
@@ -371,16 +384,22 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
             opts.chosenByUser !== true &&
             fileInto !== null &&
             shouldAutoFile({ score: scored.score, wasRead: wasRead !== null, status: "New" });
-          await updateJob(jobRes.job.id, {
+          const saved = await updateMissingGrade(jobRes.job.id, {
             fit_score: scored.score,
             fit_summary: scored.rationale || role.fit_signal || null,
             ...(file ? { status: fileInto } : {}),
-          });
+          }, gradingLease, statuses.filter(s => s.bucket === "terminal" || s.hidden).map(s => s.key));
+          if (saved.error !== undefined) console.error(`ingestRoles: ${saved.error}`);
           if (file) {
             console.log(
               `ingestRoles(${company}): ${role.role_title} scored ${scored.score}, filed as ${fileInto}`
             );
           }
+        } else {
+          await recordGradeFailure(jobRes.job.id, gradingLease, 1, {
+            kind: scored.failureKind ?? "transient",
+            message: scored.error || "Grading failed temporarily. It will retry automatically.",
+          });
         }
       }
     })

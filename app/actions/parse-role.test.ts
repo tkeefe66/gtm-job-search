@@ -114,7 +114,7 @@ describe("scoreFit runs through the provider registry, not the raw SDK", () => {
       new Error("404 https://api.anthropic.com/v1/messages model: not_found_error key=sk-ant-leak")
     );
     const res = await scoreFit({ ...role, fitInputs });
-    expect(res.error).toBe("Failed to score fit.");
+    expect(res.error).toBe("Grading failed temporarily. It will retry automatically.");
     expect(res.error).not.toContain("sk-ant-leak");
     expect(res.error).not.toContain("api.anthropic.com");
   });

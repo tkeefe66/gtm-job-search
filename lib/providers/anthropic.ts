@@ -53,7 +53,7 @@ function textOf(content: unknown[]): string {
 
 /** The injected seam is what lets the adapter be tested without a network. */
 export interface AnthropicDeps {
-  createClient?: (apiKey: string) => { messages: { create: (body: unknown) => Promise<unknown> } };
+  createClient?: (apiKey: string) => { messages: { create: (body: unknown, options?: {timeout:number; maxRetries:number}) => Promise<unknown> } };
 }
 
 export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
@@ -61,7 +61,7 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
     deps.createClient ??
     ((apiKey: string) =>
       new Anthropic({ apiKey }) as unknown as {
-        messages: { create: (body: unknown) => Promise<unknown> };
+        messages: { create: (body: unknown, options?: {timeout:number; maxRetries:number}) => Promise<unknown> };
       });
 
   return {
@@ -86,7 +86,8 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
         body.tool_choice = { type: "tool", name: "emit" };
       }
 
-      const message = (await createClient(opts.apiKey).messages.create(body)) as {
+      const message = (await createClient(opts.apiKey).messages.create(body,
+        opts.timeoutMs ? {timeout:opts.timeoutMs,maxRetries:0} : undefined)) as {
         content: unknown[];
         usage?: RawUsage;
         stop_reason?: string | null;

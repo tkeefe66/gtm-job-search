@@ -7,6 +7,7 @@ import { complete, parseJson } from "@/lib/model-call";
 import type { FitInputs } from "@/lib/fit-inputs";
 import { buildFitPrompt, type FitPromptRole } from "@/lib/fit-prompt";
 import { emptyBrainRefusal, loadScoringInputs } from "@/lib/search-criteria";
+import { gradingFailure, type GradingFailure } from "@/lib/grading-policy";
 
 /**
  * Scores a role against the candidate's background, 1-5, ruthlessly.
@@ -43,7 +44,7 @@ import { emptyBrainRefusal, loadScoringInputs } from "@/lib/search-criteria";
  * wrapping this does not double-charge the paths that reach it from inside an
  * already-metered action.
  */
-export async function scoreFit(opts: FitPromptRole & { fitInputs: FitInputs | null }): Promise<{ score: number; rationale: string; error?: string }> {
+export async function scoreFit(opts: FitPromptRole & { fitInputs: FitInputs | null }): Promise<{ score: number; rationale: string; error?: string; failureKind?: GradingFailure["kind"] }> {
   const actor = await requireActor();
   const budget = await withBudget({
     action: "score-fit",
@@ -59,7 +60,7 @@ export async function scoreFit(opts: FitPromptRole & { fitInputs: FitInputs | nu
 
 async function scoreFitInner(
   opts: FitPromptRole & { fitInputs: FitInputs | null }
-): Promise<{ score: number; rationale: string; error?: string }> {
+): Promise<{ score: number; rationale: string; error?: string; failureKind?: GradingFailure["kind"] }> {
   try {
     const fitInputs = opts.fitInputs ?? (await loadScoringInputs());
     // Refused BEFORE the model call. With an empty brain buildFitPrompt renders
@@ -80,6 +81,9 @@ async function scoreFitInner(
         "You are a ruthless career coach scoring job fit for a specific candidate. Be honest and harsh — most roles should score 2-3. Only give 4-5 for genuinely strong matches. A 5 is rare. Return ONLY valid JSON.",
       prompt: buildFitPrompt(opts, fitInputs),
       maxTokens: 500,
+      // The durable grading queue owns retries; keep a single attempt below
+      // the proxy timeout instead of letting SDK retries hold the request open.
+      timeoutMs: 120_000,
     });
 
     const result = parseJson<{ score: number; rationale: string }>(raw);
@@ -101,6 +105,7 @@ async function scoreFitInner(
     // not the database, and UNDESCRIBED_DB_ERROR names the database and would
     // be a false sentence here. The constant is non-empty on every path, so the
     // caller's presence check still separates "failed" from "succeeded".
-    return { score: 0, rationale: "", error: "Failed to score fit." };
+    const failure = gradingFailure(err);
+    return { score: 0, rationale: "", error: failure.message, failureKind: failure.kind };
   }
 }

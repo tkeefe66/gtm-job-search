@@ -207,11 +207,19 @@ async function attachToExisting(
   }
 
   const patch: Partial<Job> = {
+    grading_chosen: true,
     posting: readDetail(read),
     ...relinkPatch(row, url, url),
   };
   if (read.department) patch.department = read.department;
   if (read.summary) patch.key_skills = read.summary;
+
+  // Persist the user's choice before awaiting a model: recovery may already
+  // hold this row's lease and must see the choice in its guarded final write.
+  const { error: choiceError } = await rawQuery(
+    "update jobs set grading_chosen=true where tenant_id=$1 and id=$2",
+    [tenantId, row.id], tenantId);
+  if (choiceError) return { error: "Could not save your selection. Try adding this URL again." };
 
   // RE-SCORED here, not left to the rescore offer. The row's number was
   // computed without the posting — that is why it was worth attaching one — and

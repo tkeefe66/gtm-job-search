@@ -14,6 +14,7 @@ import { describeTrackOutcome } from "@/lib/track-outcome";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
 import { Spinner, Tag } from "./ui";
+import { requestWithDeadline } from "@/lib/client-request";
 
 const FAMILIES: { value: RoleSearchFamily; label: string }[] = [
   { value: "title", label: "Titles" },
@@ -94,8 +95,13 @@ export default function RoleSearchPanel() {
     async (f: RoleSearchFamily) => {
       setLoading(true);
       setError(null);
-      applyResult(await getCachedRoleSearch(f));
-      setLoading(false);
+      try {
+        applyResult(await requestWithDeadline(getCachedRoleSearch(f), 15_000));
+      } catch {
+        setError("Could not load saved results. Reload the page to try again.");
+      } finally {
+        setLoading(false);
+      }
     },
     [applyResult]
   );
@@ -107,8 +113,16 @@ export default function RoleSearchPanel() {
   async function runSearch() {
     setSearching(true);
     setError(null);
-    applyResult(await findRolesByCriteria(family, true));
-    setSearching(false);
+    try {
+      applyResult(await requestWithDeadline(findRolesByCriteria(family, true)));
+    } catch {
+      // The server may have saved results before the proxy closed the request.
+      // Recover the cache without buying another search.
+      try { applyResult(await requestWithDeadline(getCachedRoleSearch(family), 15_000)); } catch { /* Keep the current results. */ }
+      setError("The search connection was interrupted. Saved results are shown if available. Reload to check for newer results before starting another search.");
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function handleTrack(company: string) {

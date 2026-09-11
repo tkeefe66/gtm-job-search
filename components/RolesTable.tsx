@@ -40,6 +40,7 @@ import {
 } from "@/lib/enrich-pass";
 import { sourceOptions } from "@/lib/job-sources";
 import { Spinner } from "./ui";
+import GradeRecoveryPanel from "./GradeRecoveryPanel";
 
 const STATUS_STYLES: Record<string, string> = {
   New: "bg-[#F3F4F6] text-[#6B7280]",
@@ -891,6 +892,12 @@ export default function RolesTable({
         </div>
       </div>
 
+      <GradeRecoveryPanel jobs={jobs} statuses={statuses} onUpdated={async () => {
+        const result = await getJobs();
+        if (result.error !== undefined) throw new Error("Could not reload grades.");
+        setJobs(result.jobs);
+      }} />
+
       {linkReport && (
         <div
           className={`mb-6 rounded-lg border p-4 text-sm ${
@@ -1516,6 +1523,10 @@ export default function RolesTable({
                     </Detail>
                     <Detail label="Fit score">
                       <FitScore score={job.fit_score} onChange={(n) => handleFieldSave(job.id, "fit_score", String(n))} />
+                      {job.fit_score === null && <span className="mt-1 block max-w-28 text-xs text-ink/60" title={job.grading_error || undefined}>
+                        {job.grading_state === "failed" ? "Grading failed" :
+                          (job.grading_attempts ?? 0) >= 5 ? "Grading needs a retry" : "Waiting for grading"}
+                      </span>}
                     </Detail>
                     {(() => {
                       // Read-only: the stamp is the database's `now()` default,

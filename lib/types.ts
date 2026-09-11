@@ -148,6 +148,12 @@ export interface Job {
   source: string | null;
   notes: string | null;
   fit_score: number | null;
+  grading_state?: string;
+  grading_attempts?: number;
+  grading_next_at?: string | null;
+  grading_error?: string | null;
+  grading_lease?: string | null;
+  grading_chosen?: boolean;
   fit_summary: string | null;
   recruiter_name: string | null;
   recruiter_email: string | null;

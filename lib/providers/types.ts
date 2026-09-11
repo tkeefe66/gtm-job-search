@@ -54,6 +54,7 @@ export interface CallOpts {
 }
 
 export interface CompleteOpts extends CallOpts {
+  timeoutMs?: number;
   /** Constrained decoding. On the interface from the start: freezing the
    *  signature without it means rewriting every adapter later. */
   jsonSchema?: Record<string, unknown>;

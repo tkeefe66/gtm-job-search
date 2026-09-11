@@ -6,6 +6,7 @@ import { listCrawlableTenants } from "@/app/actions/admin";
 import { pickNextTenant, type TenantCandidate } from "@/lib/crawl-next";
 import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
 import { withBudget } from "@/lib/metered";
+import { recoverMissingGrade } from "@/lib/grading-worker";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,22 @@ async function handleCrawlNext(req: Request) {
     });
   }
 
+    // Finish missing grades before buying more searches. This also prevents a
+    // capped, still-due crawl candidate from starving other tenants' recovery.
+    // Keep the existing caller's loop alive for one bounded recovery at a time.
+    if (!dryRun) {
+      for (const tenant of tenants) {
+        try {
+          const recovery = await runAsTenant(tenant.id, () => recoverMissingGrade(tenant.isAdmin));
+          if (recovery.attempted > 0) {
+            return NextResponse.json({ crawled: true, kind: "grading-recovery", recovery, tenantsWithWork: 0 });
+          }
+          if (recovery.error !== undefined) console.warn(`cron/grading: ${recovery.error}`);
+        } catch (error) {
+          console.error("cron/grading: recovery unavailable", error);
+        }
+      }
+    }
   const pick = pickNextTenant(candidates);
   if (!pick || pick.company === null) {
     console.log(`cron/crawl-next: nothing due across ${candidates.length} tenant(s)`);

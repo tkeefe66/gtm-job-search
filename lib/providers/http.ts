@@ -12,7 +12,13 @@ export async function postJson(fetcher: typeof fetch, provider: string, url: str
   if (!response.ok) {
     const reason = response.status === 429 ? "rate limit or quota reached. Check provider billing and retry later" : response.status === 401 || response.status === 403 ? "authentication refused. Check your API key and model access" : response.status >= 500 ? "service unavailable. Try again later" : "request refused. Check model access and request settings";
     console.error(`${provider}: HTTP ${response.status}`);
-    throw new Error(`${provider}: ${reason}.`);
+    // Preserve machine-readable classification without exposing response text.
+    let billingBlocked = false;
+    try {
+      const error = record(record(await response.json()).error);
+      billingBlocked = error.code === "insufficient_quota" || error.code === "billing_hard_limit_reached";
+    } catch { /* Classification can fall back to HTTP status. */ }
+    throw Object.assign(new Error(`${provider}: ${reason}.`), {status:response.status,billingBlocked});
   }
   try { return record(await response.json()); } catch { throw new Error(`${provider} returned invalid JSON. Try again.`); }
 }
