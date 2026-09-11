@@ -16,12 +16,13 @@ export default async function SignIn({
   // pages.signIn and pages.error point at this route. Repeated keys arrive as an
   // array; only the first is read, and anything else is handled by signInError's
   // unknown-code branch rather than trusted into the page.
-  searchParams?: { error?: string | string[]; mode?: string };
+  searchParams?: Promise<{ error?: string | string[]; mode?: string }>;
 }) {
   const session = await auth();
-  const rawError = Array.isArray(searchParams?.error)
-    ? searchParams?.error[0]
-    : searchParams?.error;
+  const query = await searchParams;
+  const rawError = Array.isArray(query?.error)
+    ? query?.error[0]
+    : query?.error;
   const notice = signInError(rawError ?? null);
   // A session with no status is not a session for these purposes: the view rule
   // takes null to mean "nobody is signed in", which is the only state the Google
@@ -34,7 +35,7 @@ export default async function SignIn({
 
   if (body.kind === "redirect") redirect("/discover");
 
-  const returning = searchParams?.mode === "login";
+  const returning = query?.mode === "login";
   const errorNotice = notice ? (
     <div role="alert" className="mt-4 rounded-lg border border-[#FCD34D] bg-[#FFFBEB] p-3 text-sm text-[#92400E]">
       {notice.message}

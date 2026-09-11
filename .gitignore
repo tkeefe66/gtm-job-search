@@ -12,3 +12,6 @@ next-env.d.ts
 # Harness-managed git worktrees and SDD scratch (never commit these)
 .claude/worktrees/
 .superpowers/
+
+# Local security review evidence is not application source or deployment input.
+.readiness-audit/

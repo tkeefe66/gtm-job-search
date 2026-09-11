@@ -12,17 +12,18 @@ export const dynamic = "force-dynamic";
 export default async function ResumePage({
   searchParams,
 }: {
-  searchParams: { jobId?: string; savedId?: string };
+  searchParams: Promise<{ jobId?: string; savedId?: string }>;
 }) {
   const actor = await requireActorPage();
+  const query = await searchParams;
   if (!actor.isAdmin) redirect("/discover");
 
   // savedId wins when both are present: it names one specific document, which
   // is more specific than "the draft for this job".
-  const savedId = searchParams.savedId;
+  const savedId = query.savedId;
   if (savedId) return <SavedResumeScreen id={savedId} />;
 
-  const jobId = searchParams.jobId;
+  const jobId = query.jobId;
 
   // No jobId: the archive. The old pointer-at-Roles copy is kept verbatim as
   // the empty state, since it is still exactly what a user with nothing saved

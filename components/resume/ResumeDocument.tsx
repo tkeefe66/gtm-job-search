@@ -8,7 +8,7 @@ import { DEFAULT_PAGE_MARGIN, PORTRAIT_PAGE_CSS } from "@/lib/resume-download";
 // `<doc-page>` is a custom element defined by /public/resume-design/doc-page.js
 // at runtime — not a React component. This augments JSX so TypeScript accepts
 // it as an intrinsic element.
-declare global {
+declare module "react" {
   namespace JSX {
     interface IntrinsicElements {
       "doc-page": React.DetailedHTMLProps<
@@ -24,7 +24,7 @@ export interface ResumeDocumentProps {
   /** Omit to render every bullet in every role, unfiltered. */
   selection?: ResumeSelection;
   /** Set by TailorPanel so it can capture the live document on Save. */
-  docPageRef?: React.RefObject<HTMLElement>;
+  docPageRef?: React.RefObject<HTMLElement | null>;
   /** Fires on the first and every subsequent edit, so Save can be armed. */
   onEdit?: () => void;
   /** Validated declarations for the .rsm root — see lib/resume-design-tokens. */
@@ -82,7 +82,7 @@ export default function ResumeDocument({
           algorithmic selection, which is why no state syncing is needed;
           saving is what makes an edit durable, and only then. */}
       <doc-page
-        ref={docPageRef as React.RefObject<HTMLElement>}
+        ref={docPageRef}
         margin={pageMargin || DEFAULT_PAGE_MARGIN}
         contentEditable
         suppressContentEditableWarning

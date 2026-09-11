@@ -1,3 +1,4 @@
+import { safeHttp } from "./safe-http";
 // The plain-HTTP tier's transport: fetching a page, and the robots.txt gate in
 // front of it.
 //
@@ -16,12 +17,9 @@ const USER_AGENT =
 
 /** Fetches a page's HTML, or null for any non-2xx, timeout or network error. */
 export async function fetchPage(url: string): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
+    const res = await safeHttp(url, {
+      timeoutMs: FETCH_TIMEOUT_MS,
       headers: { "User-Agent": USER_AGENT },
     });
     if (!res.ok) {
@@ -34,8 +32,6 @@ export async function fetchPage(url: string): Promise<string | null> {
       `fetchPage: fetch of ${url} failed — ${err instanceof Error ? err.message : String(err)}`
     );
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -51,12 +47,10 @@ type RobotsFetch =
   | { kind: "error" };
 
 async function fetchRobotsTxt(url: string): Promise<RobotsFetch> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
+    const res = await safeHttp(url, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: 256 * 1024,
       headers: { "User-Agent": USER_AGENT },
     });
     if (res.status === 404 || res.status === 410) {
@@ -72,8 +66,6 @@ async function fetchRobotsTxt(url: string): Promise<RobotsFetch> {
       `robots: robots.txt fetch of ${url} failed — ${err instanceof Error ? err.message : String(err)}`
     );
     return { kind: "error" };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

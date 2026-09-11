@@ -1,11 +1,10 @@
+const transport = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock("./safe-http", () => ({ safeHttp: (...args: unknown[]) => transport.fetch(...args) }));
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { newBoardCache, verifyPostingLink } from "./resolve-job-link";
 
-// The board fetch is the only edge this function has, so it is the only thing
-// stubbed. There was no fetch-stubbing precedent in lib/*.test.ts before this
-// file — lib/crawler.test.ts says so explicitly and tests its pure decisions
-// instead — so this uses vitest's own `stubGlobal` rather than inventing a
-// seam in the production code.
+// Stub the shared public HTTP transport; socket policy and byte bounds are
+// covered by safe-http.test.ts. These tests assert board interpretation.
 
 const BASETEN_BOARD = "https://api.ashbyhq.com/posting-api/job-board/baseten";
 
@@ -21,12 +20,12 @@ function ashbyBoard(jobs: Array<{ title: string; jobUrl: string; isListed?: bool
 
 function stubBoard(body: unknown, ok = true) {
   const fetchMock = vi.fn(async () => ({ ok, json: async () => body }));
-  vi.stubGlobal("fetch", fetchMock);
+  transport.fetch = fetchMock;
   return fetchMock;
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  transport.fetch.mockReset();
 });
 
 describe("verifyPostingLink", () => {
@@ -111,8 +110,7 @@ describe("verifyPostingLink", () => {
   });
 
   test("a fetch that throws is `unreachable` too", async () => {
-    vi.stubGlobal(
-      "fetch",
+    transport.fetch.mockImplementation(
       vi.fn(async () => {
         throw new Error("network down");
       })
@@ -185,8 +183,7 @@ describe("verifyPostingLink", () => {
 
   test("a Lever /apply step on the correct posting is listed", async () => {
     const posting = "https://jobs.lever.co/atlan/8f0a-1";
-    vi.stubGlobal(
-      "fetch",
+    transport.fetch.mockImplementation(
       vi.fn(async () => ({ ok: true, json: async () => [{ text: "GTM Engineer", hostedUrl: posting }] }))
     );
 
@@ -199,8 +196,7 @@ describe("verifyPostingLink", () => {
   // for the SAME posting. Under host equality every Greenhouse row in the table
   // is a relink candidate.
   test("a Greenhouse posting stored under the old host is listed", async () => {
-    vi.stubGlobal(
-      "fetch",
+    transport.fetch.mockImplementation(
       vi.fn(async () => ({
         ok: true,
         json: async () => ({
@@ -225,8 +221,7 @@ describe("verifyPostingLink", () => {
   // API's lowercase one — the same false-relink class as the host mismatch
   // above, reached through the path instead of the host.
   test("a Greenhouse posting stored with a capitalized board token is listed", async () => {
-    vi.stubGlobal(
-      "fetch",
+    transport.fetch.mockImplementation(
       vi.fn(async () => ({
         ok: true,
         json: async () => ({
@@ -249,8 +244,7 @@ describe("verifyPostingLink", () => {
   // comparison. parseWorkableBoard falls back to `shortlink`, which names no
   // company, so a slug-equality requirement calls the stored posting missing.
   test("a Workable shortlink from the board matches the stored company URL", async () => {
-    vi.stubGlobal(
-      "fetch",
+    transport.fetch.mockImplementation(
       vi.fn(async () => ({
         ok: true,
         json: async () => ({

@@ -1,3 +1,4 @@
+import { safeHttp } from "./safe-http";
 import { redirectVerdict } from "@/lib/redirect-verdict";
 
 const TIMEOUT_MS = 6000;
@@ -62,16 +63,9 @@ export async function checkJobUrl(url: string): Promise<UrlStatus> {
 }
 
 async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    return await fetch(url, {
-      method,
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  return safeHttp(url, {
+    method,
+    timeoutMs: TIMEOUT_MS,
+    headers: { "User-Agent": USER_AGENT },
+  });
 }

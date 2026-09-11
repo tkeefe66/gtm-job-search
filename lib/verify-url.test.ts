@@ -1,3 +1,5 @@
+const transport = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock("./safe-http", () => ({ safeHttp: (...args: unknown[]) => transport.fetch(...args) }));
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { checkJobUrl } from "./verify-url";
@@ -8,14 +10,13 @@ import { checkJobUrl } from "./verify-url";
  * `redirect: "follow"` does.
  */
 function landingOn(landing: string, status = 200) {
-  vi.stubGlobal(
-    "fetch",
+  transport.fetch.mockImplementation(
     vi.fn(async () => ({ status, url: landing }) as unknown as Response)
   );
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  transport.fetch.mockReset();
 });
 
 const POSTING = "https://www.samsara.com/company/careers/roles/7974118";

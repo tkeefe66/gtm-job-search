@@ -1,3 +1,4 @@
+import { safeHttp } from "./safe-http";
 import {
   BOARD_VENDORS,
   boardApiUrl,
@@ -128,11 +129,9 @@ function fetchBoardCached(
 }
 
 async function fetchBoard(vendor: BoardVendor, slug: string) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(boardApiUrl(vendor, slug), {
-      signal: controller.signal,
+    const res = await safeHttp(boardApiUrl(vendor, slug), {
+      timeoutMs: TIMEOUT_MS,
       headers: { Accept: "application/json" },
     });
     // 404 is the honest answer for a missing board on Greenhouse and Ashby.
@@ -158,8 +157,6 @@ async function fetchBoard(vendor: BoardVendor, slug: string) {
     // A timeout or a body that is not JSON is indistinguishable from an absent
     // board for our purposes: we have nothing better to link to either way.
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -328,11 +325,9 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
       : null);
   if (endpoint === null) return null;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(endpoint, {
-      signal: controller.signal,
+    const res = await safeHttp(endpoint, {
+      timeoutMs: TIMEOUT_MS,
       headers: { Accept: "application/json" },
     });
     // Both vendors 404 honestly for a missing board AND for a missing posting
@@ -341,8 +336,6 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
     return parsePostingBody(link.vendor, link.id, await res.json());
   } catch {
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -405,16 +398,12 @@ export async function fetchBoardIdentity(
 ): Promise<string | null> {
   const url = boardIdentityUrl(vendor, slug);
   if (url === null) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
+    const res = await safeHttp(url, { timeoutMs: TIMEOUT_MS, headers: { Accept: "application/json" } });
     if (!res.ok) return null;
     return boardIdentityFrom(await res.json());
   } catch {
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

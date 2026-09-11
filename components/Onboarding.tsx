@@ -44,7 +44,7 @@ export default function Onboarding() {
   const [rescoreNotice, setRescoreNotice] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const queue = useRef(serialSave(({ answers: a, step: n }: { answers: WizardAnswers; step: number }) => saveWizardProgress(a, n)));
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const revision = useRef(0);
   const saved = useRef("");
   const latest = useRef({ answers, step });
