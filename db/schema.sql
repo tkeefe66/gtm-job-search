@@ -1,8 +1,8 @@
--- Canonical schema for the GTM Job Search app on Railway Postgres.
+-- Historical baseline for an EMPTY database; apply-schema.mjs then runs ALL migrations.
 -- Reconstructed from lib/types.ts and the server actions (the original
 -- supabase/migrations were incomplete — jobs was missing ~13 columns and
 -- watchlist / discovered_roles / insights_cache had no migrations at all).
--- Idempotent: safe to re-run.
+-- Do not apply this file directly or replay it on an existing database.
 
 create extension if not exists "pgcrypto";
 
@@ -123,8 +123,7 @@ alter table jobs add column if not exists grading_next_at timestamptz;
 alter table jobs add column if not exists grading_error text;
 alter table jobs add column if not exists grading_lease uuid;
 alter table jobs add column if not exists grading_chosen boolean not null default false;
-create index if not exists jobs_missing_grades on jobs (tenant_id, grading_next_at, created_at)
-  where fit_score is null and never_live = false;
+-- jobs_missing_grades is created by migration 022, after tenant_id exists.
 
 -- Tracking: watchlist rows are crawled on a recurring schedule until the user
 -- stops tracking them. Untracking sets tracking_enabled = false rather than

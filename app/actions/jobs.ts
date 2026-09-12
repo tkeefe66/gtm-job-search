@@ -8,6 +8,8 @@ import { partitionNeverLive } from "@/lib/never-live";
 import { JOB_STATUSES_KEY } from "@/lib/settings-store";
 import { rawQuery, supabase } from "@/lib/supabase";
 import type { Job, JobInsert } from "@/lib/types";
+import { acceptJob } from "@/lib/job-acceptance";
+import { describeThrown } from "@/lib/supabase";
 
 export async function getJobs(): Promise<{
   jobs: Job[];
@@ -37,21 +39,17 @@ export async function getJobs(): Promise<{
 
 export async function addJob(
   job: JobInsert
-): Promise<{ job?: Job; error?: string }> {
+): Promise<{ job?: Job; inserted?: boolean; error?: string }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase.forTenant(await resolveTenantId())
-    .from("jobs")
-    .insert(job)
-    .select()
-    .single();
-
-  if (error) {
+  try {
+    return await acceptJob(await resolveTenantId(), job);
+  } catch (cause) {
+    const error = describeThrown(cause);
     console.error("addJob error:", error);
     return { error: error.message };
   }
-  return { job: data as Job };
 }
 
 // `updateJobStatus` was deleted here. It stamped applied_date and had ZERO

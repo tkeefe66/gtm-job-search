@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   addJobResult: { job: undefined, error: undefined } as {
     job?: { id: string };
     error?: string;
+    inserted?: boolean;
   },
   // The two independent signals ingestRoles closes a role on. Defaults are the
   // healthy path, so every pre-existing test in this file keeps its meaning.
@@ -111,6 +112,27 @@ const OPTS = {
   source: "Crawl",
   fitInputs: {} as never,
 };
+
+test("a concurrent acceptance conflict skips the role without buying a grade", async () => {
+  h.addJobResult = { job: { id: "existing-manual-role" }, inserted: false };
+  const result = await ingestRoles(OPTS);
+  expect(result.added).toEqual([]);
+  expect(result.skipped).toEqual([ROLE]);
+  expect(scoreFit).not.toHaveBeenCalled();
+  expect(updateJob).not.toHaveBeenCalled();
+});
+
+test("duplicate title or URL within a batch is accepted and read only once", async () => {
+  h.addJobResult = { job: { id: "winner" }, inserted: true };
+  const titleAlias = { ...ROLE, role_title: " REVOPS\u00a0 Manager ", job_url: "https://example.com/jobs/2" };
+  const urlAlias = { ...ROLE, role_title: "Director" };
+  const result = await ingestRoles({ ...OPTS, roles: [ROLE, titleAlias, urlAlias] });
+  expect(result.added).toEqual([ROLE]);
+  expect(result.skipped).toEqual([titleAlias, urlAlias]);
+  expect(readPosting).toHaveBeenCalledTimes(1);
+  expect(addJob).toHaveBeenCalledTimes(1);
+  expect(scoreFit).toHaveBeenCalledTimes(1);
+});
 
 // Mutation: discard an unsuccessful initial score instead of recording recovery state.
 test("a failed initial grade is persisted for recovery", async () => {
@@ -618,6 +640,7 @@ describe("a role's posting is read before it is scored", () => {
     const many = Array.from({ length: MAX_INGEST_READS + 4 }, (_, i) => ({
       ...LIVE,
       role_title: `RevOps Manager ${i}`,
+      job_url: `https://example.com/jobs/${i}`,
     }));
 
     await ingestRoles({ ...OPTS, roles: many });
@@ -725,7 +748,7 @@ describe("the employer's own spelling of its name wins", () => {
 describe("a caller may raise or lower how many postings one ingest reads", () => {
   const LIVE = { ...ROLE, job_url: "https://clay.com/careers/1" };
   const many = (n: number) =>
-    Array.from({ length: n }, (_, i) => ({ ...LIVE, role_title: `RevOps Manager ${i}` }));
+    Array.from({ length: n }, (_, i) => ({ ...LIVE, role_title: `RevOps Manager ${i}`, job_url: `https://example.com/jobs/${i}` }));
 
   beforeEach(() => {
     h.addJobResult = { job: { id: "job-1" } };

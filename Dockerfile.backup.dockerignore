@@ -1,0 +1,12 @@
+# Dedicated build allowlist: no private workspace files enter build context.
+**
+!package.json
+!package-lock.json
+!db/
+db/*
+!db/backup.mjs
+!db/recovery-metadata.mjs
+!lib/
+lib/*
+!lib/backup-guard.mjs
+!Dockerfile.backup

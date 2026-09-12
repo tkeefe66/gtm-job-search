@@ -181,7 +181,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       knownKeys.has(normalizeRoleKey(company, role.role_title)) ||
       (!!role.job_url && knownUrls.has(role.job_url));
     if (isKnown) skipped.push(role);
-    else fresh.push(role);
+    else {
+      fresh.push(role);
+      knownKeys.add(normalizeRoleKey(company, role.role_title));
+      if (role.job_url) knownUrls.add(role.job_url);
+    }
   }
 
   // Second-hand links are upgraded BEFORE they are checked, because the check
@@ -353,6 +357,12 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         return;
       }
 
+      // Another manual/search/crawl request can win after the optimistic read.
+      // Its stored status, notes and grading lease remain exclusively its own.
+      if (jobRes.inserted === false) {
+        skipped.push(role);
+        return;
+      }
       added.push(role);
 
       if (jobRes.job && !isDead) {

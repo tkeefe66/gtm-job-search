@@ -1,89 +1,83 @@
 # GTM Job Search
 
-<!--
-Required environment variables (.env.local):
-DATABASE_URL=postgres://user:pass@host:port/db
-ANTHROPIC_API_KEY=your_anthropic_api_key
--->
+A multi-tenant job search app with Google sign-in. Each user's onboarding profile supplies career targets, location preferences and fit-scoring criteria. Discover searches hiring signals and roles; Watchlist schedules company checks; Roles holds the job pipeline and résumé tools; Settings controls the profile, limits and API key. Administrators manage accounts and platform settings through `/admin`.
 
-An AI-powered, single-user GTM / RevOps job search tool tuned to Tom Keefe's profile (GTM Systems / RevOps / Marketing Operations leader and AI practitioner-builder). Five tabs:
+Next.js 15 (App Router), React 19, TypeScript, Tailwind, PostgreSQL, Auth.js and Anthropic web search. The query layer in `lib/supabase.ts` uses `pg`; no Supabase service is required. Model calls and stored API keys remain server-side. Tenant tables use forced row-level security with the restricted `app_rw` database role.
 
-1. **Discover** — notable AI/tech + B2B SaaS funding rounds (by company), or roles found by title and GTM tool stack (by role). Anthropic web search, cached per query.
-2. **Watchlist** — companies you track. Their careers pages are re-crawled on a schedule by a daily cron, so new roles arrive without you searching.
-3. **Roles** — the Postgres-backed pipeline. Thirteen statuses (`New`, `Applied`, `Recruiter Outreach`, the interview stages, `Offer`, `Not Interested`, `Rejected`, `Passed`, `Posting Closed`), inline status editing, bulk status changes, fit scores, notes, when each role was found, and **Check links** — see below.
-4. **Insights** — analyze your pipeline against the live market and get positioning advice.
-5. **Settings** — target titles, locations, GTM stack terms, the location rule, the fit brain, an optional search ceiling, and an optional minimum base compensation. Changing the fit brain here is how you re-tune scoring.
+## Fresh local setup
 
-**Everything about targeting is editable at `/settings`** and stored in `app_settings`; the shipped defaults are the `DEFAULT_*` constants in [`lib/search-criteria.ts`](lib/search-criteria.ts), overlaid by `loadCriteria()`. The fit-scoring rubric itself is `buildFitPrompt` in [`lib/fit-prompt.ts`](lib/fit-prompt.ts), pinned by checked-in fixtures.
+1. Run `npm install`. Provision an **empty PostgreSQL database** and retain its owner connection URL for setup and upgrades. The owner must be able to create the `pgcrypto` extension and manage roles. Keep this credential separate from the application runtime.
 
-**Job links are kept honest.** Roles found through a job aggregator are resolved to the employer's own posting where possible, and roles whose posting has closed are detected and marked — on ingest, from the daily cron, and from the **Check links** button. This costs no Anthropic credits: it uses HTTP plus the ATS vendors' public job-board endpoints. See `CLAUDE.md` for the rules, which are narrower than they look.
+2. Bootstrap the database using the owner's URL in the shell:
 
-## Stack
+   ```bash
+   DATABASE_URL="$DATABASE_OWNER_URL" node db/apply-schema.mjs
+   ```
 
-Next.js 14 (App Router) · TypeScript · Tailwind · Postgres (via `pg`) · Anthropic API (`claude-sonnet-4-6`, web search tool) · Railway.
+   This applies the historical baseline in `db/schema.sql`, then every numbered migration in `db/migrations/`. It creates auth tables, tenant columns and constraints, current résumé/grading tables, RLS policies and grants. The obsolete insights cache is removed by its migration. Each migration and its ledger entry commit together; a failure stops the sequence and rolls back that migration. Re-run the same command to resume. Subsequent successful runs apply only pending migrations. The baseline is never replayed on an existing installation; unrecognized populated schemas are refused.
 
-The data layer lives in [`lib/supabase.ts`](lib/supabase.ts) — a small Supabase-compatible query builder over `pg` (the file keeps the `supabase` name so the server actions didn't have to change). The canonical schema is [`db/schema.sql`](db/schema.sql). All Anthropic calls run server-side (server actions); the API key is never exposed client-side.
+   No user or OAuth account is seeded. Migrations 001/002 allow an empty database without an admin, but still refuse populated legacy tables with no owner. This avoids Auth.js rejecting a pre-seeded email with `OAuthAccountNotLinked`.
 
-## Setup
+3. Enable login for `app_rw` using an owner `psql` session:
 
-### 1. Install
+   ```sql
+   ALTER ROLE app_rw LOGIN;
+   ```
 
-```bash
-npm install
-```
+   Use the interactive psql command `\password app_rw` to set a strong password without putting it in SQL files or command history. Build the runtime URL with username `app_rw` and its password (URL-encode reserved password characters). This role must remain `NOSUPERUSER NOBYPASSRLS`, and must not own the tables. Do not run the web app with the owner URL.
 
-### 2. Set environment variables
+4. Configure a Google OAuth web client. Register `http://localhost:3000/api/auth/callback/google` as an authorized redirect URI. Put runtime configuration into gitignored `.env.local`:
 
-Copy the values into `.env.local` (use your Postgres database's **public** URL for local dev):
+   ```dotenv
+   DATABASE_URL=postgres://app_rw:URL_ENCODED_PASSWORD@localhost:5432/DATABASE_NAME
+   AUTH_GOOGLE_ID=YOUR_GOOGLE_CLIENT_ID
+   AUTH_GOOGLE_SECRET=YOUR_GOOGLE_CLIENT_SECRET
+   AUTH_SECRET=YOUR_RANDOM_SESSION_SECRET
+   AUTH_URL=http://localhost:3000
+   ADMIN_EMAIL=YOUR_GOOGLE_EMAIL
+   APP_ENCRYPTION_KEY=YOUR_64_HEX_CHARACTER_KEY
+   ANTHROPIC_API_KEY=YOUR_PLATFORM_ANTHROPIC_KEY
+   CRON_SECRET=YOUR_RANDOM_CRON_SECRET
+   ```
 
-```
-DATABASE_URL=postgres://user:pass@host:port/db
-ANTHROPIC_API_KEY=your_anthropic_api_key
-```
+   Generate independent secrets, for example `openssl rand -base64 32` for session/cron secrets and `openssl rand -hex 32` for the encryption key. Keep the encryption key durable: replacing it makes existing stored tenant API keys unreadable. Ordinary users supply their own Anthropic key; the platform key supports the administrator's model calls. Node setup scripts read shell environment variables; they do not automatically load `.env.local`.
 
-### 3. Apply the schema
+5. Run `npm run dev`, open [localhost:3000](http://localhost:3000), and sign in with the intended administrator's Google account. New accounts are active; onboarding opens at `/welcome`. Then promote that real linked account using the owner URL and explicit email in the shell:
 
-```bash
-DATABASE_URL=postgres://... node db/apply-schema.mjs
-```
+   ```bash
+   DATABASE_URL="$DATABASE_OWNER_URL" ADMIN_EMAIL="$ADMIN_EMAIL" node db/provision-admin.mjs
+   ```
 
-Applying it to the Railway database **from your machine** needs the Postgres
-service's public URL with a specific suffix:
+   The command requires one active user with a matching linked Google identity and fails without changing anything if signup has not happened. It never fabricates an account or reactivates a suspended user. The runtime role cannot grant administrator privileges; the first-signup automatic promotion warning is expected. Reload `/admin` after promotion, then finish onboarding before searching.
 
-```bash
-DATABASE_URL="$(railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)?uselibpqcompat=true&sslmode=require" \
-  node db/apply-schema.mjs
-```
+## Existing database upgrades
 
-Without `uselibpqcompat=true` this fails with `self-signed certificate in
-certificate chain`. Recent `pg` treats a bare `sslmode=require` as
-`verify-full`, which overrides the script's own `rejectUnauthorized: false`;
-`uselibpqcompat=true` restores libpq semantics. The plain `DATABASE_URL` on the
-`web` service will not work from a laptop at all — it resolves to Railway's
-private network.
-
-This creates all eight tables (`jobs`, `watchlist`, `discovered_roles`, `discovered_startups`, `insights_cache`, `crawl_runs`, `role_searches`, `app_settings`) and applies any new columns. It's idempotent — safe to re-run, and it must be re-run before deploying code that reads or writes a column added since the last run. Single-user tool, so there's no auth/RLS; put it behind auth if you expose it publicly.
-
-### 4. Run locally
+Back up the database first. Keep its users, accounts, tenant ownership and `schema_migrations` ledger. Run upgrades using the owner's URL:
 
 ```bash
-npm run dev
+DATABASE_URL="$DATABASE_OWNER_URL" node db/migrate.mjs --dry
+DATABASE_URL="$DATABASE_OWNER_URL" node db/migrate.mjs
 ```
 
-Open http://localhost:3000.
+The dry run reads without changing the schema or ledger. Applied migrations are skipped; each new migration runs in its own transaction. Do not manually replay `db/schema.sql` or migration 003: replaying its blanket grants would reopen admin-column permissions. A legacy installation predating tenant migrations needs an existing real administrator to own its historical rows before migrations 001/002; those guards deliberately fail if ownership cannot be established.
 
-## Deploy to Railway
+## Railway deployment
 
-Deployed as the `web` service in the `gtm-job-search` Railway project, with a managed Postgres database in the same project.
+Confirm project `gtm-job-search`, service `web` before deployment. Configure the same runtime settings, an HTTPS `AUTH_URL`, the production Google callback URI, and `AUTH_TRUST_HOST=true` for the trusted Railway proxy. Use an `app_rw` connection URL on `web`; retain owner credentials only for operator setup, upgrades and backups. Local operator scripts need Railway's public database URL; container traffic can use its private host. Configure TLS according to the database endpoint and CA; these scripts honor the connection URL's PostgreSQL TLS options.
 
-1. `DATABASE_URL` on the `web` service is a reference to the Postgres service (`${{Postgres.DATABASE_URL}}`) — uses Railway's private network.
-2. Set `ANTHROPIC_API_KEY` and `CRON_SECRET` on the `web` service. `CRON_SECRET` guards `app/api/cron/crawl`, and its auth fails closed — a deploy missing it makes every cron run 401 silently.
-3. `railway up --service web --detach` to deploy. Railway (Nixpacks) runs `npm run build` then `npm run start`. **`--service web` is not optional**: the linked service is usually `crawler`, and a bare `railway up` deploys the app over the cron service.
+Apply pending migrations and run `npm run build` and `npm test` before releasing code that needs the new schema. The configured GitHub `main` branch deploys automatically on push. `railway up --service web --detach` is the manual alternative and uploads the working directory; `.railwayignore` must exclude local secrets. Verify Railway reports success for the intended commit, then verify the authenticated live route.
 
-A separate `crawler` cron service calls that route daily; it needs the same `CRON_SECRET` plus `WEB_URL`.
+The separate `crawler` service needs `WEB_URL` and the same `CRON_SECRET` as `web`. Cron routes `/api/cron/crawl-next`, `/api/cron/crawl` and `/api/cron/purge-resumes` require that bearer secret.
 
-## Build
+`/api/health` is intentionally public and returns only `ok` (200) or `unavailable` (503). It checks database connectivity and essential schema permissions without reading tenant records, using bounded connection/query timeouts. Configure the web service healthcheck path to `/api/health` with a 60-second startup allowance; `railway.toml` declares these settings for services using repository configuration. Confirm effective settings in Railway before release. This deployment readiness check is not continuous uptime monitoring.
+
+Backup service packaging, storage manifests and isolated restore instructions are in [docs/recovery.md](docs/recovery.md).
+
+## Verification
 
 ```bash
 npm run build
+npm test
 ```
+
+The build includes the production TypeScript and lint checks. `npm run lint` is not a configured standalone check. An optional isolated PostgreSQL bootstrap integration test is documented in `db/bootstrap-smoke.mjs`; it never reads the application's runtime database URL.

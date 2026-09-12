@@ -23,7 +23,14 @@ do $$
 declare owner_id uuid;
 begin
   select id into owner_id from users where role = 'admin' order by created_at limit 1;
-  if owner_id is null then
+  -- A fresh database has no data to assign and must allow real OAuth signup
+  -- AFTER migrations. Populated legacy databases still require an owner.
+  if owner_id is null and (
+    exists (select 1 from discovered_roles)
+    or exists (select 1 from discovered_startups)
+    or exists (select 1 from role_searches)
+    or exists (select 1 from crawl_runs)
+  ) then
     raise exception 'no admin user exists to own the current cache rows';
   end if;
 
