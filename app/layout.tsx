@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import Nav from "@/components/Nav";
+import { resumeBuilderEnabled } from "@/lib/require-resume-builder";
 import { auth } from "@/auth";
 import NeedsKeyBanner from "@/components/NeedsKeyBanner";
 import { rawQuery } from "@/lib/supabase";
@@ -61,7 +62,7 @@ export default async function RootLayout({
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body className="min-h-screen bg-canvas text-ink antialiased">
         <div className="print:hidden">
-          <Nav isAdmin={isAdmin} />
+          <Nav isAdmin={isAdmin} resumeBuilder={!!tenantId && resumeBuilderEnabled(isAdmin)} />
           {needsKey && <NeedsKeyBanner />}
         </div>
         <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 print:max-w-none print:p-0">

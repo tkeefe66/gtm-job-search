@@ -1,0 +1,13 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+# Uses the exact browser revision required by package-lock.json; never a system Chrome.
+RUN npx playwright install --with-deps chromium --only-shell
+COPY . .
+RUN npm run build && npm prune --omit=dev && chown -R node:node /app /ms-playwright
+ENV NODE_ENV=production
+USER node
+EXPOSE 3000
+CMD ["npm", "start"]

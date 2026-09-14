@@ -195,10 +195,12 @@ type StatusFilter =
 export default function RolesTable({
   compFloor,
   isAdmin,
+  resumeBuilder = false,
   initialAddOpen = false,
 }: {
   compFloor: number | null;
   isAdmin: boolean;
+  resumeBuilder?: boolean;
   initialAddOpen?: boolean;
 }) {
   const router = useRouter();
@@ -1488,6 +1490,11 @@ export default function RolesTable({
                     </span>
                   )}
                   <ProvenanceBadge source={job.source} />
+                  {resumeBuilder && (
+                    <Link href={`/resume/builder?jobId=${encodeURIComponent(job.id)}`} className="rounded-md border border-ink bg-ink px-2 py-1 text-xs font-medium text-white transition hover:bg-ink/90">
+                      Create résumé →
+                    </Link>
+                  )}
                   {isAdmin && (
                     <Link
                       href={`/resume?jobId=${job.id}`}

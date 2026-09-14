@@ -33,6 +33,7 @@ export default async function ResumePage({
     return (
       <div className="mx-auto max-w-3xl p-8">
         <h1 className="text-xl font-semibold">Saved résumés</h1>
+        <Link href="/resume/builder" className="mt-2 inline-block text-sm underline underline-offset-2">Create a new résumé</Link>
         {error !== undefined && <p className="mt-2 text-sm text-[#92400E]">{error}</p>}
         {resumes.length === 0 ? (
           <p className="mt-2 text-sm text-ink/70">

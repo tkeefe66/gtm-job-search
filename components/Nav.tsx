@@ -16,14 +16,15 @@ const TABS = [
  * link would not be a control anyway: /admin and every action behind it check
  * the role SERVER-SIDE. This only decides whether the tab is worth showing.
  */
-export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
+export default function Nav({ isAdmin = false, resumeBuilder = false }: { isAdmin?: boolean; resumeBuilder?: boolean }) {
   const pathname = usePathname();
   if (pathname === "/signin" || pathname === "/welcome") {
     return <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6"><Link href="/" className="font-heading text-lg font-bold tracking-tight">Job Search</Link></header>;
   }
-  const tabs = isAdmin
-    ? [...TABS, { label: "Résumé", href: "/resume" }, { label: "Accounts", href: "/admin" }]
-    : TABS;
+  const tabs = [...TABS,
+    ...(resumeBuilder || isAdmin ? [{ label: "Résumé", href: resumeBuilder ? "/resume/builder" : "/resume" }] : []),
+    ...(isAdmin ? [{ label: "Accounts", href: "/admin" }] : []),
+  ];
 
   return (
     <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6">
@@ -35,7 +36,7 @@ export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
           AI-powered job search — discover, research, track, analyze.
         </p>
       </div>
-      <nav className="flex gap-1 border-b border-slate">
+      <nav className="flex flex-wrap gap-1 border-b border-slate">
         {tabs.map((t) => (
           <Link
             key={t.href}

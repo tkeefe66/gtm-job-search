@@ -1,4 +1,5 @@
 import RolesTable from "@/components/RolesTable";
+import { resumeBuilderEnabled } from "@/lib/require-resume-builder";
 import { readCompFloor } from "@/lib/settings-store";
 import { requireActorPage } from "@/lib/require-actor";
 
@@ -14,5 +15,5 @@ export const dynamic = "force-dynamic";
 export default async function RolesPage({ searchParams }: { searchParams?: Promise<{ add?: string }> }) {
   const actor = await requireActorPage();
   const query = await searchParams;
-  return <RolesTable compFloor={await readCompFloor()} isAdmin={actor.isAdmin} initialAddOpen={query?.add === "1"} />;
+  return <RolesTable compFloor={await readCompFloor()} isAdmin={actor.isAdmin} resumeBuilder={resumeBuilderEnabled(actor.isAdmin)} initialAddOpen={query?.add === "1"} />;
 }

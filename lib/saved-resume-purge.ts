@@ -81,9 +81,10 @@ export function liveDeps(
     dryRun,
     purgeTenant: async (tenantId) => {
       const { data, error } = await rawQuery<{ id: string }>(
-        "delete from saved_resumes where tenant_id = $1 and " +
-          EXPIRED_PREDICATE +
-          " returning id",
+        "with legacy as (delete from saved_resumes where tenant_id = $1 and " +
+          EXPIRED_PREDICATE + " returning id), builder as (" +
+          "delete from resume_builder_versions where tenant_id = $1 and expires_at <= now() returning id) " +
+          "select id from legacy union all select id from builder",
         [tenantId],
         tenantId
       );
@@ -91,12 +92,13 @@ export function liveDeps(
       return { deleted: data.length };
     },
     countTenant: async (tenantId) => {
-      const { data } = await rawQuery<{ n: string }>(
-        "select count(*)::text as n from saved_resumes where tenant_id = $1 and " +
-          EXPIRED_PREDICATE,
+      const { data, error } = await rawQuery<{ n: string }>(
+        "select ((select count(*) from saved_resumes where tenant_id = $1 and " +
+          EXPIRED_PREDICATE + ") + (select count(*) from resume_builder_versions where tenant_id = $1 and expires_at <= now()))::text as n",
         [tenantId],
         tenantId
       );
+      if (error) throw new Error(error.message || "Could not count expired résumé versions.");
       return data.length > 0 ? parseInt(data[0].n, 10) : 0;
     },
     // Deliberately unscoped and therefore expected to return nothing under RLS;

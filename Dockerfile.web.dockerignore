@@ -1,0 +1,13 @@
+.git
+node_modules
+.next
+.env
+.env.*
+*.pem
+*.tsbuildinfo
+.readiness-audit
+.claude
+.codex
+.agents
+.superpowers
+docs
