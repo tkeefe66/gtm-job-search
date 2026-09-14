@@ -22,6 +22,7 @@ import {
   normalizeTitle,
 } from "@/lib/role-key";
 import type { Role } from "@/lib/types";
+import { excludedJobSource } from "@/lib/job-source-policy";
 
 export interface IngestCompanyContext {
   tagline?: string | null;
@@ -165,6 +166,10 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   const fresh: Role[] = [];
 
   for (const role of roles) {
+    if (excludedJobSource(role.job_url)) {
+      console.log(`ingestRoles(${company}): skipping excluded job source (${role.job_url})`);
+      continue;
+    }
     // Rejected before anything is spent on them: a job board's SEARCH page is
     // not a posting and a description is not an employer, so there is nothing
     // to read, verify or apply to. Found in production as 15 stored rows that

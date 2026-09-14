@@ -1,5 +1,6 @@
 "use server";
 
+import { allowedJobSources } from "@/lib/job-source-policy";
 import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
@@ -92,7 +93,7 @@ async function findAndSaveRolesInner(
     }
 
     if (data) {
-      return { roles: data.roles as Role[], cached: true };
+      return { roles: allowedJobSources(data.roles as Role[]), cached: true };
     }
   }
 
@@ -125,7 +126,7 @@ async function findAndSaveRolesInner(
     // A prose answer is recovered rather than thrown: without this the outer
     // catch returns err.message to the UI as a raw JSON.parse complaint, and
     // the web search above — often 10+ billed searches — is discarded.
-    const { items: roles, message } = await parseOrSalvage<Role>({
+    const { items: foundRoles, message } = await parseOrSalvage<Role>({
       raw,
       stopReason,
       key: "roles",
@@ -134,6 +135,8 @@ async function findAndSaveRolesInner(
       label: `findAndSaveRoles(${startup.company})`,
       extract: arrayUnder<Role>("roles", ["role_title"]),
     });
+
+    const roles = allowedJobSources(foundRoles);
 
     // Persist roles to discovered_roles table.
     //

@@ -113,6 +113,14 @@ const OPTS = {
   fitInputs: {} as never,
 };
 
+test("BuiltIn results never reach URL resolution, posting reads, insertion or scoring", async () => {
+  const result = await ingestRoles({ ...OPTS, roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }] });
+  expect(result.added).toEqual([]);
+  expect(resolveEmployerLink).not.toHaveBeenCalled();
+  expect(addJob).not.toHaveBeenCalled();
+  expect(scoreFit).not.toHaveBeenCalled();
+});
+
 test("a concurrent acceptance conflict skips the role without buying a grade", async () => {
   h.addJobResult = { job: { id: "existing-manual-role" }, inserted: false };
   const result = await ingestRoles(OPTS);
@@ -239,7 +247,7 @@ describe("never_live records only the definitive death signal", () => {
     // own example.com link classifies as "other" and would return early.
     await ingestRoles({
       ...OPTS,
-      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+      roles: [{ ...ROLE, job_url: "https://www.indeed.com/viewjob?jk=12345" }],
     });
 
     expect(insertedRow().status).toBe("Posting Closed");
@@ -264,7 +272,7 @@ describe("never_live records only the definitive death signal", () => {
 
     await ingestRoles({
       ...OPTS,
-      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+      roles: [{ ...ROLE, job_url: "https://www.indeed.com/viewjob?jk=12345" }],
     });
 
     expect(insertedRow().status).toBe("New");
@@ -386,7 +394,7 @@ describe("an ATS deep link is verified against its own vendor's board", () => {
 
     await ingestRoles({
       ...OPTS,
-      roles: [{ ...ROLE, job_url: "https://www.builtin.com/job/12345" }],
+      roles: [{ ...ROLE, job_url: "https://www.indeed.com/viewjob?jk=12345" }],
     });
 
     expect(vi.mocked(resolveEmployerLink)).toHaveBeenCalledTimes(1);

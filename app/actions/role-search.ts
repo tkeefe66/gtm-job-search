@@ -1,5 +1,6 @@
 "use server";
 
+import { allowedJobSources } from "@/lib/job-source-policy";
 import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
 import { resolveTenantId } from "@/lib/tenant";
@@ -110,7 +111,7 @@ export async function getCachedRoleSearch(
   }
   if (!data) return { matches: [], untrackedCompanies: [], fetchedAt: null };
 
-  const matches = (data.roles ?? []) as RoleMatch[];
+  const matches = allowedJobSources((data.roles ?? []) as RoleMatch[]);
   return {
     matches,
     untrackedCompanies: await untrackedFrom(matches),
@@ -211,7 +212,7 @@ async function findRolesByCriteriaInner(
       });
       return items;
     });
-    const matches = searched.items;
+    const matches = allowedJobSources(searched.items);
 
     const fetchedAt = new Date().toISOString();
     const { error: cacheError } = searched.error !== undefined ? { error: null } : await supabase.forTenant(await resolveTenantId()).from("role_searches").upsert(

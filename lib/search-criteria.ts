@@ -1,3 +1,4 @@
+import { JOB_SOURCE_INSTRUCTION } from "./job-source-policy";
 // Single source of truth for what counts as a target role and an acceptable
 // location. These were duplicated across the prompts in app/actions/roles.ts
 // and app/actions/discover.ts; the crawler and role search add two more
@@ -104,6 +105,7 @@ export function roleExtractionSchema(
   buildingUpside: string
 ): string {
   return [
+    JOB_SOURCE_INSTRUCTION,
     "Return a JSON array where each object has these exact fields:",
     "role_title (string)",
     // Unqualified, this field came back as whatever the search engine ranked
@@ -113,7 +115,7 @@ export function roleExtractionSchema(
     // direct link is both more useful and more checkable.
     "job_url (string or empty — the EMPLOYER's own application URL, e.g. their " +
       "Greenhouse/Ashby/Lever/Workday board or their own careers site. Use a job " +
-      "aggregator link (LinkedIn, Indeed, ZipRecruiter, Built In, Glassdoor, Lensa) " +
+      "aggregator link (LinkedIn, Indeed, ZipRecruiter, Glassdoor, Lensa) " +
       "ONLY when no direct posting exists)",
     "location (string, list all locations from the posting)",
     'seniority (string, one of: "VP/Head", "Director", "Senior Manager", "Manager/IC")',
