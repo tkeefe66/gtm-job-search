@@ -22,7 +22,7 @@ export default function Nav({ isAdmin = false, resumeBuilder = false }: { isAdmi
     return <header className="mx-auto max-w-6xl px-4 pt-8 sm:px-6"><Link href="/" className="font-heading text-lg font-bold tracking-tight">Job Search</Link></header>;
   }
   const tabs = [...TABS,
-    ...(resumeBuilder || isAdmin ? [{ label: "Résumé", href: resumeBuilder ? "/resume/builder" : "/resume" }] : []),
+    ...(resumeBuilder || isAdmin ? [{ label: "Résumé", href: isAdmin ? "/resume" : "/resume/builder" }] : []),
     ...(isAdmin ? [{ label: "Accounts", href: "/admin" }] : []),
   ];
 

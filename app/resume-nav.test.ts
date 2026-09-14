@@ -25,3 +25,9 @@ test("admins retain the legacy archive when the builder is disabled", () => {
   expect(html).toContain('href="/resume"');
   expect(html).toContain('href="/admin"');
 });
+// Mutation: enabling the builder replaces the owner's existing resume navigation.
+test("admins keep their existing editor as the primary resume destination", () => {
+  const html = renderToStaticMarkup(React.createElement(Nav, {isAdmin:true,resumeBuilder:true}));
+  expect(html).toContain('href="/resume"');
+  expect(html).not.toContain('href="/resume/builder"');
+});
