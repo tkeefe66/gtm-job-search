@@ -21,3 +21,8 @@
 
 ## Execution record
 - Starting from 457a0a2 in /private/tmp/gtm-builtin-release, branch codex/job-dispositions. Original workspace and unrelated files are preserved.
+- Feature implemented in 8a6c7bd; all 2,178 tests passed, final production build passed, review findings resolved.
+- Local production-build browser verification passed with a synthetic non-admin account: single disposition, editing/preserving fit reason, automation-to-user confirmation, reopening, bulk duplicate, report, desktop/mobile widths. Synthetic account and all associated jobs/source/events were cleaned up. Local server stopped.
+- Production migration 024 was applied at 2026-09-15T00:06:16Z. Before/after 289-job fingerprint matched; saved_resumes=1, tailored_resumes=12, builder_documents=0, settings=30 remained unchanged. Zero historical source rows/events were created by migration.
+- RELEASE BLOCKED: automatic approval review rejected pushing HEAD to main because build authorization was not explicit deployment authorization for this feature. Current production code remains 457a0a2. Ask user for explicit deployment approval before pushing.
+- A proposed pause of the new tracking triggers was also rejected; NO pause occurred. Triggers remain active with the old app. Pending-period writes can lack intended actor attribution. Do not claim the new UI is deployed. After approval, verify origin/main, push this reviewed branch, wait for exact Railway terminal success, and check live health/source page. Do not replay migration 024 or backfill historical records.
