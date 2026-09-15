@@ -1,5 +1,6 @@
 "use server";
 
+import { patchJobWithActor } from "@/lib/job-disposition-store";
 import { requireActor } from "@/lib/require-actor";
 import { resolveTenantId } from "@/lib/tenant";
 
@@ -44,7 +45,7 @@ export async function addJob(
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
   try {
-    return await acceptJob(await resolveTenantId(), job);
+    return await acceptJob(await resolveTenantId(), job, "user");
   } catch (cause) {
     const error = describeThrown(cause);
     console.error("addJob error:", error);
@@ -66,18 +67,7 @@ export async function updateJob(
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { error } = await supabase.forTenant(await resolveTenantId())
-    .from("jobs")
-    // updated_at is stamped UNCONDITIONALLY on purpose: rescoreAll pages
-    // through jobs with `order by updated_at asc` (lib/rescore-scope.ts), so
-    // dropping this stamp makes every batch re-score the same rows forever.
-    .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) {
-    console.error("updateJob error:", error);
-    return { error: error.message };
-  }
-  return {};
+  return patchJobWithActor(await resolveTenantId(), id, patch, "user");
 }
 
 export async function deleteJob(id: string): Promise<{ error?: string }> {

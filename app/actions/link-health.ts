@@ -2,7 +2,9 @@
 
 import { supabase } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { updateJob, getJobStatuses } from "@/app/actions/jobs";
+import { dispositionStatus } from "@/lib/job-dispositions";
+import { updateAutomaticJob } from "@/lib/job-disposition-store";
+import { getJobStatuses } from "@/app/actions/jobs";
 import { checkJobUrl } from "@/lib/verify-url";
 import { classifyJobLink } from "@/lib/job-link";
 import { newBoardCache, resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
@@ -152,7 +154,7 @@ export async function repairJobLinks(): Promise<LinkRepairReport> {
   // and the answer was yes: a read-slug `absent` now closes the role, and is
   // reported as closedAbsent.
   for (let i = 0; i < jobs.length; i += BATCH) {
-    const results = await Promise.all(jobs.slice(i, i + BATCH).map((j) => repairOne(j, boards)));
+    const results = await Promise.all(jobs.slice(i, i + BATCH).map((j) => repairOne(j, boards, dispositionStatus("job_not_found", statuses))));
     for (const r of results) {
       report.checked++;
       if (r.relinked) report.relinked++;
@@ -223,7 +225,7 @@ interface RepairOutcome {
   closedNotAPosting?: boolean;
 }
 
-async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
+async function repairOne(job: Job, boards: BoardCache, missingStatus: string | null): Promise<RepairOutcome> {
   const url = job.job_url as string;
   const out: RepairOutcome = {};
   let liveUrl = url;
@@ -234,7 +236,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   const bogus = notAPosting(url, job.company);
   if (bogus !== null) {
     const failure = describeWriteFailure(
-      (await updateJob(job.id, { status: "Posting Closed" })).error,
+      (await (missingStatus ? updateAutomaticJob(job.id, { status: missingStatus, disposition: "job_not_found", disposition_reason: null }) : Promise.resolve({error:"Could not file this missing role. Enable a terminal status other than Posting Closed in Settings, then retry."}))).error,
       `close ${job.company} / ${job.role_title}`
     );
     if (failure === undefined) {
@@ -263,7 +265,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
         // source_url keeps the link being overwritten, exactly as the
         // aggregator branch does, and for the same non-lossy reason — even
         // though the slug here was read rather than guessed.
-        (await updateJob(job.id, relinkPatch(job, url, verified.url)))
+        (await updateAutomaticJob(job.id, relinkPatch(job, url, verified.url)))
           .error,
         `relink ${job.company} / ${job.role_title}`
       );
@@ -297,7 +299,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
       // status. A role closed here stays visible under Out and can be moved
       // back by hand.
       const failure = describeWriteFailure(
-        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        (await (missingStatus ? updateAutomaticJob(job.id, { status: missingStatus, disposition: "job_not_found", disposition_reason: null }) : Promise.resolve({error:"Could not file this missing role. Enable a terminal status other than Posting Closed in Settings, then retry."}))).error,
         `close ${job.company} / ${job.role_title}`
       );
       if (failure === undefined) out.closedAbsent = true;
@@ -317,7 +319,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
         // destroy the only URL this role ever had. Written only on the first
         // relink; a re-run must not overwrite the original with the previous
         // resolution.
-        (await updateJob(job.id, relinkPatch(job, url, resolved.url)))
+        (await updateAutomaticJob(job.id, relinkPatch(job, url, resolved.url)))
           .error,
         `relink ${job.company} / ${job.role_title}`
       );
@@ -332,7 +334,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
       // rule the ingest path uses, so a role cannot pass at the door and then
       // be judged differently a day later.
       const failure = describeWriteFailure(
-        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        (await (missingStatus ? updateAutomaticJob(job.id, { status: missingStatus, disposition: "job_not_found", disposition_reason: null }) : Promise.resolve({error:"Could not file this missing role. Enable a terminal status other than Posting Closed in Settings, then retry."}))).error,
         `close ${job.company} / ${job.role_title}`
       );
       if (failure === undefined) out.closedUnlisted = true;
@@ -373,7 +375,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
   // twice and count one closure under two reasons.
   if (!wasClosed(out) && (await checkJobUrl(liveUrl)) === "dead") {
     const failure = describeWriteFailure(
-      (await updateJob(job.id, { status: "Posting Closed" })).error,
+      (await (missingStatus ? updateAutomaticJob(job.id, { status: missingStatus, disposition: "job_not_found", disposition_reason: null }) : Promise.resolve({error:"Could not file this missing role. Enable a terminal status other than Posting Closed in Settings, then retry."}))).error,
       `close ${job.company} / ${job.role_title}`
     );
     if (failure === undefined) out.closed = true;
@@ -392,7 +394,7 @@ async function repairOne(job: Job, boards: BoardCache): Promise<RepairOutcome> {
     const page = await removalMarker(liveUrl);
     if (page.kind === "removed") {
       const failure = describeWriteFailure(
-        (await updateJob(job.id, { status: "Posting Closed" })).error,
+        (await updateAutomaticJob(job.id, { status: "Posting Closed", disposition: "posting_closed", disposition_reason: null })).error,
         `close ${job.company} / ${job.role_title}`
       );
       if (failure === undefined) {

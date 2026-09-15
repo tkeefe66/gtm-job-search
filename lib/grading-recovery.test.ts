@@ -6,7 +6,7 @@ const db = new PGlite();
 const tenant = "00000000-0000-0000-0000-000000000001";
 const lease = "00000000-0000-0000-0000-000000000010";
 beforeAll(async () => {
-  await db.exec(`create table jobs (
+  await db.exec(`create table jobs (disposition text,disposition_reason text,
     id text primary key, tenant_id text, status text default 'New', fit_score int, fit_summary text,
     never_live boolean default false, created_at timestamptz default now(), updated_at timestamptz default now(),
     grading_state text default 'pending', grading_attempts int default 0,

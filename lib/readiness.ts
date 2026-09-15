@@ -15,8 +15,10 @@ export async function databaseReady(): Promise<boolean> {
     await client.connect();
     // Parse and permission-check critical schema without reading tenant records.
     await client.query(`select u.id, s."sessionToken", j.tenant_id, j.grading_attempts,
+      j.disposition, q.started_at, r.source_url, e.disposition_reason,
       k.aad_version, a.value from users u, sessions s, jobs j,
-      tenant_api_keys k, app_settings a limit 0`);
+      tenant_api_keys k, app_settings a, source_quality_launch q,
+      job_source_records r, job_disposition_events e limit 0`);
     return true;
   } catch {
     return false;

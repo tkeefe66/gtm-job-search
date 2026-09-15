@@ -37,10 +37,11 @@ vi.mock("@/lib/supabase", () => ({
   },
 }));
 vi.mock("@/app/actions/jobs", () => ({
-  updateJob: vi.fn(async () => ({ error: h.updateError })),
+
   getJobStatuses: async () => ({
     statuses: [
       { key: "New", label: "New", bucket: "open" },
+      { key: "Not Interested", label: "Not Interested", bucket: "terminal" },
       { key: "Posting Closed", label: "Posting Closed", bucket: "terminal" },
     ],
     error: undefined,
@@ -58,7 +59,8 @@ vi.mock("@/lib/resolve-job-link", () => ({
 }));
 
 import { repairJobLinks } from "./link-health";
-import { updateJob } from "@/app/actions/jobs";
+vi.mock("@/lib/job-disposition-store", () => ({ updateAutomaticJob: vi.fn(async () => ({error:h.updateError})) }));
+import { updateAutomaticJob as updateJob } from "@/lib/job-disposition-store";
 import { checkJobUrl } from "@/lib/verify-url";
 import { resolveEmployerLink } from "@/lib/resolve-job-link";
 import { fetchPage } from "@/lib/fetch-page";
@@ -240,7 +242,7 @@ describe("the ATS branch does not disturb the paths around it", () => {
 
     const report = await repairJobLinks();
 
-    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(written()).toEqual({ status: "Not Interested", disposition: "job_not_found", disposition_reason: null });
     expect(report.closed).toBe(1);
   });
 });
@@ -269,7 +271,7 @@ describe("a posting its own board no longer carries is closed", () => {
 
     const report = await repairJobLinks();
 
-    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(written()).toEqual({ status: "Not Interested", disposition: "job_not_found", disposition_reason: null });
     expect(report.closedAbsent).toBe(1);
   });
 
@@ -332,7 +334,7 @@ describe("a soft 404 — the page says gone, the server says 200", () => {
 
     const report = await repairJobLinks();
 
-    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(written()).toEqual({ status: "Posting Closed", disposition: "posting_closed", disposition_reason: null });
     expect(report.closedRemoved).toBe(1);
   });
 
@@ -421,7 +423,7 @@ describe("rows that were never postings are closed", () => {
 
     const report = await repairJobLinks();
 
-    expect(written()).toEqual({ status: "Posting Closed" });
+    expect(written()).toEqual({ status: "Not Interested", disposition: "job_not_found", disposition_reason: null });
     expect(report.closedNotAPosting).toBe(1);
   });
 

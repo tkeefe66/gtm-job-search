@@ -1,6 +1,8 @@
 import { rawQuery } from "@/lib/supabase";
 import { resolveTenantId } from "@/lib/tenant";
-import { addJob, getJobStatuses } from "@/app/actions/jobs";
+import { dispositionStatus } from "@/lib/job-dispositions";
+import { addIngestedJob } from "@/lib/job-disposition-store";
+import { getJobStatuses } from "@/app/actions/jobs";
 import { scoreFit } from "@/app/actions/parse-role";
 import { randomUUID } from "node:crypto";
 import { gradingPaused, recordGradeFailure, updateMissingGrade } from "./grading-store";
@@ -226,6 +228,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   // read leaves `fileInto` null, which files nothing — the roles stay New and
   // cost one rescore each, which is the harmless direction.
   const { statuses, error: statusesError } = await getJobStatuses();
+  const missingStatus = statusesError === undefined ? dispositionStatus("job_not_found", statuses) : null;
   const fileInto = statusesError === undefined ? autoFileStatus(statuses) : null;
 
   const companyDescription = [ctx.tagline, ctx.traction]
@@ -297,6 +300,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       const department = (wasRead?.department || role.department || "").trim();
       const summary = wasRead?.summary || role.description_summary || "";
       const isDead = deadUrl || links[i].unlisted;
+      if (isDead && !missingStatus) console.error("ingest: missing role retained unresolved because no compatible terminal status is enabled; check Settings");
       const gradingLease = randomUUID();
 
       // The employer's own spelling, when the read found one and it is the same
@@ -306,10 +310,11 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       // entity or a differently-worded brand is not an improvement.
       const storedCompany = (wasRead && betterCompanyName(company, wasRead.employer)) || company;
 
-      const jobRes = await addJob({
+      const jobRes = await addIngestedJob({
         company: storedCompany,
         role_title: role.role_title,
-        status: isDead ? "Posting Closed" : "New",
+        status: isDead ? missingStatus ?? "New" : "New",
+        disposition: isDead && missingStatus ? "job_not_found" : null,
         // NARROWER than isDead, deliberately. `unlisted` means a board found by
         // GUESSING a slug from the company name did not list this title —
         // link-health already refuses to CLOSE a role on that signal, and
@@ -346,7 +351,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
         grading_attempts: isDead ? 0 : 1,
         grading_lease: isDead ? null : gradingLease,
         grading_next_at: isDead ? null : new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      });
+      }, opts.chosenByUser === true);
 
       // describeWriteFailure, not `if (jobRes.error)`. Presence, not
       // truthiness: an unreachable database rejects with an empty message

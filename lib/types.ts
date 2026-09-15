@@ -130,6 +130,8 @@ export interface RolesResult {
 }
 
 export interface Job {
+  disposition?: import("./job-dispositions").Disposition | null;
+  disposition_reason?: import("./job-dispositions").FitReason | null;
   id: string;
   company: string;
   role_title: string;

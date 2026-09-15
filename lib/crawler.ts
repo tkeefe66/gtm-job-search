@@ -1,3 +1,5 @@
+import { getJobStatuses } from "@/app/actions/jobs";
+import { dispositionStatus } from "@/lib/job-dispositions";
 import { ModelResponseError } from "./model-response";
 import {
   callStructured,
@@ -689,12 +691,18 @@ async function closeStalePostings(
   );
   if (toClose.length === 0) return;
 
+  const configured = await getJobStatuses();
+  const missingStatus = configured.error === undefined ? dispositionStatus("job_not_found", configured.statuses) : null;
+  if (!missingStatus) {
+    console.error("crawler: could not file missing roles; check terminal statuses in Settings", configured.error);
+    return;
+  }
   const closing = new Set(toClose);
   for (const job of active) {
     if (!closing.has(job.key)) continue;
     const { error: closeError } = await supabase.forTenant(await resolveTenantId())
       .from("jobs")
-      .update({ status: "Posting Closed", updated_at: new Date().toISOString() })
+      .update({ status: missingStatus, disposition: "job_not_found", disposition_reason: null, updated_at: new Date().toISOString() })
       .eq("id", job.id);
     // The update's result was previously discarded, so a failed write still
     // logged "closed stale posting" as though it had succeeded. Log the

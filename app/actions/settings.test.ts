@@ -59,7 +59,8 @@ import {
   saveCriteriaList,
   saveCriteriaText,
 } from "./settings";
-import { updateJob } from "@/app/actions/jobs";
+vi.mock("@/lib/job-disposition-store", () => ({updateAutomaticJob: vi.fn()}));
+import { updateAutomaticJob as updateJob } from "@/lib/job-disposition-store";
 import { scoreFit } from "@/app/actions/parse-role";
 import {
   SCORED_JOBS_REMAINING_SQL,
@@ -473,7 +474,7 @@ describe("a rescore files a role that stays below the bar", () => {
 
     await rescoreAll();
 
-    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 2, status: "Rejected" });
+    expect(update).toHaveBeenCalledWith("job-1", { fit_score: 2, status: "Rejected", disposition: "not_a_fit", disposition_reason: null });
   });
 
   test("a row that clears the bar is only re-scored", async () => {

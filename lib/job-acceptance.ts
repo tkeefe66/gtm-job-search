@@ -14,8 +14,9 @@ import type { Job, JobInsert } from "@/lib/types";
  * Existing duplicates are retained unchanged; oldest matching row wins. This
  * works on legacy databases without deleting user notes or terminal statuses.
  */
-export async function acceptJob(tenantId: string, job: JobInsert): Promise<{ job: Job; inserted: boolean }> {
+export async function acceptJob(tenantId: string, job: JobInsert, actor: "user" | "automation" = "automation"): Promise<{ job: Job; inserted: boolean }> {
   return tenantTransaction(tenantId, async (query) => {
+    await query("select set_config('app.disposition_actor',$1,true)", [actor]);
     await query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`job-acceptance:${tenantId}`]);
     const urls = [job.job_url, job.source_url].filter((url): url is string => !!url);
     const { rows } = await query(

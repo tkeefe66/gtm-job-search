@@ -1,4 +1,5 @@
 "use server";
+import { updateAutomaticJob } from "@/lib/job-disposition-store";
 
 import { requireActor } from "@/lib/require-actor";
 import { withBudget } from "@/lib/metered";
@@ -836,9 +837,9 @@ async function rescoreAllInner(opts?: {
             wasRead: typeof (row.posting ?? null)?.enrichedAt === "string",
             status: row.status,
           });
-        const { error: updErr } = await updateJob(row.id, {
+        const { error: updErr } = await updateAutomaticJob(row.id, {
           fit_score: scored.score,
-          ...(file ? { status: fileInto } : {}),
+          ...(file ? { status: fileInto, disposition: "not_a_fit" as const, disposition_reason: null } : {}),
         });
         // describeWriteFailure, not `if (updErr)`. Presence, not truthiness, and
         // the stakes here are higher than anywhere else this doctrine applies:

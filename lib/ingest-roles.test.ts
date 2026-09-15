@@ -56,7 +56,7 @@ vi.mock("@/app/actions/parse-role", () => ({
   scoreFit: vi.fn(async () => ({ score: h.score, rationale: "fits" })),
 }));
 vi.mock("@/app/actions/jobs", async () => ({
-  addJob: vi.fn(async () => h.addJobResult),
+
   updateJob: vi.fn(async () => ({})),
   getJobStatuses: vi.fn(async () => ({ statuses: h.statuses })),
 }));
@@ -88,7 +88,8 @@ vi.mock("@/lib/resolve-job-link", () => ({
 import { MAX_INGEST_READS, ingestRoles } from "./ingest-roles";
 import { readPosting } from "@/lib/posting-read";
 import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
-import { addJob } from "@/app/actions/jobs";
+vi.mock("@/lib/job-disposition-store",()=>({addIngestedJob:vi.fn(async()=>h.addJobResult)}));
+import { addIngestedJob as addJob } from "@/lib/job-disposition-store";
 import { updateMissingGrade as updateJob, recordGradeFailure, gradingPaused } from "@/lib/grading-store";
 import { scoreFit } from "@/app/actions/parse-role";
 import { resolveEmployerLink, verifyPostingLink } from "@/lib/resolve-job-link";
@@ -229,7 +230,8 @@ describe("never_live records only the definitive death signal", () => {
 
     await ingestRoles(OPTS);
 
-    expect(insertedRow().status).toBe("Posting Closed");
+    expect(insertedRow().status).toBe("Not Interested");
+    expect(insertedRow().disposition).toBe("job_not_found");
     expect(insertedRow().never_live).toBe(true);
   });
 
@@ -250,7 +252,8 @@ describe("never_live records only the definitive death signal", () => {
       roles: [{ ...ROLE, job_url: "https://www.indeed.com/viewjob?jk=12345" }],
     });
 
-    expect(insertedRow().status).toBe("Posting Closed");
+    expect(insertedRow().status).toBe("Not Interested");
+    expect(insertedRow().disposition).toBe("job_not_found");
     expect(insertedRow().never_live).toBe(false);
   });
 

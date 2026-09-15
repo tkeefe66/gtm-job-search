@@ -125,6 +125,7 @@ type Op = "select" | "insert" | "update" | "delete" | "upsert";
  * which is why lib/supabase.test.ts pins this list against db/schema.sql.
  */
 export const TENANT_TABLES = [
+  "job_source_records", "job_disposition_events",
   "resume_builder_profiles", "resume_builder_documents", "resume_builder_proposals", "resume_builder_versions",
   "jobs",
   "watchlist",

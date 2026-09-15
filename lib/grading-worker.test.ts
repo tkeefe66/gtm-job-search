@@ -26,7 +26,7 @@ import { retryMissingGrades } from "@/app/actions/grading";
 
 beforeAll(async () => {
   h.db = new PGlite();
-  await h.db.exec(`create table jobs (id text primary key,tenant_id text,status text default 'New',
+  await h.db.exec(`create table jobs (disposition text,disposition_reason text,id text primary key,tenant_id text,status text default 'New',
     fit_score int,never_live boolean default false,posting jsonb,
     ${SCORING_INPUT_COLUMNS.map(c => `${c} text`).join(',')},
     created_at timestamptz default now(),updated_at timestamptz default now(),

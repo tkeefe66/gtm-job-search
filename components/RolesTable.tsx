@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import DispositionDialog from "./DispositionDialog";
+import { setJobDisposition } from "@/app/actions/job-dispositions";
+import { DISPOSITIONS, FIT_REASONS, isDisposition, dispositionLabel, type Disposition, type FitReason } from "@/lib/job-dispositions";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getJobs, updateJob, deleteJob, addJob, getJobStatuses } from "@/app/actions/jobs";
@@ -213,6 +216,8 @@ export default function RolesTable({
   const [statusError, setStatusError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dispositionTargets, setDispositionTargets] = useState<Job[] | null>(null);
+  const [dispositionError, setDispositionError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>({
     kind: "sentinel",
@@ -586,13 +591,63 @@ export default function RolesTable({
   const selectedCount = selectionInView(filtered, selected).length;
 
   async function handleStatus(job: Job, status: string) {
+    if (status.startsWith("disposition:")) {
+      const disposition = status.slice("disposition:".length);
+      if (isDisposition(disposition)) await chooseDisposition([job], disposition);
+      return;
+    }
     // appliedDatePatch, not a bare { status }: the column is rendered below and
     // was written by nothing until this call site started sending it.
-    const patch = { status, ...appliedDatePatch(status, job.applied_date, todayStamp()) };
+    const patch = { status, disposition: null, disposition_reason: null, ...appliedDatePatch(status, job.applied_date, todayStamp()) };
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, ...patch } : j)));
     await commitWrite(`move ${job.company} to "${labelFor(statuses, status)}"`, () =>
       updateJob(job.id, patch)
     );
+  }
+
+  async function chooseDisposition(targets: Job[], disposition: Disposition) {
+    if (applying) return;
+    setDispositionError(null);
+    if (disposition === "not_a_fit") {
+      setDispositionTargets(targets);
+      return;
+    }
+    const failedIds = await saveDispositions(targets, disposition, null);
+    setSelected(previous => {
+      const next = new Set(previous);
+      for (const target of targets) if (!failedIds.includes(target.id)) next.delete(target.id);
+      return next;
+    });
+  }
+
+  async function saveDispositions(targets: Job[], disposition: Disposition, reason: FitReason | null): Promise<string[]> {
+    setApplying(true);
+    setError(null);
+    let failed: string[] = [];
+    try {
+      const results = await Promise.all(targets.map(async job => {
+        try { return {id: job.id, error: (await setJobDisposition(job.id, disposition, reason)).error}; }
+        catch (cause) { return {id: job.id, error: cause instanceof Error ? cause.message : String(cause)}; }
+      }));
+      failed = results.filter(r => r.error !== undefined).map(r => r.id);
+      const failure = summarizeBulkStatus(results, dispositionLabel(disposition));
+      const reloadError = await load();
+      const message = failure ? `${failure.message}. ${reloadError ? `Reload failed: ${reloadError}` : "Saved rows are updated; failed rows can be retried."}` : reloadError;
+      setError(message);
+      setDispositionError(message);
+    } finally { setApplying(false); }
+    return failed;
+  }
+
+  async function saveFitDisposition(reason: FitReason | null) {
+    if (!dispositionTargets || applying) return;
+    const failed = await saveDispositions(dispositionTargets, "not_a_fit", reason);
+    setSelected(previous => {
+      const next = new Set(previous);
+      for (const target of dispositionTargets) if (!failed.includes(target.id)) next.delete(target.id);
+      return next;
+    });
+    setDispositionTargets(failed.length ? dispositionTargets.filter(j => failed.includes(j.id)) : null);
   }
 
   async function handleCheckLinks() {
@@ -722,6 +777,11 @@ export default function RolesTable({
   async function handleBulkStatus(status: string) {
     const targets = selectionInView(filtered, selected);
     if (targets.length === 0) return;
+    if (status.startsWith("disposition:")) {
+      const disposition = status.slice("disposition:".length);
+      if (isDisposition(disposition)) await chooseDisposition(targets, disposition);
+      return;
+    }
     // The rows that failed stay ticked so the retry is one click, and the ones
     // that saved drop out so a retry cannot re-write them. A clean run returns
     // no ids, which is the same "nothing selected" state as before.
@@ -750,6 +810,8 @@ export default function RolesTable({
     const today = todayStamp();
     const patchFor = (j: Job) => ({
       status,
+      disposition: null,
+      disposition_reason: null,
       ...appliedDatePatch(status, j.applied_date, today),
     });
     setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patchFor(j) } : j)));
@@ -809,7 +871,7 @@ export default function RolesTable({
     const targets = jobs.filter((j) => ids.has(j.id));
     if (targets.length === 0) return;
 
-    const failedIds = await applyStatusTo(targets, "Posting Closed");
+    const failedIds = await saveDispositions(targets, "job_not_found", null);
     // remainingUnclear, not a filter written here: the rule is per-ROW, and the
     // version that lived in this line filtered the WHOLE report down to the
     // rows that failed — so a clean move of six emptied the list and took three
@@ -864,7 +926,8 @@ export default function RolesTable({
             {jobs.length} role{jobs.length !== 1 ? "s" : ""} tracked. Find new ones from the Discover tab.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/sources" className="rounded-md border border-slate px-4 py-2 text-sm font-medium text-ink/70 transition hover:border-ink hover:text-ink">Source quality</Link>
           <button
             onClick={() => void handleCheckLinks()}
             disabled={checkingLinks}
@@ -993,8 +1056,8 @@ export default function RolesTable({
                           </a>
                         </span>
                         <MoveOutButton
-                          label="Move to Out"
-                          title={`Sets this role to ${labelFor(statuses, "Posting Closed")}`}
+                          label="Job not found"
+                          title="File this role as Job not found; this does not claim the employer closed it"
                           disabled={applying}
                           onClick={() => void moveUnclearOut([r])}
                         />
@@ -1008,8 +1071,8 @@ export default function RolesTable({
                   {linkReport.unclear.length > 1 && (
                     <div className="mt-2">
                       <MoveOutButton
-                        label={`Move all ${linkReport.unclear.length} to Out`}
-                        title={`Sets all ${linkReport.unclear.length} roles to ${labelFor(statuses, "Posting Closed")}`}
+                        label={`Mark all ${linkReport.unclear.length} as not found`}
+                        title={`Mark all ${linkReport.unclear.length} roles as Job not found`}
                         disabled={applying}
                         onClick={() => void moveUnclearOut(linkReport.unclear)}
                       />
@@ -1395,9 +1458,14 @@ export default function RolesTable({
                       fires onChange, and the placeholder above already covers
                       the empty value. Passing "" as optionsFor's `current` would
                       inject a second, blank option alongside it. */}
-                  {statuses.filter((d) => !d.hidden).map((d) => (
+                  <optgroup label="Pipeline status">
+                  {statuses.filter((d) => !d.hidden && d.key !== "Not Interested" && d.key !== "Posting Closed").map((d) => (
                     <option key={d.key} value={d.key}>{d.label}</option>
                   ))}
+                  </optgroup>
+                  <optgroup label="File out of pipeline">
+                    {DISPOSITIONS.map(d => <option key={d.key} value={`disposition:${d.key}`}>{d.label}</option>)}
+                  </optgroup>
                 </select>
                 <button
                   onClick={() => setSelected(new Set())}
@@ -1503,7 +1571,7 @@ export default function RolesTable({
                       Tailor resume →
                     </Link>
                   )}
-                  <StatusSelect value={job.status} statuses={statuses} onChange={(s) => handleStatus(job, s)} />
+                  <StatusSelect value={job.status} disposition={job.disposition} disabled={applying} statuses={statuses} onChange={(s) => handleStatus(job, s)} />
                 </div>
               </div>
 
@@ -1517,6 +1585,9 @@ export default function RolesTable({
                       screen there was no way to tell a role whose description
                       we hold from one where we only have a title. */}
                   <PostingDetailBlock job={job} />
+                  {job.disposition && <div className="flex flex-wrap items-center gap-3 text-sm"><p><span className="font-medium">Disposition:</span> {dispositionLabel(job.disposition)}{job.disposition_reason ? ` (${FIT_REASONS.find(r => r.key === job.disposition_reason)?.label ?? job.disposition_reason})` : ""}. <span className="text-ink/60">Pipeline status: {labelFor(statuses, job.status)}</span></p>
+                    <button disabled={applying} onClick={() => void chooseDisposition([job], job.disposition!)} className="rounded border border-slate px-2 py-1 text-xs underline underline-offset-4 disabled:opacity-50">{job.disposition === "not_a_fit" ? "Edit reason or confirm" : "Confirm my disposition"}</button>
+                  </div>}
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {job.fit_summary && <Detail label="Fit rationale">{job.fit_summary}</Detail>}
                     {job.key_skills && <Detail label="Key skills">{job.key_skills}</Detail>}
@@ -1587,6 +1658,7 @@ export default function RolesTable({
         </div>
       )}
 
+      {dispositionTargets && <DispositionDialog count={dispositionTargets.length} initialReason={dispositionTargets.length === 1 ? dispositionTargets[0].disposition_reason : null} saving={applying} error={dispositionError} onSave={reason => void saveFitDisposition(reason)} onClose={() => setDispositionTargets(null)} />}
     </div>
   );
 }
@@ -1853,23 +1925,34 @@ function StageBadge({ stage }: { stage: string }) {
 
 function StatusSelect({
   value,
+  disposition,
+  disabled,
   statuses,
   onChange,
 }: {
   value: string;
+  disposition?: Disposition | null;
+  disabled: boolean;
   statuses: JobStatusDef[];
   onChange: (s: string) => void;
 }) {
   const style = STATUS_STYLES[value] ?? "bg-[#F3F4F6] text-[#6B7280]";
   return (
     <select
-      value={value}
+      aria-label="Pipeline status or disposition"
+      disabled={disabled}
+      value={disposition ? `disposition:${disposition}` : value}
       onChange={(e) => onChange(e.target.value)}
       className={`rounded-full border-0 px-2.5 py-1 text-xs font-medium outline-none cursor-pointer ${style}`}
     >
-      {optionsFor(statuses, value).map((d) => (
-        <option key={d.key} value={d.key}>{d.label}</option>
-      ))}
+      <optgroup label="Pipeline status">
+        {optionsFor(statuses, value).filter(d => !["Not Interested", "Posting Closed"].includes(d.key) || (!disposition && d.key === value)).map((d) => (
+          <option key={d.key} value={d.key}>{d.label}{!disposition && ["Not Interested", "Posting Closed"].includes(d.key) ? " (reason not recorded)" : ""}</option>
+        ))}
+      </optgroup>
+      <optgroup label="File out of pipeline">
+        {DISPOSITIONS.map(d => <option key={d.key} value={`disposition:${d.key}`}>{d.label}</option>)}
+      </optgroup>
     </select>
   );
 }

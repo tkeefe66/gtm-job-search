@@ -32,6 +32,8 @@ export const CLAIM_GRADE_SQL = `with candidate as (
 // Re-check mutable facts after the model returns. A manually entered grade, a
 // newly closed row, or a newer lease always wins over this in-flight request.
 export const FINISH_GRADE_SQL = `update jobs set fit_score=$4, fit_summary=coalesce($7::text,fit_summary),
+  disposition=case when status='New' and not grading_chosen and $5::text is not null then 'not_a_fit' else disposition end,
+  disposition_reason=case when status='New' and not grading_chosen and $5::text is not null then null else disposition_reason end,
   status=case when status='New' and not grading_chosen and $5::text is not null then $5 else status end,
   grading_state='graded', grading_error=null, grading_next_at=null, grading_lease=null, updated_at=now()
   where tenant_id=$1 and id=$2 and grading_lease=$3 and fit_score is null
