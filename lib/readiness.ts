@@ -3,7 +3,7 @@ import { Client } from "pg";
 /** Resolve columns and grants without reading tenant records. Also exercised
  * against the complete migration chain in the schema integration test. */
 export const READINESS_SCHEMA_SQL = `select u.id, s."sessionToken", j.tenant_id, j.grading_attempts,
-  j.disposition, q.started_at, r.source_url, e.disposition_reason,
+  j.disposition, j.crawl_refresh_protected, q.started_at, r.source_url, e.disposition_reason,
   k.aad_version, a.value, w.allow_paid_search, w.next_attempt_at,
   w.last_attempted_at, w.last_successful_check_at, w.model_retry_after,
   c.closure_eligible, p.criteria_fingerprint, o.tenant_id, o.billed_to,

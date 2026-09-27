@@ -4,6 +4,8 @@
 
 Company checks prefer verified public boards and direct employer pages. Complete source snapshots retain the full observed listing set while paid processing targets new or meaningfully changed listings. Changed records have guarded updates that preserve user choices and notes. Incomplete, skipped, failed or search-only checks cannot close jobs.
 
+The [second independent review](cost-efficiency-second-review-2026-09-27.md) found and fixed eight additional defects. Manual source-field edits and manual inserts now set a server-controlled refresh-protection marker. Migration 026 conservatively protects existing records because historical manual edits cannot be distinguished reliably; future untouched automatic records remain refreshable. Changing a careers URL cannot revive an old board without fresh evidence.
+
 Automatic paid web search is opt-in, initially off. Check now reads direct sources; Deep search may use up to five searches across the whole company check, including careers-page discovery. The separate By Role policy is unchanged. Repeated model-listing failures produce 7-, 14- and 30-day paid-search backoff after the second failure, while direct checks retain their schedule.
 
 Background model work defaults to **$1/day and $10/month**, in UTC, in addition to existing overall limits. Zero pauses paid background work; null removes that additional cap. Cron checks, first checks on tracking, and scheduled grading use that allowance. Manual checks and manual grading retries use the overall allowance. Free source checks can proceed at a paid cap. In-flight requests can finish above the remaining dollar allowance; the five-search company limit is enforced in the provider request.
@@ -24,7 +26,7 @@ The audit identified $52.99 for AI-search company checks versus $1.46 for direct
 
 Final integrated verification on September 27, 2026:
 
-- `npm test`: **2,268 passed, 16 skipped; 196 files passed, 2 skipped**. Baseline was 2,178 passing tests. The existing dynamic-import warning in the action-auth test remains.
+- `npm test`: **2,291 passed, 16 skipped; 196 files passed, 2 skipped**, including the second review fixes. Baseline was 2,178 passing tests. Existing Vite configuration and dynamic-import warnings remain.
 - `npm run build`: **passed**, including the production type check. The build needed network access for its existing Google Fonts fetch. No dependencies were changed.
 - `node scripts/verify-cost-controls.mjs`: **all 11 browser checks passed**, with zero browser errors and no horizontal overflow at 390px.
 - `git diff --check`: **passed**. The repository's configured `npm run lint` command is nonfunctional under Next 15 and is not represented as a passing check.

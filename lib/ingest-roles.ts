@@ -436,19 +436,22 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
 /** A changed employer listing can refresh only the crawler's untouched rows. */
 export const CLAIM_CRAWL_REFRESH_SQL = `update jobs set grading_lease=$4, grading_next_at=now()+interval '30 minutes'
   where tenant_id=$1 and id=$2 and updated_at=$3
-    and source='Crawl' and status='New' and not grading_chosen and not never_live
+    and source='Crawl' and status='New' and not grading_chosen and not never_live and not crawl_refresh_protected
     and (grading_lease is null or grading_next_at < now()) returning id`;
 export const SAVE_CRAWL_REFRESH_SQL = `update jobs set posting=$5::jsonb,key_skills=$6,department=$7,
-  location=coalesce(nullif($8,''),location),salary_range=coalesce(nullif($9,''),salary_range),fit_score=$10,fit_summary=$11,
+  location=$8,salary_range=$9,fit_score=$10,fit_summary=$11,
   role_title=$12,
   grading_state='graded',grading_error=null,grading_lease=null,grading_next_at=null,updated_at=now()
   where tenant_id=$1 and id=$2 and grading_lease=$3 and updated_at=$4
-    and source='Crawl' and status='New' and not grading_chosen and not never_live returning id`;
+    and source='Crawl' and status='New' and not grading_chosen and not never_live and not crawl_refresh_protected returning id`;
 
 export async function refreshChangedCrawlRole(opts:{company:string;role:Role;body?:string;fitInputs:FitInputs;dryRun?:boolean}):Promise<boolean> {
+  // Admission rules apply before reads on both the fresh and changed paths.
+  // Rejection is intentional, so acknowledge it instead of retrying forever.
+  if(excludedJobSource(opts.role.job_url)||notAPosting(opts.role.job_url,opts.company)!==null) return true;
   const tenant=await resolveTenantId();
-  const {data,error}=await rawQuery<{id:string;source:string;status:string;grading_chosen:boolean;never_live:boolean;updated_at:string;company_description:string|null}>(
-    `select id,source,status,grading_chosen,never_live,updated_at::text as updated_at,company_description from jobs
+  const {data,error}=await rawQuery<{id:string;source:string;status:string;grading_chosen:boolean;never_live:boolean;crawl_refresh_protected:boolean;updated_at:string;company_description:string|null;location:string|null;salary_range:string|null}>(
+    `select id,source,status,grading_chosen,never_live,crawl_refresh_protected,updated_at::text as updated_at,company_description,location,salary_range from jobs
       where tenant_id=$1 and ${NORMALIZED_COMPANY_SQL}=$2 and (job_url=$3 or lower(role_title)=lower($4)) order by created_at limit 1`,
     [tenant,normalizeCompanyName(opts.company),opts.role.job_url,opts.role.role_title],tenant);
   const failure=describeWriteFailure(error?.message,"read changed crawl role");
@@ -457,7 +460,7 @@ export async function refreshChangedCrawlRole(opts:{company:string;role:Role;bod
   if(!row) return false;
   // A protected row is intentionally handled: repeated crawls must not spend
   // anything on a user choice or keep trying to overwrite its source fields.
-  if(row.source!=="Crawl"||row.status!=="New"||row.grading_chosen||row.never_live) return true;
+  if(row.source!=="Crawl"||row.status!=="New"||row.grading_chosen||row.never_live||row.crawl_refresh_protected) return true;
   if(opts.dryRun) return false;
   if(await gradingPaused()) return false;
   const lease=randomUUID();
@@ -469,12 +472,16 @@ export async function refreshChangedCrawlRole(opts:{company:string;role:Role;bod
     const read=await withAIAttribution({jobId:row.id,phase:"posting_refresh"},()=>opts.body ? readPostingText({text:opts.body!,company:opts.company,roleTitle:opts.role.role_title,label:"changed crawl listing"}) :
       readPosting({url:opts.role.job_url,company:opts.company,roleTitle:opts.role.role_title,label:"changed crawl listing"}));
     if(read.kind!=="read") return false;
+    // Missing board metadata is unknown, not a claim the old value vanished.
+    // The model and the saved role must see exactly the same resolved values.
+    const location=opts.role.location?.trim()?opts.role.location:row.location;
+    const salaryRange=opts.role.salary_range?.trim()?opts.role.salary_range:row.salary_range;
     const score=await withAIAttribution({jobId:row.id,phase:"fit_refresh"},()=>scoreFit({company:opts.company,role_title:opts.role.role_title,company_description:row.company_description??"",
       key_skills:read.summary,fit_summary:opts.role.fit_signal,department:read.department,
-      location:opts.role.location,salary_range:opts.role.salary_range,fitInputs:opts.fitInputs}));
+      location:location??"",salary_range:salaryRange??"",fitInputs:opts.fitInputs}));
     if(score.score<=0) return false;
     const saved=await rawQuery(SAVE_CRAWL_REFRESH_SQL,[tenant,row.id,lease,row.updated_at,JSON.stringify(readDetail(read)),read.summary,
-      read.department,opts.role.location,opts.role.salary_range,score.score,score.rationale??"",opts.role.role_title],tenant);
+      read.department,location,salaryRange,score.score,score.rationale??"",opts.role.role_title],tenant);
     const saveFailure=describeWriteFailure(saved.error?.message,"save changed crawl role");
     if(saveFailure!==undefined) throw new Error(saveFailure);
     return saved.data.length>0;

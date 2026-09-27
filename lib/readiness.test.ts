@@ -22,7 +22,7 @@ it("checks schema and closes its connection", async () => {
 it("refuses readiness until source, policy and accounting migrations are queryable", async () => {
   await databaseReady();
   const query = db.query.mock.calls[0][0] as string;
-  for (const required of ["company_crawl_snapshots", "ai_operations", "ai_usage_requests", "closure_eligible", "allow_paid_search", "next_attempt_at"])
+  for (const required of ["company_crawl_snapshots", "ai_operations", "ai_usage_requests", "closure_eligible", "allow_paid_search", "next_attempt_at", "crawl_refresh_protected"])
     expect(query).toContain(required);
 });
 

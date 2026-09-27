@@ -30,11 +30,15 @@ import { rawQuery } from "./supabase";
 import { beginAIRequest, finishAIRequest, markAIRequestUnknown, recoverStaleAIOperations, readCompanySpendSummaries } from "./ai-ledger";
 import { crawlPolicyOutcome } from "./crawl-policy";
 import { withAIAttribution } from "./ai-attribution";
+import { withBudget } from "./metered";
+import { complete } from "./model-call";
+import { providerFor } from "./providers/registry";
 
 beforeAll(async () => {
   db = new PGlite();
   await db.exec("create role app_rw; create table users (id uuid primary key, daily_budget_cents integer);");
   await db.exec(readFileSync("db/migrations/004_metering.sql", "utf8"));
+  await db.exec(readFileSync("db/migrations/007_provider_routing.sql", "utf8"));
   await db.exec(readFileSync("db/migrations/028_ai_request_ledger.sql", "utf8"));
   await db.exec(`create table watchlist(tenant_id uuid references users(id),company text,last_checked_at timestamptz,crawl_interval_days integer default 7,primary key(tenant_id,company));
     grant select,insert,update,delete on watchlist to app_rw;`);
@@ -294,4 +298,144 @@ test("policy persists separate attempt and success clocks while keeping free che
   await crawlPolicyOutcome(tenantA,"Synthetic Co",{trigger:"automatic",modelAttempt:"none",status:"unchanged",now});
   const second=(await db.query("select * from watchlist")).rows[0];
   expect(second.last_successful_check_at).not.toBeNull();expect(second.consecutive_model_failures).toBe(2);
+});
+
+// Mutation: stale recovery invents uncertainty after every dispatched request is durably known.
+test("stale known-only operations settle to their proven cost",async()=>{
+  const old=new Date(now.getTime()-3600000);
+  await reserve({operation,now:old,backgroundLimits:{dailyCents:100,monthlyCents:500}});
+  const id=await beginAIRequest(ledger,{kind:"complete",maxTokens:100});
+  await finishAIRequest(ledger,id,{text:"done",stopReason:"end_turn",usage:{inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:0}},10000);
+  await db.query("update ai_operations set last_activity_at=$1",[old.toISOString()]);
+  expect(await recoverStaleAIOperations(tenantA,now)).toEqual({recovered:1});
+  expect((await readSpent(tenantA,old,"monthly")).spentCents).toBe(1);
+  expect((await db.query("select cost_complete,held_cents from usage_events")).rows).toEqual([{cost_complete:true,held_cents:0}]);
+});
+// Mutation: stale recovery retains a phantom hold despite no request ever being admitted.
+test("stale no-dispatch operations release their unused reservation",async()=>{
+  const old=new Date(now.getTime()-3600000);
+  await reserve({operation,now:old,backgroundLimits:{dailyCents:100,monthlyCents:500}});
+  expect(await recoverStaleAIOperations(tenantA,now)).toEqual({recovered:1});
+  expect((await readSpent(tenantA,old,"monthly")).spentCents).toBe(0);
+  expect((await db.query("select cost_complete,held_cents from usage_events")).rows).toEqual([{cost_complete:true,held_cents:0}]);
+});
+// Mutation: monthly company rollup drops known operation cost when request persistence was incomplete.
+test("company month includes durably settled known cost after request-detail write failure",async()=>{
+  await db.query("insert into watchlist(tenant_id,company) values($1,'Synthetic Co')",[tenantA]);
+  await reserve({operation});
+  const id=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await markAIRequestUnknown(ledger,id);
+  await record({operationId,costMicrousd:250000,costComplete:false,actualCents:25,resultStatus:"partial"});
+  const r=await readCompanySpendSummaries(tenantA,now);
+  expect(r.summaries[0].latest?.costMicrousd).toBe(250000);
+  expect(r.summaries[0].knownCostMicrousd).toBe(250000);
+});
+
+// Mutation: add each operation's whole cost on top of its known request rows, or omit company-less operations.
+test("company month adds only the missing operation cost and keeps shared request attribution",async()=>{
+  await db.query("insert into watchlist(tenant_id,company) values($1,'Synthetic Co'),($1,'Other Co')",[tenantA]);
+  await reserve({operation});
+  const completed={text:"done",stopReason:"end_turn",usage:{inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:0}};
+  const first=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await finishAIRequest(ledger,first,completed,30000);
+  const other=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Other Co"});
+  await finishAIRequest(ledger,other,completed,50000);
+  const missing=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await markAIRequestUnknown(ledger,missing);
+  await record({operationId,costMicrousd:150000,costComplete:false,actualCents:15});
+
+  const sharedId="10000000-0000-4000-8000-000000000002";
+  await reserve({operation:{...operation,id:sharedId,attribution:{}}});
+  const sharedLedger={...ledger,operationId:sharedId};
+  const shared=await beginAIRequest(sharedLedger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await finishAIRequest(sharedLedger,shared,completed,40000);
+  await record({operationId:sharedId,costMicrousd:40000,costComplete:true,actualCents:4});
+  const r=await readCompanySpendSummaries(tenantA,now);
+  expect(r.error).toBeUndefined();
+  expect(r.summaries.find(s=>s.company==="Synthetic Co")?.knownCostMicrousd).toBe(140000);
+  expect(r.summaries.find(s=>s.company==="Other Co")?.knownCostMicrousd).toBe(50000);
+});
+
+// Mutation: deciding recovery is complete from any known request drops an unknown sibling's hold.
+test("stale mixed outcomes retain uncertainty alongside the known request cost",async()=>{
+  const old=new Date(now.getTime()-3600000);
+  await reserve({operation,now:old,backgroundLimits:{dailyCents:100,monthlyCents:500}});
+  const known=await beginAIRequest(ledger,{kind:"complete",maxTokens:100});
+  await finishAIRequest(ledger,known,{text:"done",stopReason:"end_turn",usage:{inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:0}},10000);
+  await beginAIRequest(ledger,{kind:"complete",maxTokens:100});
+  await db.query("update ai_operations set last_activity_at=$1",[old.toISOString()]);
+  await db.query("update ai_usage_requests set started_at=$1",[old.toISOString()]);
+  expect(await recoverStaleAIOperations(tenantA,now)).toEqual({recovered:1});
+  expect((await readSpent(tenantA,old,"monthly")).spentCents).toBe(11);
+  expect((await db.query("select cost_complete,held_cents,cost_cents from usage_events")).rows).toEqual([{cost_complete:false,held_cents:10,cost_cents:1}]);
+});
+
+// Mutation: month attribution follows request time and separates an operation from its authoritative budget event.
+test("company month follows the operation budget window across a UTC month boundary",async()=>{
+  const previous=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),0,23,59));
+  await db.query("insert into watchlist(tenant_id,company) values($1,'Synthetic Co')",[tenantA]);
+  await reserve({operation,now:previous});
+  const id=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await finishAIRequest(ledger,id,{text:"done",stopReason:"end_turn",usage:{inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:0}},30000);
+  const unknown=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Synthetic Co"});
+  await markAIRequestUnknown(ledger,unknown);
+  await record({operationId,now:previous,costMicrousd:50000,costComplete:false,actualCents:5});
+  const last=await readCompanySpendSummaries(tenantA,previous);
+  expect(last.summaries[0]).toMatchObject({knownCostMicrousd:50000,unknownRequests:1,inFlightRequests:0});
+  const current=await readCompanySpendSummaries(tenantA,now);
+  expect(current.summaries[0]).toMatchObject({knownCostMicrousd:null,unknownRequests:0,inFlightRequests:0});
+});
+
+// Mutation: a missing request's known remainder is automatically charged to the operation's root company.
+test("company remainder follows its unique unknown request attribution",async()=>{
+  await db.query("insert into watchlist(tenant_id,company) values($1,'Synthetic Co'),($1,'Other Co')",[tenantA]);
+  await reserve({operation});
+  const missing=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company:"Other Co"});
+  await markAIRequestUnknown(ledger,missing);
+  await record({operationId,costMicrousd:70000,costComplete:false,actualCents:7});
+  const r=await readCompanySpendSummaries(tenantA,now);
+  expect(r.summaries.find(s=>s.company==="Synthetic Co")?.knownCostMicrousd).toBeNull();
+  expect(r.summaries.find(s=>s.company==="Other Co")?.knownCostMicrousd).toBe(70000);
+});
+
+// Mutation: divide or assign a known aggregate to companies whose individual missing costs cannot be recovered.
+test("ambiguous missing company costs remain unallocated instead of invented",async()=>{
+  await db.query("insert into watchlist(tenant_id,company) values($1,'Synthetic Co'),($1,'Other Co')",[tenantA]);
+  await reserve({operation});
+  for(const company of ["Synthetic Co","Other Co"]){
+    const missing=await beginAIRequest(ledger,{kind:"complete",maxTokens:100},{company});
+    await markAIRequestUnknown(ledger,missing);
+  }
+  await record({operationId,costMicrousd:70000,costComplete:false,actualCents:7});
+  const r=await readCompanySpendSummaries(tenantA,now);
+  expect(r.summaries.map(s=>s.knownCostMicrousd)).toEqual([null,null]);
+  expect(r.summaries.map(s=>s.unknownRequests)).toEqual([1,1]);
+});
+
+// Mutation: an advisory heartbeat failure downgrades committed usage to unknown and retains a phantom hold.
+test("known provider usage settles without a hold when only its completion heartbeat fails",async()=>{
+  const provider=providerFor("anthropic");
+  const providerCall=vi.spyOn(provider,"complete").mockImplementation(async()=>{
+    // Install after durable admission: only the post-response heartbeat fails.
+    await db.exec(`create function reject_completion_heartbeat() returns trigger language plpgsql as $$
+      begin raise exception 'synthetic heartbeat failure with private diagnostic'; end $$;
+      create trigger reject_completion_heartbeat before update of last_activity_at on ai_operations
+        for each row execute function reject_completion_heartbeat();`);
+    return {text:"completed",stopReason:"end_turn",usage:{inputTokens:10000,cachedInputTokens:0,outputTokens:0,searches:0}};
+  });
+  const logged=vi.spyOn(console,"error").mockImplementation(()=>{});
+  try {
+    const result=await withBudget({action:"heartbeat-fixture",estimateCents:10,isAdmin:true,
+      fn:()=>complete({system:"synthetic",prompt:"synthetic",maxTokens:100})})
+      .then(value=>({value}),error=>({error}));
+    expect((await db.query("select state,cost_microusd from ai_usage_requests")).rows).toEqual([{state:"known",cost_microusd:30000}]);
+    expect((await db.query("select cost_cents,cost_complete,held_cents from usage_events")).rows).toEqual([{cost_cents:3,cost_complete:true,held_cents:0}]);
+    expect((await readSpent(tenantA,now,"monthly")).spentCents).toBe(3);
+    expect(result).toEqual({value:{result:"completed"}});
+    expect(logged).toHaveBeenCalledWith("ai-ledger: completed request usage is recorded; operation activity timestamp could not be updated");
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("private diagnostic");
+  } finally {
+    providerCall.mockRestore();logged.mockRestore();
+    await db.exec("drop function if exists reject_completion_heartbeat() cascade");
+  }
 });

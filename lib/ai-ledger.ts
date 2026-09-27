@@ -63,8 +63,10 @@ export async function finishAIRequest(ctx:LedgerContext,id:string,completion:Com
     [ctx.tenantId,ctx.operationId,id,safeId(completion.providerRequestId),safeId(completion.providerResponseId),safeId(completion.stopReason),completion.usageSource??"provider",JSON.stringify(usage),JSON.stringify(pricingSnapshot(ctx.provider,ctx.model)),exactCost],ctx.tenantId);
   failure(error,"record completed AI usage");
   if(!data.length)throw new AIBillingPersistenceError("AI usage could not be attached to its active request. Cost remains under review.");
+  // Usage is already durable. A failed advisory heartbeat cannot turn its cost
+  // unknown; admission refreshed activity and recovery still fences new calls.
   const touched=await rawQuery(`update ai_operations set last_activity_at=now() where tenant_id=$1 and id=$2 and status='running'`,[ctx.tenantId,ctx.operationId],ctx.tenantId);
-  failure(touched.error,"record AI operation activity");
+  if(touched.error)console.error("ai-ledger: completed request usage is recorded; operation activity timestamp could not be updated");
 }
 export async function markAIRequestUnknown(ctx:LedgerContext,id:string,errorKind="provider_outcome_unknown",reason?:unknown):Promise<void>{
   const details=reason&&typeof reason==="object"?reason as {providerRequestId?:unknown;providerResponseId?:unknown;stopReason?:unknown}:{};
@@ -90,14 +92,19 @@ export async function recoverStaleAIOperations(tenantId:string,now=new Date()):P
       where tenant_id=$1 and operation_id=$2 and state='in_flight'`,[tenantId,op.id],tenantId);
     const markFailure=describeWriteFailure(marked.error?.message,"record interrupted AI requests");
     if(markFailure!==undefined)return{recovered,error:markFailure};
-    const sum=await rawQuery<{cost:string;searches:string;inputs:string;outputs:string}>(`select coalesce(sum(cost_microusd),0)::text cost,
+    // The recovering status fences beginAIRequest under the same operation row
+    // lock. Every admitted request is now known or unknown, so a crash alone
+    // does not justify a hold when no uncertain request exists.
+    const sum=await rawQuery<{cost:string;searches:string;inputs:string;outputs:string;unknowns:string}>(`select coalesce(sum(cost_microusd),0)::text cost,
       coalesce(sum((usage->>'searches')::bigint),0)::text searches,coalesce(sum((usage->>'inputTokens')::bigint),0)::text inputs,
-      coalesce(sum((usage->>'outputTokens')::bigint),0)::text outputs from ai_usage_requests where tenant_id=$1 and operation_id=$2 and state='known'`,[tenantId,op.id],tenantId);
+      coalesce(sum((usage->>'outputTokens')::bigint),0)::text outputs,
+      count(*) filter(where state <> 'known')::text unknowns
+      from ai_usage_requests where tenant_id=$1 and operation_id=$2`,[tenantId,op.id],tenantId);
     const sumFailure=describeWriteFailure(sum.error?.message,"read recorded AI usage");
     if(sumFailure!==undefined)return{recovered,error:sumFailure};
     const s=sum.data[0];
     const settled=await reconcileSpend({tenantId,operationId:op.id,estimateCents:op.accounted_cents,actualCents:Math.ceil(Number(s.cost)/10000),
-      costMicrousd:Number(s.cost),costComplete:false,action:op.action,workload:op.workload,searches:Number(s.searches),inputTokens:Number(s.inputs),outputTokens:Number(s.outputs),billedTo:op.billed_to,now:new Date(op.started_at)});
+      costMicrousd:Number(s.cost),costComplete:Number(s.unknowns)===0,action:op.action,workload:op.workload,searches:Number(s.searches),inputTokens:Number(s.inputs),outputTokens:Number(s.outputs),billedTo:op.billed_to,now:new Date(op.started_at)});
     if(settled.error!==undefined)return{recovered,error:settled.error};
     recovered++;
   }
@@ -111,12 +118,31 @@ export interface CompanySpendSummary {
 export async function readCompanySpendSummaries(tenantId:string,now=new Date()):Promise<{summaries:CompanySpendSummary[];error?:string}>{
   const start=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1)).toISOString();
   const end=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1)).toISOString();
+  // Use the operation's start month, matching authoritative usage_events and
+  // counters even when requests cross midnight. Request rows preserve company
+  // attribution in shared operations. Add measured but unrepresented cost only
+  // when all uncertain requests name one company; an ambiguous split stays unknown.
   const {data,error}=await rawQuery<{company:string;known_cost:string|null;unknown_n:string;flight_n:string;latest:CompanySpendSummary["latest"]}>(`
+    with monthly_operations as (
+      select * from ai_operations where tenant_id=$1 and started_at >= $2 and started_at < $3
+    ), monthly_requests as (
+      select r.* from ai_usage_requests r join monthly_operations o on o.tenant_id=r.tenant_id and o.id=r.operation_id
+      where r.tenant_id=$1
+    )
     select w.company,
-      coalesce((select sum(r.cost_microusd)::text from ai_usage_requests r where r.tenant_id=$1 and r.company=w.company and r.started_at >= $2 and r.started_at < $3 and r.state='known'),
-        case when exists(select 1 from ai_operations fo where fo.tenant_id=$1 and fo.company=w.company and fo.started_at >= $2 and fo.started_at < $3 and fo.cost_complete) then '0' else null end) known_cost,
-      (select count(*)::text from ai_usage_requests r where r.tenant_id=$1 and r.company=w.company and r.started_at >= $2 and r.started_at < $3 and r.state='unknown') unknown_n,
-      (select count(*)::text from ai_usage_requests r where r.tenant_id=$1 and r.company=w.company and r.started_at >= $2 and r.started_at < $3 and r.state='in_flight') flight_n,
+      (select sum(parts.cost)::text from (
+        select r.cost_microusd cost from monthly_requests r where r.company=w.company and r.state='known'
+        union all
+        select greatest(o.known_cost_microusd-coalesce((select sum(kr.cost_microusd)
+          from monthly_requests kr where kr.operation_id=o.id and kr.state='known'),0),0) cost
+        from monthly_operations o where (o.cost_complete or o.known_cost_microusd > 0)
+          and case when exists(select 1 from monthly_requests ur where ur.operation_id=o.id and ur.state <> 'known')
+            then (select min(ur.company) from monthly_requests ur where ur.operation_id=o.id and ur.state <> 'known'
+              having count(ur.company)=count(*) and count(distinct ur.company)=1)
+            else o.company end = w.company
+      ) parts) known_cost,
+      (select count(*)::text from monthly_requests r where r.company=w.company and r.state='unknown') unknown_n,
+      (select count(*)::text from monthly_requests r where r.company=w.company and r.state='in_flight') flight_n,
       (select jsonb_build_object('occurredAt',o.started_at,'costMicrousd',
         case when o.cost_complete or o.known_cost_microusd > 0
           or exists(select 1 from ai_usage_requests kr where kr.tenant_id=$1 and kr.operation_id=o.id and kr.state='known')

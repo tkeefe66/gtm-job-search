@@ -35,6 +35,10 @@ export async function acceptJob(tenantId: string, job: JobInsert, actor: "user" 
 
     // Force the authenticated tenant even if an RPC caller supplies extra keys.
     const payload: Record<string, unknown> = { ...job, tenant_id: tenantId };
+    // Source text is editable; the trusted actor determines manual ownership.
+    // Automatic inserts use the database default instead of caller flags.
+    delete payload.crawl_refresh_protected;
+    if (actor === "user") payload.crawl_refresh_protected = true;
     const columns = Object.keys(payload).filter(key => payload[key] !== undefined);
     const values = columns.map(key => {
       const value = payload[key];

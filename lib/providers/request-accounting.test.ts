@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createAnthropicProvider } from "./anthropic";
 import { createOpenAIProvider } from "./openai";
 import { createGoogleProvider } from "./google";
+import { gradingFailure } from "../grading-policy";
 
 const opts = { apiKey: "synthetic-key", model: "claude-sonnet-4-6", system: "s", prompt: "p", maxTokens: 1000 };
 // Composed from the documented Messages envelope, not a paid live capture.
@@ -72,6 +73,19 @@ describe("authoritative provider accounting", () => {
     const caught = await p.complete(opts).catch(error => error);
     expect(caught).toMatchObject({ outcome: "unknown", status: 500, providerRequestId: "req_failed" });
     expect(JSON.stringify(caught)).not.toMatch(/sk-ant|secret|body/);
+  });
+  test("Anthropic credit exhaustion keeps the billing remedy after safe error wrapping", async () => {
+    // Mutation: discarding the billing classification tells users to replace a valid API key.
+    const create = vi.fn().mockRejectedValue(Object.assign(new Error("400: Your credit balance is too low. secret sk-ant-do-not-retain"), {
+      status: 400, request_id: "req_no_credits",
+    }));
+    const p = createAnthropicProvider({ createClient: () => ({ messages: { create } }) });
+    const caught = await p.complete(opts).catch(error => error);
+    expect(caught).toMatchObject({ billingBlocked: true, status: 400, providerRequestId: "req_no_credits" });
+    expect(gradingFailure(caught)).toEqual({ kind: "blocked", message: "Grading paused: add API credits with your provider, then retry missing grades." });
+    expect(caught.message).toMatch(/credits|billing/i);
+    expect(JSON.stringify(caught)).not.toMatch(/sk-ant|secret/);
+    expect(caught.message).not.toMatch(/sk-ant|secret/);
   });
   test("known provider rejection stays distinct from uncertain transport failure", async () => {
     // Mutation: treat explicit rate-limit rejection as ambiguous or retry it invisibly.

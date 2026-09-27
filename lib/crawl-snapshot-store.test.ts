@@ -16,3 +16,9 @@ test("protected user choices are intentional outcomes even without a posting rea
   vi.mocked(rawQuery).mockResolvedValue({data:[{...row,fit_score:null,status:"Applied"}],error:null});
   expect(await settledCrawlRoles("tenant","Example",[role])).toEqual([role]);
 });
+
+test("a manually corrected or conservatively protected legacy role acknowledges processing without a grade",async()=>{
+  // Mutation: omit the manual ownership marker from settled outcomes and repeatedly queue a protected row.
+  vi.mocked(rawQuery).mockResolvedValue({data:[{...row,fit_score:null,crawl_refresh_protected:true}],error:null});
+  expect(await settledCrawlRoles("tenant","Example",[role])).toEqual([role]);
+});

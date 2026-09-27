@@ -5,6 +5,13 @@ import type { JobInsert } from "@/lib/types";
 import type { Job } from "@/lib/types";
 import type { SourceRecord } from "@/lib/job-dispositions";
 
+// A user correction belongs to them even if the role is still New. The
+// timestamp guard only protects edits made during a refresh, not earlier ones.
+const CRAWL_REFRESH_FIELDS = new Set([
+  "posting", "key_skills", "department", "location", "salary_range", "fit_score",
+  "fit_summary", "role_title", "job_url",
+]);
+
 /** Internal only: RPC actions choose the actor, never the browser payload. */
 export async function patchJobWithActor(tenantId: string, id: string, patch: Partial<Job>, actor: "user" | "automation", explicitDisposition = false): Promise<{error?: string}> {
   try {
@@ -13,6 +20,14 @@ export async function patchJobWithActor(tenantId: string, id: string, patch: Par
       if (explicitDisposition) await query("select set_config('app.explicit_disposition','true',true)");
       const payload: Record<string, unknown> = { ...patch, updated_at: new Date().toISOString() };
       delete payload.id; delete payload.tenant_id; delete payload.created_at;
+      // Generic patches cannot clear ownership, including automated updates.
+      delete payload.crawl_refresh_protected;
+      if (actor === "user") {
+        // Ownership comes from this trusted writer, never a browser flag.
+        if (Object.keys(payload).some(key => payload[key] !== undefined && CRAWL_REFRESH_FIELDS.has(key))) {
+          payload.crawl_refresh_protected = true;
+        }
+      }
       const keys = Object.keys(payload).filter(key => payload[key] !== undefined);
       const values = keys.map(key => payload[key] !== null && typeof payload[key] === "object" ? JSON.stringify(payload[key]) : payload[key]);
       const set = keys.map((key,i) => '"' + key.replace(/"/g,'""') + '"=$' + (i+3)).join(',');

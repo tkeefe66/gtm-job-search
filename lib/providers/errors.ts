@@ -28,7 +28,7 @@ export class ProviderRequestError extends Error {
   constructor(provider: string, input: { status?: number; providerRequestId?: unknown; billingBlocked?: boolean } = {}) {
     const status = input.status;
     const refused = status !== undefined && [400, 401, 403, 404, 413, 422, 429].includes(status);
-    const reason = status === 429 ? "rate limit or quota reached. Check provider billing and retry later" : status === 401 || status === 403 ? "authentication refused. Check your API key and model access" : status !== undefined && status >= 500 ? "service unavailable. Check usage before retrying" : refused ? "request refused. Check model access and request settings" : "request timed out, could not connect, or returned an invalid response. Check usage before retrying";
+    const reason = input.billingBlocked ? "billing allowance exhausted. Add API credits or check your provider billing limit before retrying" : status === 429 ? "rate limit or quota reached. Check provider billing and retry later" : status === 401 || status === 403 ? "authentication refused. Check your API key and model access" : status !== undefined && status >= 500 ? "service unavailable. Check usage before retrying" : refused ? "request refused. Check model access and request settings" : "request timed out, could not connect, or returned an invalid response. Check usage before retrying";
     super(`${provider}: ${reason}.`);
     this.name = "ProviderRequestError";
     this.outcome = refused ? "refused" : "unknown";

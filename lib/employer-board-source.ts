@@ -86,6 +86,10 @@ export async function verifiedCompanyBoard(opts:{tenantId:string;company:string;
   // Guesses are useful candidates only. The board's own company name must
   // corroborate them; Ashby/Lever return no such name and remain refused.
   const direct=parseBoardUrl(careersUrl);
+  // A changed configured source is authoritative. A matching name on the old
+  // board proves ownership, but does not prove that it is still where hiring
+  // happens. Let the caller read the new page unless it supplies fresh proof.
+  if(sourceChanged&&!direct) return null;
   const candidate=direct ?? (previous?.vendor && previous.slug ? parseBoardUrl(previous.boardUrl) : null);
   const guessed=candidate ? {resolution:{...candidate,source:"guessed" as const}} : await resolveBoardForCompany(company,[]);
   if(!guessed) return null;

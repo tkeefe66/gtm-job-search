@@ -41,3 +41,26 @@ test("fresh schema and repeated cost migrations preserve data and enforce tenant
     await expect(db.query("insert into company_crawl_snapshots(tenant_id,company_key,source_key,criteria_fingerprint,parser_version,content_fingerprint,captured_at) values($1,'forged','source','criteria',1,'content',now())", [a])).rejects.toThrow();
   } finally { await db.close(); }
 }, 20_000);
+
+test("upgrade protects legacy role edits without disabling refresh for future crawled roles", async () => {
+  // Mutation: default false overwrites legacy edits; an unconditional backfill disables every future role on migration replay.
+  const db = new PGlite({ extensions: { pgcrypto } });
+  const tenant = "00000000-0000-4000-8000-000000000001";
+  try {
+    await db.exec(readFileSync("db/schema.sql", "utf8"));
+    const migrations = readdirSync("db/migrations").filter(file => /^0(?:0|1|2[0-4])/.test(file) && file.endsWith(".sql")).sort();
+    for (const file of migrations) await db.exec(readFileSync(`db/migrations/${file}`, "utf8"));
+    // Recreate the deployed pre-upgrade column shape even after fresh schema gains the new field.
+    await db.exec("alter table jobs drop column if exists crawl_refresh_protected");
+    await db.query("insert into users(id,email) values($1,'legacy@example.test')", [tenant]);
+    await db.query("insert into jobs(tenant_id,company,role_title,source,salary_range) values($1,'Example employer','Legacy role','Crawl','$300000')", [tenant]);
+    const upgrade = readFileSync("db/migrations/026_crawl_source_snapshots.sql", "utf8");
+    await db.exec(upgrade);
+    await db.query("insert into jobs(tenant_id,company,role_title,source) values($1,'Example employer','Future role','Crawl')", [tenant]);
+    await db.exec(upgrade);
+    expect((await db.query("select role_title,crawl_refresh_protected,salary_range from jobs order by role_title")).rows).toEqual([
+      { role_title: "Future role", crawl_refresh_protected: false, salary_range: null },
+      { role_title: "Legacy role", crawl_refresh_protected: true, salary_range: "$300000" },
+    ]);
+  } finally { await db.close(); }
+}, 20_000);

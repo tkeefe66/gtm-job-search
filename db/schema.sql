@@ -123,6 +123,7 @@ alter table jobs add column if not exists grading_next_at timestamptz;
 alter table jobs add column if not exists grading_error text;
 alter table jobs add column if not exists grading_lease uuid;
 alter table jobs add column if not exists grading_chosen boolean not null default false;
+alter table jobs add column if not exists crawl_refresh_protected boolean not null default false;
 -- jobs_missing_grades is created by migration 022, after tenant_id exists.
 
 -- Tracking: watchlist rows are crawled on a recurring schedule until the user

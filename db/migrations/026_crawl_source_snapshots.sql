@@ -1,5 +1,11 @@
 -- Additive source proof and complete extraction snapshots. Legacy runs are not
 -- retroactively promoted into evidence we did not record at the time.
+-- Historical manual field edits have no durable provenance. Protect existing
+-- rows conservatively; future automatic inserts are eligible until user-edited.
+-- ADD IF NOT EXISTS ensures replay does not re-protect newer unedited rows.
+alter table jobs add column if not exists crawl_refresh_protected boolean not null default true;
+alter table jobs alter column crawl_refresh_protected set default false;
+
 alter table company_boards add column if not exists verified_at timestamptz;
 alter table company_boards add column if not exists last_fetched_at timestamptz;
 alter table company_boards add column if not exists careers_url text;

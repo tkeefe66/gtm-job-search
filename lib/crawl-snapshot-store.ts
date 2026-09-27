@@ -19,14 +19,14 @@ export async function readCrawlSnapshot(tenantId:string, company:string, sourceK
 
 /** Only durable completed/intentional outcomes acknowledge processing. */
 export async function settledCrawlRoles(tenantId:string,company:string,roles:Role[]):Promise<Role[]> {
-  const {data,error}=await rawQuery<{role_title:string;job_url:string|null;fit_score:number|null;posting:{enrichedAt?:unknown}|null;source:string;status:string;grading_chosen:boolean;never_live:boolean}>(
-    `select role_title,job_url,fit_score,posting,source,status,grading_chosen,never_live from jobs
+  const {data,error}=await rawQuery<{role_title:string;job_url:string|null;fit_score:number|null;posting:{enrichedAt?:unknown}|null;source:string;status:string;grading_chosen:boolean;never_live:boolean;crawl_refresh_protected:boolean}>(
+    `select role_title,job_url,fit_score,posting,source,status,grading_chosen,never_live,crawl_refresh_protected from jobs
       where tenant_id=$1 and ${NORMALIZED_COMPANY_SQL}=$2`,[tenantId,normalizeCompanyName(company)],tenantId);
   const failure=describeWriteFailure(error?.message,"verify stored crawl listings");
   if(failure!==undefined) throw new Error(failure);
   return roles.filter(role=>data.some(row=>(row.job_url===role.job_url || normalizeTitle(row.role_title)===normalizeTitle(role.role_title)) &&
     ((row.fit_score!==null&&typeof row.posting?.enrichedAt==="string"&&row.posting.enrichedAt!=="") ||
-      row.status!=="New" || row.source!=="Crawl" || row.grading_chosen || row.never_live)));
+      row.status!=="New" || row.source!=="Crawl" || row.grading_chosen || row.never_live || row.crawl_refresh_protected)));
 }
 
 export async function saveCrawlSnapshot(tenantId:string,company:string,snapshot:CrawlSnapshot):Promise<void> {

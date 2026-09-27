@@ -23,3 +23,24 @@ test("empty database errors remain failures and missing rows are explicit",async
  h.error=undefined;h.query.mockResolvedValue({rows:[]});
  expect((await patchJobWithActor("trusted","role",{},"user")).error).toMatch(/no longer available/);
 });
+
+test("manual refresh-owned edits protect the role and a browser patch cannot clear protection",async()=>{
+ // Mutation: accept a client-supplied false marker or fail to protect a manual field the crawler can replace.
+ await patchJobWithActor("trusted","role",{salary_range:"$300000",crawl_refresh_protected:false} as never,"user");
+ const [sql,values]=h.query.mock.calls[1];
+ expect(sql).toContain('"crawl_refresh_protected"=');
+ expect(values).toContain(true);
+ expect(values).not.toContain(false);
+ vi.clearAllMocks();
+ await patchJobWithActor("trusted","role",{notes:"Keep this note",crawl_refresh_protected:false} as never,"user");
+ expect(h.query.mock.calls[1][0]).not.toContain('"crawl_refresh_protected"');
+});
+
+test("notes and automated source edits do not disable future material refreshes",async()=>{
+ // Mutation: mark every update protected, including notes already preserved by refresh and automated maintenance.
+ await patchJobWithActor("trusted","role",{notes:"My note"},"user");
+ expect(h.query.mock.calls[1][0]).not.toContain('"crawl_refresh_protected"');
+ vi.clearAllMocks();
+ await updateAutomaticJob("role",{department:"Systems",crawl_refresh_protected:false} as never);
+ expect(h.query.mock.calls[1][0]).not.toContain('"crawl_refresh_protected"');
+});

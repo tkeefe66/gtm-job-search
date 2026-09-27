@@ -59,10 +59,12 @@ export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
         data = await pending;
       }
     } catch (error) {
-      const e = error as { status?: unknown; request_id?: unknown };
+      const e = error as { status?: unknown; request_id?: unknown; message?: unknown };
       throw new ProviderRequestError("Anthropic", {
         status: typeof e?.status === "number" ? e.status : undefined,
         providerRequestId: e?.request_id,
+        // Classify locally before dropping SDK text; never retain the body or key.
+        billingBlocked: typeof e?.message === "string" && /credit balance|insufficient.*credit/i.test(e.message),
       });
     }
     const message = record(data);

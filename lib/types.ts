@@ -156,6 +156,8 @@ export interface Job {
   grading_error?: string | null;
   grading_lease?: string | null;
   grading_chosen?: boolean;
+  /** Manual source-field edits and legacy rows are protected from crawler refresh. */
+  crawl_refresh_protected?: boolean;
   fit_summary: string | null;
   recruiter_name: string | null;
   recruiter_email: string | null;

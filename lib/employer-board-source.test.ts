@@ -5,7 +5,7 @@ vi.mock("./fetch-page",()=>({fetchAllowed:vi.fn(async()=>true)}));
 vi.mock("./resolve-job-link",()=>({fetchBoardSnapshot:vi.fn(),fetchBoardIdentity:vi.fn(async()=>null),resolveBoardForCompany:vi.fn(async()=>null)}));
 import {rawQuery} from "./supabase";
 import {safeHttp} from "./safe-http";
-import {fetchBoardSnapshot,resolveBoardForCompany} from "./resolve-job-link";
+import {fetchBoardSnapshot,resolveBoardForCompany,fetchBoardIdentity} from "./resolve-job-link";
 import {verifiedCompanyBoard} from "./employer-board-source";
 
 const opts={tenantId:"tenant",company:"Example Labs",careersUrl:"https://example.test/careers",storedUrls:[],dryRun:false};
@@ -15,6 +15,7 @@ beforeEach(()=>{
   vi.clearAllMocks();
   vi.mocked(rawQuery).mockResolvedValue({data:[],error:null});
   vi.mocked(fetchBoardSnapshot).mockResolvedValue({kind:"ok",postings});
+  vi.mocked(fetchBoardIdentity).mockResolvedValue(null);
   vi.mocked(safeHttp).mockResolvedValue({status:200,ok:true,url:opts.careersUrl,text:async()=>'<a href="https://jobs.ashbyhq.com/example">Jobs</a>',json:async()=>({})});
 });
 
@@ -59,4 +60,23 @@ test("conflicting official links cannot fall through to a remembered posting",as
   vi.mocked(safeHttp).mockResolvedValue({status:200,ok:true,url:opts.careersUrl,text:async()=>'<a href="https://jobs.ashbyhq.com/a">A</a><a href="https://jobs.ashbyhq.com/b">B</a>',json:async()=>({})});
   expect(await verifiedCompanyBoard({...opts,storedUrls:[postings[0].url]})).toBeNull();
   expect(fetchBoardSnapshot).not.toHaveBeenCalled();
+});
+
+test("a changed careers URL cannot be rebound to its old Greenhouse board by a matching company name",async()=>{
+  // Mutation: invalidate cached proof but then recover the same old board through the guessed-candidate path.
+  vi.mocked(rawQuery).mockResolvedValue({data:[{...proof,vendor:"greenhouse",slug:"oldexample",careersUrl:"https://old.test/careers",boardUrl:"https://job-boards.greenhouse.io/oldexample"}],error:null});
+  vi.mocked(safeHttp).mockResolvedValue({status:200,ok:true,url:opts.careersUrl,text:async()=>"New direct careers page",json:async()=>({})});
+  vi.mocked(fetchBoardIdentity).mockResolvedValue("Example Labs");
+  expect(await verifiedCompanyBoard(opts)).toBeNull();
+  expect(fetchBoardSnapshot).not.toHaveBeenCalled();
+  expect(resolveBoardForCompany).not.toHaveBeenCalled();
+  expect(rawQuery).toHaveBeenCalledTimes(1);
+});
+
+test("an explicitly changed board URL can establish fresh identity evidence",async()=>{
+  // Mutation: refuse all new sources when the previous careers URL differs, including explicit verified replacements.
+  vi.mocked(rawQuery).mockResolvedValue({data:[proof],error:null});
+  vi.mocked(fetchBoardIdentity).mockResolvedValue("Example Labs");
+  expect(await verifiedCompanyBoard({...opts,careersUrl:"https://job-boards.greenhouse.io/newexample"}))
+    .toMatchObject({resolution:{vendor:"greenhouse",slug:"newexample",evidenceKind:"board_identity"}});
 });

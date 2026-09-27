@@ -171,3 +171,5 @@ expect(haikuBody.tools[0].type).toBe('web_search_20250305');
 ## Completion evidence
 
 Implemented on `codex/cost-efficiency` in an isolated worktree. Final verification: 2,268 tests passed (16 skipped), production build passed, all 11 browser checks passed, and diff checks passed. See `docs/cost-efficiency-verification-2026-09-27.md` for migration evidence, review limitations, defaults and release requirements. No production changes or paid provider requests occurred.
+
+The user-requested second review used two fresh subagents and a parent review. Eight confirmed defects were fixed, with 23 added regressions. The new final gate is 2,291 tests passed (16 skipped), production build passed, all 11 browser checks passed, and diff checks passed. See `docs/cost-efficiency-second-review-2026-09-27.md` for findings and evidence. Production remains unchanged.
