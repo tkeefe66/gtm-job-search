@@ -1,6 +1,7 @@
 import type { CompleteOpts, Provider, SearchOpts } from "./types";
 import { GOOGLE_DEFAULT_MODEL, GOOGLE_PRICED_MODELS, googleCostCents } from "./google-pricing";
 import { array, postJson, record, tokens, type HttpDeps } from "./http";
+import { ProviderUsageUnknownError, safeProviderId } from "./errors";
 
 export function createGoogleProvider(deps: HttpDeps = {}): Provider {
   const fetcher = deps.fetch ?? fetch;
@@ -11,18 +12,25 @@ export function createGoogleProvider(deps: HttpDeps = {}): Provider {
       generationConfig.responseMimeType = "application/json";
       generationConfig.responseJsonSchema = opts.jsonSchema;
     }
-    const raw = await postJson(fetcher, "Google Gemini", `https://generativelanguage.googleapis.com/v1beta/models/${opts.model}:generateContent`, { "x-goog-api-key": opts.apiKey }, {
+    const { data: raw, providerRequestId } = await postJson(fetcher, "Google Gemini", `https://generativelanguage.googleapis.com/v1beta/models/${opts.model}:generateContent`, { "x-goog-api-key": opts.apiKey }, {
       systemInstruction: { parts: [{ text: opts.system }] }, contents: [{ role: "user", parts: [{ text: opts.prompt }] }], generationConfig,
       ...(search ? { tools: [{ google_search: {} }] } : {}),
     });
-    const usage = record(raw.usageMetadata); const total = tokens(usage.promptTokenCount); const cached = tokens(usage.cachedContentTokenCount, true);
-    if (cached > total) throw new Error("Google returned invalid cached usage.");
     const candidates = array(raw.candidates); const candidate = candidates[0] ?? {};
+    const metadata = { providerRequestId, providerResponseId: safeProviderId(raw.responseId), stopReason: safeProviderId(candidate.finishReason) };
+    const usage = record(raw.usageMetadata);
+    let cached: number, total: number, outputTokens: number;
+    try {
+      total = tokens(usage.promptTokenCount); cached = tokens(usage.cachedContentTokenCount, true);
+      outputTokens = tokens(usage.candidatesTokenCount) + tokens(usage.thoughtsTokenCount, true);
+      if (cached > total) throw new ProviderUsageUnknownError(metadata);
+    } catch { throw new ProviderUsageUnknownError(metadata); }
     const grounding = record(candidate.groundingMetadata);
     const queries = Array.isArray(grounding.webSearchQueries) ? grounding.webSearchQueries.filter(q => typeof q === "string" && q.trim()) : [];
     return {
       text: array(record(candidate.content).parts).filter(p => p.thought !== true && typeof p.text === "string").map(p => p.text).join("\n").trim(),
-      usage: { inputTokens: total - cached, cachedInputTokens: cached, outputTokens: tokens(usage.candidatesTokenCount, true) + tokens(usage.thoughtsTokenCount, true), searches: queries.length, groundedRequests: search && (queries.length > 0 || array(grounding.groundingChunks).length > 0) ? 1 : 0 },
+      usage: { inputTokens: total - cached, cachedInputTokens: cached, outputTokens, searches: queries.length, groundedRequests: search && (queries.length > 0 || array(grounding.groundingChunks).length > 0) ? 1 : 0 },
+      providerRequestId, providerResponseId: metadata.providerResponseId, usageSource: "provider" as const,
       stopReason: typeof candidate.finishReason === "string" ? candidate.finishReason : null,
     };
   }

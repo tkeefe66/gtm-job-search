@@ -4,12 +4,13 @@ import { revalidatePath } from "next/cache";
 import { requireActor } from "@/lib/require-actor";
 import { rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { readSpendLimits } from "@/lib/spend-limit-store";
+import { readSpendLimits, readBackgroundSpendLimits } from "@/lib/spend-limit-store";
 import { readSpent } from "@/lib/usage-store";
-import { SPEND_LIMITS_KEY, validateSpendLimits, type SpendLimits } from "@/lib/spend-limits";
+import { SPEND_LIMITS_KEY, BACKGROUND_SPEND_LIMITS_KEY, validateSpendLimits, type SpendLimits } from "@/lib/spend-limits";
 import { resetsOn } from "@/lib/budget";
 
 export interface SpendOverview extends SpendLimits {
+  background: SpendLimits & { spentTodayCents: number; spentMonthCents: number; dailyReset: string; monthlyReset: string; usesDefaults: boolean };
   isAdmin: boolean;
   spentTodayCents: number;
   spentMonthCents: number;
@@ -26,11 +27,36 @@ export async function getOwnSpendOverview(): Promise<{ overview?: SpendOverview;
   const monthly = await readSpent(actor.tenantId, now, "monthly");
   const failure = describeWriteFailure(daily.error ?? monthly.error, "load your spending");
   if (failure !== undefined) return { error: failure };
+  const background = await readBackgroundSpendLimits(actor.tenantId);
+  if (background.error !== undefined) return { error: background.error };
+  const bgDaily = await readSpent(actor.tenantId, now, "daily", "background");
+  const bgMonthly = await readSpent(actor.tenantId, now, "monthly", "background");
+  const bgFailure = describeWriteFailure(bgDaily.error ?? bgMonthly.error, "load background spending");
+  if (bgFailure !== undefined) return { error: bgFailure };
   return { overview: {
+    background: { ...background.limits, usesDefaults: background.usesDefaults,
+      spentTodayCents: bgDaily.spentCents!, spentMonthCents: bgMonthly.spentCents!,
+      dailyReset: resetsOn("daily", now), monthlyReset: resetsOn("monthly", now) },
     ...result.limits, isAdmin: actor.isAdmin,
     spentTodayCents: daily.spentCents!, spentMonthCents: monthly.spentCents!,
     dailyReset: resetsOn("daily", now), monthlyReset: resetsOn("monthly", now),
   } };
+}
+
+export async function saveBackgroundSpendLimits(input: SpendLimits): Promise<{ error?: string }> {
+  const actor = await requireActor();
+  const invalid = validateSpendLimits(input);
+  if (invalid !== undefined) return { error: invalid };
+  const limits: SpendLimits = { dailyCents: input.dailyCents, monthlyCents: input.monthlyCents };
+  const { error } = await rawQuery(
+    `insert into app_settings (tenant_id,key,value) values ($1,$2,$3::jsonb)
+      on conflict(tenant_id,key) do update set value=excluded.value`,
+    [actor.tenantId, BACKGROUND_SPEND_LIMITS_KEY, JSON.stringify(limits)], actor.tenantId);
+  const failure = describeWriteFailure(error?.message, "save background spending limits");
+  if (failure !== undefined) return { error: failure };
+  revalidatePath("/settings");
+  revalidatePath("/watchlist");
+  return {};
 }
 
 export async function saveSpendLimits(input: SpendLimits): Promise<{ error?: string }> {

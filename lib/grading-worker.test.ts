@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 
-const h = vi.hoisted(() => ({ db: null as unknown as PGlite, capped:false, writeFailure:false }));
+const h = vi.hoisted(() => ({ db: null as unknown as PGlite, capped:false, backgroundPaused:false, writeFailure:false }));
 vi.mock("@/lib/tenant", () => ({ resolveTenantId: async () => "tenant-a" }));
 vi.mock("@/lib/require-actor", () => ({requireActor:async()=>({isAdmin:false})}));
 vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn(async (sql:string, values:unknown[]) => {
@@ -9,8 +9,8 @@ vi.mock("@/lib/supabase", () => ({ rawQuery: vi.fn(async (sql:string, values:unk
   try { return { data:(await h.db.query(sql,values)).rows,error:null }; }
   catch (e) { return {data:[],error:{message:String(e)}}; }
 }) }));
-vi.mock("@/lib/metered", () => ({ withBudget: vi.fn(async ({fn}:{fn:()=>Promise<unknown>}) =>
-  h.capped ? {capped:"Spending limit reached"} : {result:await fn()}) }));
+vi.mock("@/lib/metered", () => ({ withBudget: vi.fn(async ({fn,workload}:{fn:()=>Promise<unknown>;workload?:string}) =>
+  h.capped || (h.backgroundPaused && workload === "background") ? {capped:"Spending limit reached"} : {result:await fn()}) }));
 vi.mock("@/lib/search-criteria", () => ({ loadScoringInputs: async () => ({fitBrain:"Candidate criteria"}) }));
 vi.mock("@/app/actions/jobs", () => ({ getJobStatuses: async () => ({statuses:[
   {key:"New",bucket:"active",hidden:false}, {key:"Rejected",bucket:"terminal",hidden:false},
@@ -36,7 +36,7 @@ beforeAll(async () => {
 });
 afterAll(() => h.db.close());
 beforeEach(async () => {
-  vi.clearAllMocks(); h.capped=false; h.writeFailure=false;
+  vi.clearAllMocks(); h.capped=false; h.backgroundPaused=false; h.writeFailure=false;
   vi.mocked(scoreFit).mockResolvedValue({score:4,rationale:"Strong domain fit"});
   await h.db.exec("delete from jobs; delete from app_settings");
   await h.db.query("insert into jobs(id,tenant_id,company,role_title) values ('role','tenant-a','Example','Director')");
@@ -109,4 +109,14 @@ test("explicit resume invalidates expired leases before a new attempt can start"
   await recordGradeFailure('role',lease,1,{kind:'blocked',message:'Old failure'});
   expect((await h.db.query("select * from app_settings")).rows).toEqual([]);
   expect((await h.db.query("select grading_lease from jobs")).rows[0]).toEqual({grading_lease:null});
+});
+
+// Mutation: a scheduled-work sublimit also blocks an explicitly requested manual retry.
+test("manual grading remains foreground when automatic grading allowance is paused",async()=>{
+  h.backgroundPaused=true;
+  expect(await recoverMissingGrade(false,"background")).toMatchObject({graded:0,attempted:0});
+  expect(scoreFit).not.toHaveBeenCalled();
+  await retryMissingGrades(false);
+  expect(scoreFit).toHaveBeenCalledOnce();
+  expect(withBudget).toHaveBeenLastCalledWith(expect.objectContaining({workload:"foreground"}));
 });

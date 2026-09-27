@@ -24,6 +24,9 @@ export interface BoardResolution {
    * `companySlugs` produced it from the company's name.
    */
   source: "read" | "guessed";
+  evidenceUrl?: string;
+  boardUrl?: string;
+  evidenceKind?: "employer_link" | "employer_redirect" | "stored_posting" | "board_identity";
 }
 
 /** What a resolution may be used for. */
@@ -109,11 +112,12 @@ export function rolesFromBoard(postings: Posting[], titleTerms: string[]): Role[
     job_url: p.url,
     // Everything else comes from READING the posting, which ingestRoles does
     // per role. A board listing is an index, not a description.
-    location: "",
+    location: p.location ?? "",
     seniority: "",
-    salary_range: "",
+    salary_range: p.compensation ?? "",
     description_summary: "",
     fit_signal: "",
     ic_flag: false,
+    ...(p.department ? {department:p.department} : {}),
   }));
 }

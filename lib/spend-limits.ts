@@ -5,6 +5,8 @@ export interface SpendLimits {
 }
 
 export const SPEND_LIMITS_KEY = "spend_limits";
+export const BACKGROUND_SPEND_LIMITS_KEY = "background_spend_limits";
+export const DEFAULT_BACKGROUND_SPEND_LIMITS: Readonly<SpendLimits> = { dailyCents: 100, monthlyCents: 1000 };
 export const MAX_SPEND_CENTS = 100_000_000;
 
 export function validateSpendLimits(value: unknown): string | undefined {

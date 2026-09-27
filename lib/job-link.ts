@@ -188,6 +188,30 @@ export interface BoardLink {
   id: string;
 }
 
+/** Board identity, separate from the posting-only parser used by link health. */
+export function parseBoardUrl(input: string | null | undefined): { vendor: BoardVendor; slug: string } | null {
+  if (!input) return null;
+  let url: URL;
+  try { url = new URL(input); } catch { return null; }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split("/").filter(Boolean).map(decodeSegment);
+  const slug = parts[0];
+  const safeSlug = (s: string | undefined) => !!s && /^[a-z0-9_-]+$/i.test(s);
+  if (host === "jobs.ashbyhq.com" && safeSlug(slug)) return { vendor: "ashby", slug: slug.toLowerCase() };
+  if (["boards.greenhouse.io", "job-boards.greenhouse.io", "boards.eu.greenhouse.io", "job-boards.eu.greenhouse.io"].includes(host)) {
+    if (parts[0]==="embed") {
+      const embedded=url.searchParams.get("for")??undefined;
+      return /^\/embed\/job_board(?:\/js)?\/?$/.test(url.pathname)&&safeSlug(embedded)?{vendor:"greenhouse",slug:embedded!.toLowerCase()}:null;
+    }
+    if(safeSlug(slug)) return {vendor:"greenhouse",slug:slug.toLowerCase()};
+  }
+  if (["jobs.lever.co", "jobs.eu.lever.co"].includes(host) && safeSlug(slug)) return {vendor:"lever",slug:slug.toLowerCase()};
+  if (host === "apply.workable.com" && slug !== "j" && safeSlug(slug)) return {vendor:"workable",slug:slug.toLowerCase()};
+  const breezy = host.match(/^([a-z0-9_-]+)\.breezy\.hr$/i);
+  return breezy ? {vendor:"breezy",slug:breezy[1].toLowerCase()} : null;
+}
+
 /**
  * Reads vendor, slug and posting id out of an employer's own posting link.
  *

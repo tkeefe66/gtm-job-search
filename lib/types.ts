@@ -199,10 +199,16 @@ export type JobInsert = Partial<Omit<Job, "id" | "created_at" | "updated_at">> &
   role_title: string;
 };
 
-export type CrawlStatus = "ok" | "empty" | "error" | "needs_url";
+export type CrawlStatus = "ok" | "empty" | "error" | "needs_url" | "skipped" | "partial" | "unchanged";
 export type CrawlMethod = "fetch" | "search";
 
 export interface TrackedCompany {
+  allow_paid_search?: boolean;
+  consecutive_model_failures?: number;
+  model_retry_after?: string | null;
+  last_attempted_at?: string | null;
+  last_successful_check_at?: string | null;
+  next_attempt_at?: string | null;
   id: string;
   company: string;
   tagline: string | null;

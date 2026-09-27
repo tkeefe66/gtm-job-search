@@ -72,6 +72,8 @@ test("a capped due crawl cannot starve another tenant's missing grades", async()
   const response=await GET(new Request("http://localhost/api/cron/crawl-next"));
   expect(await response.json()).toMatchObject({crawled:true,kind:"grading-recovery",recovery:{graded:1}});
   expect(recoverMissingGrade).toHaveBeenCalledTimes(2);
+  // Mutation: automatic recovery defaults to the foreground budget.
+  expect(recoverMissingGrade).toHaveBeenCalledWith(false,"background");
   expect(crawlCompany).not.toHaveBeenCalled();
 });
 test("dry cron calls never run grading recovery", async()=>{

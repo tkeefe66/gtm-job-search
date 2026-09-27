@@ -78,6 +78,8 @@ import {
   renameTrackedCompany,
   setIgnoreLocationRule,
   setTracking,
+  setCrawlInterval,
+  setAutomaticPaidSearch,
   trackCompanyByName,
 } from "./watchlist";
 import { crawlCompany } from "@/lib/crawler";
@@ -366,7 +368,7 @@ describe("a careers URL is never accepted as a company name", () => {
 });
 
 describe("renameTrackedCompany carries the name through every table", () => {
-  test("one statement updates all four tables the name keys", async () => {
+  test("one statement carries company history and invalidates old source caches", async () => {
     readOk([{ company: "https://cursor.com/careers", careers_url: null }]);
 
     const res = await renameTrackedCompany("https://cursor.com/careers", "Cursor");
@@ -378,13 +380,14 @@ describe("renameTrackedCompany carries the name through every table", () => {
     // Each table by name. Renaming the watchlist row alone is the defect this
     // asserts against: ingestRoles would then find no rows under the new name
     // and re-insert every existing role as a duplicate "New" job.
-    for (const table of ["watchlist", "jobs", "discovered_roles", "crawl_runs"]) {
+    // Mutation: new ledger names keep the old company and disappear after rename.
+    for (const table of ["watchlist", "jobs", "discovered_roles", "crawl_runs", "ai_operations", "ai_usage_requests", "company_boards", "company_crawl_snapshots"]) {
       expect(sql).toContain(table);
     }
     // ONE statement, so the four either all land or none do.
     expect(sql).toContain("with");
     // Every clause scoped by tenant, not just the first.
-    expect(sql.match(/tenant_id = \$3/g)).toHaveLength(4);
+    expect(sql.match(/tenant_id = \$3/g)).toHaveLength(8);
   });
 
   test("refuses to rename into another tracked company rather than merging", async () => {
@@ -443,4 +446,31 @@ describe("renameTrackedCompany carries the name through every table", () => {
     expect(res.company).toBeUndefined();
     expect(res.error).toBeTruthy();
   });
+});
+
+// Mutation: interval edit leaves next_attempt_at stale, so the UI and scheduler ignore it.
+test("changing interval recalculates persisted eligibility from the actual last attempt",async()=>{
+  readOk([{company:"Synthetic Co",careers_url:null}]);
+  expect((await setCrawlInterval("Synthetic Co",1)).error).toBeUndefined();
+  const [sql,args]=query.mock.calls[query.mock.calls.length-1];
+  expect(sql).toContain("next_attempt_at=coalesce(last_attempted_at,last_checked_at)");
+  expect(sql).toContain("tenant_id=$1 and company=$2");
+  expect(args).toEqual(["test-user","Synthetic Co",1]);
+});
+
+// Mutation: an empty database message reads as a successful opt-in write.
+test("automatic paid-search setting reports an empty-message database failure",async()=>{
+  readOk([{company:"Synthetic Co",careers_url:null}]);
+  query.mockResolvedValueOnce({data:[{company:"Synthetic Co",careers_url:null}],error:null} as never)
+    .mockResolvedValueOnce({data:[],error:{message:""}} as never);
+  expect((await setAutomaticPaidSearch("Synthetic Co",true)).error).toContain("Could not save automatic paid search");
+});
+
+// Mutation: manual ordinary checks or initial tracking inherit Deep search permission.
+test("check and deep actions pass distinct explicit modes to the crawler",async()=>{
+  crawl.mockResolvedValue({company:"Synthetic Co",method:null,status:"skipped",rolesFound:0,newRoles:0});
+  await checkCompanyNow("Synthetic Co");
+  expect(crawl).toHaveBeenLastCalledWith("Synthetic Co",{trigger:"check"});
+  await checkCompanyNow("Synthetic Co","deep");
+  expect(crawl).toHaveBeenLastCalledWith("Synthetic Co",{trigger:"deep"});
 });

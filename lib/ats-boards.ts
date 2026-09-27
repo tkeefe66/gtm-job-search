@@ -14,6 +14,42 @@
 export interface Posting {
   title: string;
   url: string;
+  body?: string;
+  location?: string;
+  department?: string;
+  compensation?: string;
+  material?: {compensation:unknown;employmentType:unknown;workplaceType:unknown};
+}
+
+/** Rich enumeration payload. Link-repair parseBoard keeps its narrow contract. */
+export function parseBoardSnapshot(vendor: BoardVendor, json: unknown): Posting[] | null {
+  const parsed = parseBoard(vendor, json);
+  if (parsed === null) return null;
+  const envelope = json as {jobs?: unknown};
+  const raw = Array.isArray(json) ? json : Array.isArray(envelope?.jobs) ? envelope.jobs : [];
+  const active=vendor==="ashby"?raw.filter((item:unknown)=>(item as {isListed?:unknown}|null)?.isListed!==false):raw;
+  // A partially parsed board is not a complete inventory. Never use silently
+  // dropped malformed entries as evidence that their postings disappeared.
+  if(active.length!==parsed.length) return null;
+  return parsed.map(posting => {
+    const job = raw.find((item: unknown) => {
+      const row = item as Record<string, unknown> | null;
+      return row && [row.absolute_url, row.jobUrl, row.hostedUrl, row.url, row.shortlink].includes(posting.url);
+    }) as Record<string,unknown> | undefined;
+    if (!job) return posting;
+    const id = typeof job.id === "string" || typeof job.id === "number" ? String(job.id) : "";
+    const body = id ? parsePostingBody(vendor, id, vendor === "greenhouse" ? job : json) : null;
+    const location = typeof job.location === "string" ? job.location :
+      typeof (job.location as {name?:unknown} | undefined)?.name === "string" ? (job.location as {name:string}).name :
+      typeof (job.categories as {location?:unknown} | undefined)?.location === "string" ? (job.categories as {location:string}).location : "";
+    const department = typeof job.department === "string" ? job.department : body?.department ?? "";
+    const compensation = job.compensation ?? job.salaryRange ?? job.salary ?? null;
+    const salaryText=typeof compensation==="string"?compensation:
+      typeof (compensation as {compensationTierSummary?:unknown}|null)?.compensationTierSummary==="string"?
+        (compensation as {compensationTierSummary:string}).compensationTierSummary:"";
+    return { ...posting, ...(body ? {body:body.text} : {}), location, department,
+      compensation:salaryText,material:{compensation,employmentType:job.employmentType??job.commitment??null,workplaceType:job.workplaceType??job.isRemote??null} };
+  });
 }
 
 /**

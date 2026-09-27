@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ProviderId } from "@/lib/providers/types";
+import type { ProviderId, Completion, AIRequestMeta } from "@/lib/providers/types";
 
 /**
  * What a Claude call costs, collected as it happens.
@@ -19,6 +19,13 @@ import type { ProviderId } from "@/lib/providers/types";
  * would be invisible to the other.
  */
 export interface BillingScope {
+  tenantId?: string;
+  action?: string;
+  workload?: "foreground" | "background";
+  operationId?: string;
+  trackCall?: (meta: AIRequestMeta, fn: () => Promise<Completion>) => Promise<Completion>;
+  cacheWrite5mTokens?: number;
+  cacheWrite1hTokens?: number;
   /** Cap handed to web_search. Null means no app cap was selected. */
   maxSearches: number | null;
   /** Room available after other actions' reservations; checked before each model request. */
@@ -66,6 +73,8 @@ export function billingScope(): BillingScope | null {
 
 /** Called by the Anthropic helpers as usage is observed. */
 export function recordUsage(u: {
+  cacheWrite5mTokens?: number;
+  cacheWrite1hTokens?: number;
   searches?: number;
   groundedRequests?: number;
   inputTokens?: number;
@@ -79,4 +88,6 @@ export function recordUsage(u: {
   s.inputTokens += u.inputTokens ?? 0;
   s.cachedInputTokens += u.cachedInputTokens ?? 0;
   s.outputTokens += u.outputTokens ?? 0;
+  s.cacheWrite5mTokens = (s.cacheWrite5mTokens ?? 0) + (u.cacheWrite5mTokens ?? 0);
+  s.cacheWrite1hTokens = (s.cacheWrite1hTokens ?? 0) + (u.cacheWrite1hTokens ?? 0);
 }

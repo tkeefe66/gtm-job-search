@@ -19,6 +19,13 @@ it("checks schema and closes its connection", async () => {
   expect(db.end).toHaveBeenCalledOnce();
 });
 
+it("refuses readiness until source, policy and accounting migrations are queryable", async () => {
+  await databaseReady();
+  const query = db.query.mock.calls[0][0] as string;
+  for (const required of ["company_crawl_snapshots", "ai_operations", "ai_usage_requests", "closure_eligible", "allow_paid_search", "next_attempt_at"])
+    expect(query).toContain(required);
+});
+
 it.each(["connect", "query"] as const)("returns 503 without leaking %s failures", async (step) => {
   db[step].mockRejectedValue(new Error("private host and credential details"));
   const response = await GET();

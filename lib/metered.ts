@@ -1,186 +1,81 @@
+import { randomUUID } from "node:crypto";
 import { rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { open } from "@/lib/secret-box";
 import { resolveTenantId } from "@/lib/tenant";
-import { runWithBilling, billingScope, type BillingScope } from "@/lib/billing-context";
-import { reserveSpend, reconcileSpend, readSpent, advanceSpend } from "@/lib/usage-store";
-import {
-  cappedMessage,
-  isMetered,
-  needsKeyMessage,
-  reserveVerdict,
-  resetsOn,
-  resolveTier,
-  unpriceableSearchMessage,
-  type Tier,
-} from "@/lib/budget";
+import { runWithBilling, billingScope, recordUsage, type BillingScope } from "@/lib/billing-context";
+import { reserveSpend, reconcileSpend, readSpent, advanceSpend, type SpendWorkload } from "@/lib/usage-store";
+import { cappedMessage, needsKeyMessage, resetsOn, resolveTier, type Tier } from "@/lib/budget";
+import { readSpendLimits, readBackgroundSpendLimits } from "@/lib/spend-limit-store";
 import { providerFor } from "@/lib/providers/registry";
 import { resolveProviderConfig, type ProviderConfig } from "@/lib/providers/resolution";
+import type { Completion } from "@/lib/providers/types";
 import { SearchUnavailableError, SpendLimitReachedError } from "@/lib/model-call";
-import { readSpendLimits } from "@/lib/spend-limit-store";
-import { hasSpendLimit } from "@/lib/spend-limits";
+import { aiAttribution } from "./ai-attribution";
+import { AIBillingPersistenceError, beginAIRequest, finishAIRequest, markAIRequestUnknown, exactCompletionCost, recoverStaleAIOperations } from "./ai-ledger";
 
-/**
- * Runs a block of Claude work against a tenant's budget.
- *
- * Three things happen around `fn`, and the middle one is the whole point:
- *
- *   1. RESERVE the estimate atomically against both windows. Refused means the
- *      call never starts.
- *   2. Hand `fn` a search cap derived from what is LEFT. This is what makes the
- *      ceiling enforceable — web_search calls are billed per search and are
- *      invisible to token usage, so a pre-call check alone catches the next
- *      click, not this one.
- *   3. RECONCILE what it actually cost, and record the event.
- *
- * Reconciliation runs in a `finally`, so a call that throws halfway still gets
- * charged for the searches it issued. Charging only successful calls would make
- * a failing loop free.
- */
-
-export interface MeteredResult<T> {
-  result?: T;
-  /** Present when the budget refused the call. A refusal, not a failure. */
-  capped?: string;
-  /** Present (empty string included) when something actually failed. */
-  error?: string;
+export interface MeteredResult<T> { result?: T; capped?: string; error?: string }
+interface BudgetOptions<T> {
+  action: string; estimateCents: number; isAdmin: boolean; fn: () => Promise<T>;
+  workload?: SpendWorkload; allowFreeWork?: boolean;
+}
+function limitMessage(tier: Tier, scope: "overall"|"background", reason:"daily"|"monthly", ceiling:number, now:Date):string {
+  return scope === "background"
+    ? `Paid background work is paused by the $${(ceiling/100).toFixed(2)} ${reason} background allowance. Change it in Settings or wait until ${resetsOn(reason,now)} (UTC). Direct checks remain available.`
+    : cappedMessage({tier,reason,ceilingCents:ceiling,resetsOn:resetsOn(reason,now)});
 }
 
-export async function withBudget<T>(opts: {
-  action: string;
-  /** What this is expected to cost, in cents. See lib/cost-estimate.ts. */
-  estimateCents: number;
-  isAdmin: boolean;
-  fn: () => Promise<T>;
-}): Promise<MeteredResult<T>> {
-  // NESTED CALLS RUN DIRECTLY. scoreFit is metered in its own right — it is
-  // callable straight from the client — but it also runs inside ingestRoles,
-  // which is already inside a metered action. Without this guard the inner call
-  // would reserve a second time against the same budget and record a second
-  // event, double-charging every role a search finds.
-  //
-  // The outer scope still collects the inner call's usage, because
-  // recordUsage writes to whichever scope is active.
-  if (billingScope() !== null) {
-    return { result: await opts.fn() };
-  }
-
-  const tenantId = await resolveTenantId();
-  const now = new Date();
-
-  // The tenant's own key, decrypted here and nowhere else. Loading it BEFORE
-  // deciding the tier matters: a stored key that will not open is not a BYO
-  // tenant, and treating them as one would leave them unmetered AND unable to
-  // call anything.
-  const lookup = await loadTenantKey(tenantId);
-  // "Could not ask" is not "no key stored". A failed read used to fall through
-  // to tier "none", which tells the tenant to add an API key — a sentence about
-  // their account, printed because the database is down. Presence, not
-  // truthiness: the driver reports an unreachable database with an EMPTY
-  // message, so the check is on the error's existence, never on its text.
-  if (!lookup.ok) return { error: lookup.error };
-  const ownKey = lookup.key;
-
-  const tier = resolveTier({ isAdmin: opts.isAdmin, hasOwnKey: ownKey !== null });
-
-  // No key, no call. Refused BEFORE fn runs and returned as `capped` so callers
-  // render it as a sentence rather than an error — it is a requirement, not a
-  // failure. Previously this fell through to the platform key with a ceiling,
-  // which meant approving a tenant silently spent the owner's money.
-  if (tier === "none") return { capped: needsKeyMessage() };
-  const loaded = await readSpendLimits(tenantId, tier === "admin");
-  if (loaded.error !== undefined) return { error: loaded.error };
-  const limits = loaded.limits;
-  const chosenLimits = hasSpendLimit(limits);
-
-  // The admin with no stored key of their own routes to the platform's own
-  // provider and model — resolveProviderConfig(null) reproduces exactly the
-  // Anthropic + Sonnet routing this app has always used.
-  const config: ProviderConfig = ownKey?.config ?? resolveProviderConfig(null)!;
-
-  // BYO is uncapped only until the user chooses an app limit.
-  if (!isMetered(tier, chosenLimits)) {
-    return runScope(tier, { maxSearches: null }, opts, tenantId, now, 0, ownKey?.apiKey ?? null, config);
-  }
-
-  const dailySpend = await readSpent(tenantId, now, "daily");
-  const monthlySpend = await readSpent(tenantId, now, "monthly");
-  const countersFailure = describeWriteFailure(dailySpend.error ?? monthlySpend.error, "load your spending");
-  if (countersFailure !== undefined) return { error: countersFailure };
-  const daily = { spentCents: dailySpend.spentCents!, ceilingCents: limits.dailyCents };
-  const monthly = { spentCents: monthlySpend.spentCents!, ceilingCents: limits.monthlyCents };
-
-  // One search, priced by the adapter — which is the definition of the number.
-  const centsPerSearch = providerFor(config.providerId).costCents(
-    { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1, groundedRequests: 1 },
-    config.model
-  );
-
-  const verdict = reserveVerdict({ tier, hasChosenLimits: chosenLimits, daily, monthly, estimateCents: opts.estimateCents, centsPerSearch });
-  if (!verdict.allow) {
-    // A search this provider prices at zero cannot be rationed at all, so the
-    // call is refused before it starts rather than run with a cap derived from
-    // a division by zero. Not a ceiling the tenant has hit, so not cappedMessage.
-    if (verdict.reason === "unpriceable") {
-      console.error(
-        `metered: ${config.providerId}/${config.model} prices a search at ${centsPerSearch}c — refusing the metered call`
-      );
-      return { capped: unpriceableSearchMessage() };
+export async function withBudget<T>(opts: BudgetOptions<T>): Promise<MeteredResult<T>> {
+  if(billingScope()!==null)return{result:await opts.fn()};
+  const tenantId=await resolveTenantId(),now=new Date();
+  const lookup=await loadTenantKey(tenantId);
+  if(!lookup.ok)return{error:lookup.error};
+  const ownKey=lookup.key;
+  const tier=resolveTier({isAdmin:opts.isAdmin,hasOwnKey:ownKey!==null});
+  if(tier==="none"&&!opts.allowFreeWork)return{capped:needsKeyMessage()};
+  const overall=await readSpendLimits(tenantId,tier==="admin");
+  if(overall.error!==undefined)return{error:overall.error};
+  const background=opts.workload==="background"?await readBackgroundSpendLimits(tenantId):undefined;
+  if(background?.error!==undefined)return{error:background.error};
+  const stale=await recoverStaleAIOperations(tenantId,now);
+  if(stale.error!==undefined)return{error:stale.error};
+  const config=ownKey?.config??resolveProviderConfig(null)!;
+  const operationId=randomUUID();
+  const workload=opts.workload??"foreground";
+  const billedTo: "platform"|"tenant" = tier==="byo"?"tenant":"platform";
+  const operation={billedTo,id:operationId,action:opts.action,workload,provider:config.providerId,model:config.model,attribution:aiAttribution()};
+  const estimate=Math.max(1,opts.estimateCents);
+  let denied=tier==="none"?needsKeyMessage():undefined;
+  let initialAvailable=Infinity;
+  for(const group of [{limits:overall.limits,background:false},...(background?[{limits:background.limits!,background:true}]:[])]) {
+    for(const window of ["daily","monthly"] as const) {
+      const ceiling=window==="daily"?group.limits.dailyCents:group.limits.monthlyCents;
+      if(ceiling===null)continue;
+      const spent=await readSpent(tenantId,now,window,group.background?"background":undefined);
+      const failure=describeWriteFailure(spent.error,"load your spending");
+      if(failure!==undefined)return{error:failure};
+      initialAvailable=Math.min(initialAvailable,ceiling-spent.spentCents!);
+      if(spent.spentCents!>=ceiling||spent.spentCents!+estimate>ceiling)
+        denied??=limitMessage(tier,group.background?"background":"overall",window,ceiling,now);
     }
-    return {
-      capped: cappedMessage({
-        tier,
-        reason: verdict.reason,
-        ceilingCents: verdict.window.ceilingCents!,
-        resetsOn: resetsOn(verdict.reason, now),
-      }),
-    };
   }
-
-  const reserved = await reserveSpend({
-    tenantId,
-    estimateCents: opts.estimateCents,
-    dailyCeilingCents: limits.dailyCents,
-    monthlyCeilingCents: limits.monthlyCents,
-    now,
-  });
-  // Presence, not truthiness — the driver reports an unreachable database with
-  // an empty message, and `if (error)` would read that as a clean refusal.
-  if (reserved.error !== undefined) return { error: reserved.error };
-  if (!reserved.ok) {
-    // Lost a race between the check above and the reservation. The atomic
-    // statement is what makes this correct rather than the check.
-    const reason = reserved.reason ?? "daily";
-    return {
-      capped: cappedMessage({
-        tier,
-        reason,
-        ceilingCents: (reason === "daily" ? limits.dailyCents : limits.monthlyCents)!,
-        resetsOn: resetsOn(reason, now),
-      }),
-    };
+  let reserved=denied===undefined?await reserveSpend({tenantId,estimateCents:estimate,
+    dailyCeilingCents:overall.limits.dailyCents,monthlyCeilingCents:overall.limits.monthlyCents,
+    backgroundLimits:background?.limits,operation,now}):{ok:false,spentCents:0};
+  if(reserved.error!==undefined)return{error:reserved.error};
+  if(!reserved.ok){
+    const reason=reserved.reason??"daily",scope=reserved.scope??"overall";
+    const limits=scope==="background"?background!.limits!:overall.limits;
+    denied??=limitMessage(tier,scope,reason,(reason==="daily"?limits.dailyCents:limits.monthlyCents)??0,now);
+    if(!opts.allowFreeWork)return{capped:denied};
+    // Free collection receives a real scope with no admission to dispatch a model.
+    // Zero reservation is safe because routing must refuse every paid request.
+    reserved=await reserveSpend({tenantId,estimateCents:0,dailyCeilingCents:null,monthlyCeilingCents:null,
+      ...(workload==="background"?{backgroundLimits:{dailyCents:null,monthlyCents:null}}:{}),operation,now});
+    if(reserved.error!==undefined)return{error:reserved.error};
+    if(!reserved.ok)return{error:"Could not establish the direct-check accounting scope. Try again."};
   }
-
-  const dailyRemaining = limits.dailyCents === null ? Infinity : limits.dailyCents - daily.spentCents;
-  const monthlyRemaining = limits.monthlyCents === null ? Infinity : limits.monthlyCents - monthly.spentCents;
-  const availableCents = reserved.availableCents ?? Math.min(dailyRemaining, monthlyRemaining);
-  const limitingWindow = dailyRemaining <= monthlyRemaining ? "daily" : "monthly";
-  return runScope(
-    tier,
-    {
-      maxSearches: Math.min(verdict.maxSearches!, Math.floor(availableCents / centsPerSearch)),
-      availableCents,
-      limitMessage: cappedMessage({ tier, reason: limitingWindow,
-        ceilingCents: (limitingWindow === "daily" ? limits.dailyCents : limits.monthlyCents)!,
-        resetsOn: resetsOn(limitingWindow, now) }),
-    },
-    opts,
-    tenantId,
-    now,
-    opts.estimateCents,
-    ownKey?.apiKey ?? null,
-    config
-  );
+  return runScope(tier,opts,tenantId,now,reserved.spentCents,ownKey?.apiKey??null,config,operationId,denied,reserved.availableCents??initialAvailable);
 }
 
 interface TenantKey {
@@ -264,110 +159,96 @@ async function loadTenantKey(tenantId: string): Promise<KeyLookup> {
   return { ok: true, key: { apiKey: plain, config } };
 }
 
-async function runScope<T>(
-  tier: Tier,
-  caps: { maxSearches: number | null; availableCents?: number; limitMessage?: string },
-  opts: { action: string; estimateCents: number; fn: () => Promise<T> },
-  tenantId: string,
-  now: Date,
-  reservedCents: number,
-  ownKey: string | null,
-  config: ProviderConfig
-): Promise<MeteredResult<T>> {
-  const provider = providerFor(config.providerId);
-  let accountedCents = reservedCents;
-  let pendingFlush = Promise.resolve();
-  const actualCost = () => provider.costCents({
-    inputTokens: scope.inputTokens, cachedInputTokens: scope.cachedInputTokens,
-    outputTokens: scope.outputTokens, searches: scope.searches,
-    groundedRequests: scope.groundedRequests ?? 0,
-  }, scope.model);
-  const scope: BillingScope = {
-    ...caps,
-    flushUsage: () => {
-      // Serial within a scope: parallel responses must not publish the same delta twice.
-      pendingFlush = pendingFlush.then(async () => {
-        const actual = actualCost();
-        if (actual <= accountedCents) return;
-        const result = await advanceSpend({ tenantId, deltaCents: actual - accountedCents, now });
-        const failure = describeWriteFailure(result.error, "record completed AI spending");
-        if (failure !== undefined) throw new Error(failure);
-        accountedCents = actual;
-      });
-      return pendingFlush;
+async function runScope<T>(tier:Tier,opts:BudgetOptions<T>,tenantId:string,now:Date,reservedCents:number,ownKey:string|null,
+  config:ProviderConfig,operationId:string,denied?:string,initialAvailable=Infinity):Promise<MeteredResult<T>> {
+  const provider=providerFor(config.providerId),workload=opts.workload??"foreground";
+  let accountedCents=reservedCents,exactCost=0,unknown=false;
+  let pendingFlush=Promise.resolve();
+  const pendingCalls=new Set<Promise<Completion>>();
+  const ledger={tenantId,operationId,provider:config.providerId,model:config.model};
+  // Compatible aggregate pricing is retained for legacy callers that record usage directly.
+  const actualCost=()=>Math.max(Math.ceil(exactCost/10000),provider.costCents({
+    inputTokens:scope.inputTokens,cachedInputTokens:scope.cachedInputTokens,outputTokens:scope.outputTokens,
+    searches:scope.searches,groundedRequests:scope.groundedRequests??0,
+    cacheWrite5mTokens:scope.cacheWrite5mTokens??0,cacheWrite1hTokens:scope.cacheWrite1hTokens??0},scope.model));
+  const scope:BillingScope={
+    tenantId,action:opts.action,workload,operationId,maxSearches:denied?0:initialAvailable===Infinity?null:Math.max(0,Math.floor(initialAvailable/Math.max(1,provider.costCents({inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:1,groundedRequests:1},config.model)))),
+    ...(denied?{availableCents:0,limitMessage:denied}:{}),
+    flushUsage:()=>{
+      pendingFlush=pendingFlush.then(async()=>{
+        const actual=actualCost();
+        if(actual<=accountedCents)return;
+        const result=await advanceSpend({tenantId,deltaCents:actual-accountedCents,targetCents:actual,operationId,workload,now});
+        const failure=describeWriteFailure(result.error,"record completed AI spending");
+        if(failure!==undefined)throw new AIBillingPersistenceError(failure);
+        accountedCents=actual;
+      });return pendingFlush;
     },
-    // Even an initially uncapped BYO action must notice a limit saved mid-run.
-    refreshAllowance: async () => {
-      // Snapshot before reads. A parallel response may publish more usage while
-      // either query is waiting; adding its newer debit back to an older read
-      // would invent allowance. The older snapshot is conservative instead.
-      const ownAccountedCents = accountedCents;
-      const current = await readSpendLimits(tenantId, tier === "admin");
-      if (current.error !== undefined) throw new Error(current.error);
-      if (!hasSpendLimit(current.limits)) return { availableCents: Infinity, maxSearches: null, limitMessage: "" };
-      const today = await readSpent(tenantId, now, "daily");
-      const month = await readSpent(tenantId, now, "monthly");
-      const failure = describeWriteFailure(today.error ?? month.error, "check your remaining spending allowance");
-      if (failure !== undefined) throw new Error(failure);
-      const remaining = (spent: number, limit: number | null) => limit === null ? Infinity : limit - spent + ownAccountedCents;
-      const daily = remaining(today.spentCents!, current.limits.dailyCents);
-      const monthly = remaining(month.spentCents!, current.limits.monthlyCents);
-      const reason = daily <= monthly ? "daily" : "monthly";
-      const availableCents = Math.min(daily, monthly);
-      const searchPrice = provider.costCents({ inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, searches: 1, groundedRequests: 1 }, config.model);
-      return { availableCents,
-        maxSearches: searchPrice > 0 ? Math.max(0, Math.floor(availableCents / searchPrice)) : 0,
-        limitMessage: cappedMessage({ tier, reason,
-          ceilingCents: (reason === "daily" ? current.limits.dailyCents : current.limits.monthlyCents)!,
-          resetsOn: resetsOn(reason, now) }),
-      };
+    refreshAllowance:async()=>{
+      if(denied!==undefined)return{availableCents:0,maxSearches:0,limitMessage:denied};
+      const ownAccountedCents=accountedCents;
+      const current=await readSpendLimits(tenantId,tier==="admin");
+      if(current.error!==undefined)throw new AIBillingPersistenceError(current.error);
+      const bg=workload==="background"?await readBackgroundSpendLimits(tenantId):undefined;
+      if(bg?.error!==undefined)throw new AIBillingPersistenceError(bg.error);
+      let availableCents=Infinity,message="";
+      for(const group of [{limits:current.limits,background:false},...(bg?[{limits:bg.limits!,background:true}]:[])]){
+        for(const window of ["daily","monthly"] as const){
+          const cap=window==="daily"?group.limits.dailyCents:group.limits.monthlyCents;
+          if(cap===null)continue;
+          const read=await readSpent(tenantId,now,window,group.background?"background":undefined);
+          const failure=describeWriteFailure(read.error,"check your remaining spending allowance");
+          if(failure!==undefined)throw new AIBillingPersistenceError(failure);
+          const remaining=cap-read.spentCents!+ownAccountedCents;
+          if(remaining<availableCents){availableCents=remaining;message=limitMessage(tier,group.background?"background":"overall",window,cap,now);}
+        }
+      }
+      const searchPrice=provider.costCents({inputTokens:0,cachedInputTokens:0,outputTokens:0,searches:1,groundedRequests:1},config.model);
+      return{availableCents,maxSearches:availableCents===Infinity?null:searchPrice>0?Math.max(0,Math.floor(availableCents/searchPrice)):0,limitMessage:message};
     },
-    // The platform key is reachable ONLY by the admin, whose key it is. Every
-    // other tenant arrives here with their own key, because tier "none" was
-    // refused above. The `??` is not a fallback for tenants — it is the admin
-    // branch, and a keyless non-admin can never reach it.
-    apiKey: ownKey ?? (tier === "admin" ? process.env.ANTHROPIC_API_KEY || "" : ""),
-    provider: config.providerId,
-    model: config.model,
-    searches: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
+    trackCall:(meta,fn)=>{
+      // Capture before the first await: sibling company/phase contexts cannot overwrite it.
+      const attribution=aiAttribution();
+      const call=(async()=>{
+        const requestId=await beginAIRequest(ledger,meta,attribution);
+        let responsePersisted=false;
+        try{
+          const completion=await fn();
+          const cost=exactCompletionCost(ledger,completion);
+          // Usage precedes persistence/validation: a malformed output still incurred this cost.
+          recordUsage(completion.usage);exactCost+=cost;
+          await finishAIRequest(ledger,requestId,completion,cost);
+          responsePersisted=true;
+          await scope.flushUsage!();
+          return completion;
+        }catch(error){
+          if(!responsePersisted)unknown=true;
+          try{if(!responsePersisted)await markAIRequestUnknown(ledger,requestId,"provider_outcome_unknown",error);}catch(recordError){console.error("ai-ledger: could not persist unknown request outcome",recordError);}
+          throw error;
+        }
+      })();
+      pendingCalls.add(call);
+      void call.then(()=>pendingCalls.delete(call),()=>pendingCalls.delete(call));
+      return call;
+    },
+    apiKey:ownKey??(tier==="admin"?process.env.ANTHROPIC_API_KEY||"":""),provider:config.providerId,model:config.model,
+    searches:0,inputTokens:0,cachedInputTokens:0,outputTokens:0,cacheWrite5mTokens:0,cacheWrite1hTokens:0,
   };
-
-  try {
-    const result = await runWithBilling(scope, opts.fn);
-    return { result };
-  } catch (err) {
-    // A search refused because this provider cannot cap uses in-request is a
-    // REFUSAL, not a crash: the caller renders it as a sentence, the same way a
-    // hit ceiling is rendered. Anything else propagates untouched.
-    if (err instanceof SearchUnavailableError || err instanceof SpendLimitReachedError) return { capped: err.message };
-    throw err;
-  } finally {
-    // In a finally: a call that throws halfway still issued searches, and
-    // charging only successful calls would make a failing loop free. Priced
-    // through the adapter — never a hardcoded rate — so a tenant on a
-    // different provider or model is billed at that provider's own price.
-    // A failed incremental write is retried by final reconciliation, which also
-    // releases any unused estimate. Do not race an outstanding incremental write.
-    await pendingFlush.catch(() => {});
-    const actual = actualCost();
-    const reconciled = await reconcileSpend({
-      tenantId,
-      estimateCents: accountedCents,
-      actualCents: actual,
-      action: opts.action,
-      searches: scope.searches,
-      inputTokens: scope.inputTokens,
-      outputTokens: scope.outputTokens,
-      billedTo: tier === "byo" ? "tenant" : "platform",
-      now,
-    });
-    if (reconciled.error !== undefined) {
-      const failure = describeWriteFailure(reconciled.error, "record AI spending");
-      console.error(`metered: ${failure}`);
-      throw new Error(failure);
-    }
+  let result:T|undefined;
+  try{
+    result=await runWithBilling(scope,opts.fn);
+    return{result};
+  }catch(error){
+    if(error instanceof SearchUnavailableError||error instanceof SpendLimitReachedError)return{capped:error.message};
+    throw error;
+  }finally{
+    while(pendingCalls.size)await Promise.allSettled(Array.from(pendingCalls));
+    await pendingFlush.catch(()=>{});
+    const actual=actualCost();
+    const outcome=result&&typeof result==="object"?result as {status?:string;newRoles?:number}:undefined;
+    const reconciled=await reconcileSpend({tenantId,estimateCents:accountedCents,actualCents:actual,action:opts.action,
+      searches:scope.searches,inputTokens:scope.inputTokens,outputTokens:scope.outputTokens,billedTo:tier==="byo"?"tenant":"platform",now,
+      workload,operationId,costMicrousd:exactCost,costComplete:!unknown,resultStatus:outcome?.status,newRoles:outcome?.newRoles});
+    if(reconciled.error!==undefined)throw new AIBillingPersistenceError(describeWriteFailure(reconciled.error,"record AI spending")!);
   }
 }

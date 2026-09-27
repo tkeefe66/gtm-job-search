@@ -21,8 +21,9 @@ export const DUE_COMPANIES_SQL = `
     from watchlist
    where tenant_id = $2
      and tracking_enabled = true
-     and (last_checked_at is null
-          or last_checked_at <= now() - (crawl_interval_days || ' days')::interval)
+     and (next_attempt_at is not null and next_attempt_at <= now()
+          or next_attempt_at is null and (last_checked_at is null
+          or last_checked_at <= now() - (crawl_interval_days || ' days')::interval))
    order by last_checked_at asc nulls first
    limit $1
 `;
@@ -31,8 +32,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function nextCheckDue(
   lastCheckedAt: string | null,
-  intervalDays: number
+  intervalDays: number,
+  nextAttemptAt?: string | null
 ): Date | null {
+  if (nextAttemptAt) return new Date(nextAttemptAt);
   if (!lastCheckedAt) return null;
   return new Date(new Date(lastCheckedAt).getTime() + intervalDays * MS_PER_DAY);
 }
@@ -40,9 +43,10 @@ export function nextCheckDue(
 export function isDue(
   lastCheckedAt: string | null,
   intervalDays: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  nextAttemptAt?: string | null
 ): boolean {
-  const due = nextCheckDue(lastCheckedAt, intervalDays);
+  const due = nextCheckDue(lastCheckedAt, intervalDays, nextAttemptAt);
   if (!due) return true;
   return due.getTime() <= now.getTime();
 }

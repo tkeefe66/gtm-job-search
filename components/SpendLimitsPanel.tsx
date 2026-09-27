@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getOwnSpendOverview, saveSpendLimits, type SpendOverview } from "@/app/actions/spend-limits";
+import { getOwnSpendOverview, saveSpendLimits, saveBackgroundSpendLimits, type SpendOverview } from "@/app/actions/spend-limits";
 import { parseSpendDollars, validateSpendLimits } from "@/lib/spend-limits";
+import { describeWriteFailure } from "@/lib/write-failure";
 
 const dollars = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const draftDollars = (cents: number | null) => cents === null ? "" : (cents / 100).toFixed(2);
@@ -11,33 +12,39 @@ const draftDollars = (cents: number | null) => cents === null ? "" : (cents / 10
 export default function SpendLimitsPanel({ isAdmin, provider }: { isAdmin: boolean; provider?: string }) {
   const [overview, setOverview] = useState<SpendOverview | null>(null);
   const [draft, setDraft] = useState({ daily: "", monthly: "" });
+  const [backgroundDraft, setBackgroundDraft] = useState({ daily: "", monthly: "" });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function load() {
+  async function load(refreshDraft: "all" | "overall" | "background" = "all") {
     setLoading(true);
     setError(null);
     try {
       const result = await getOwnSpendOverview();
-      if (result.error !== undefined) { setError(result.error); return; }
-      if (!result.overview) { setError("Could not load your spending. Refresh and try again."); return; }
+      const failure = describeWriteFailure(result.error, "load your spending");
+      if (failure !== undefined) { setError(failure); return false; }
+      if (!result.overview) { setError("Could not load your spending. Refresh and try again."); return false; }
       setOverview(result.overview);
-      setDraft({ daily: draftDollars(result.overview.dailyCents), monthly: draftDollars(result.overview.monthlyCents) });
+      if (refreshDraft !== "background") setDraft({ daily: draftDollars(result.overview.dailyCents), monthly: draftDollars(result.overview.monthlyCents) });
+      if (refreshDraft !== "overall") setBackgroundDraft({ daily: draftDollars(result.overview.background.dailyCents), monthly: draftDollars(result.overview.background.monthlyCents) });
+      return true;
     } catch {
       setError("Could not load your spending. Check your connection and try again.");
+      return false;
     } finally { setLoading(false); }
   }
 
   useEffect(() => { void load(); }, []);
 
-  async function save(e: React.FormEvent) {
+  async function save(e: React.FormEvent, background = false) {
     e.preventDefault();
     setError(null);
     setNotice(null);
-    const dailyCents = parseSpendDollars(draft.daily);
-    const monthlyCents = parseSpendDollars(draft.monthly);
+    const values = background ? backgroundDraft : draft;
+    const dailyCents = parseSpendDollars(values.daily);
+    const monthlyCents = parseSpendDollars(values.monthly);
     if (dailyCents === undefined || monthlyCents === undefined) {
       setError("Enter a dollar amount with up to two decimal places, or leave the field blank for no limit.");
       return;
@@ -47,10 +54,11 @@ export default function SpendLimitsPanel({ isAdmin, provider }: { isAdmin: boole
     if (invalid !== undefined) { setError(invalid); return; }
     setBusy(true);
     try {
-      const result = await saveSpendLimits(limits);
-      if (result.error !== undefined) { setError(result.error); return; }
-      setNotice("Spending limits saved. They apply to new AI work immediately.");
-      await load();
+      const result = await (background ? saveBackgroundSpendLimits(limits) : saveSpendLimits(limits));
+      const failure = describeWriteFailure(result.error, "save your spending limits");
+      if (failure !== undefined) { setError(failure); return; }
+      if (await load(background ? "background" : "overall")) setNotice(`${background ? "Background" : "Overall"} spending limits saved and confirmed. They apply to new AI work immediately.`);
+      else setNotice("Limits were saved, but could not be read back. Reload spending to confirm the current values.");
     } catch {
       setError("Could not confirm your spending limits were saved. Reload to check before trying again.");
     } finally { setBusy(false); }
@@ -91,7 +99,7 @@ export default function SpendLimitsPanel({ isAdmin, provider }: { isAdmin: boole
       {notice && <p className="mt-3 text-sm text-[#166534]" role="status">{notice}</p>}
 
       {isAdmin ? <Link href="/admin" className="mt-4 inline-block text-sm underline">Change limits on Accounts</Link> : (
-        <form onSubmit={save} className="mt-4">
+        <form onSubmit={(e) => void save(e)} className="mt-4">
           <fieldset disabled={busy || loading} className="grid gap-3 sm:grid-cols-2 disabled:opacity-60">
             <label className="text-sm text-ink" htmlFor="daily-spend-limit">Daily limit (USD)
               <input id="daily-spend-limit" inputMode="decimal" placeholder="Not set" value={draft.daily}
@@ -111,6 +119,40 @@ export default function SpendLimitsPanel({ isAdmin, provider }: { isAdmin: boole
           </button>
         </form>
       )}
+      <div className="mt-6 border-t border-slate pt-5" aria-labelledby="background-spend-heading">
+        <h3 id="background-spend-heading" className="font-display text-base text-ink">Automatic checks</h3>
+        <p className="mt-1 text-sm text-ink/60">A separate allowance for scheduled checks, first checks when tracking a company, and automatic role grading. Direct source checks continue when paid work is paused. Your overall limits still apply.</p>
+        {overview && !loading && <>
+          <p className="mt-2 text-xs text-ink/60">{overview.background.usesDefaults ? "Using defaults: $1 per day and $10 per month." : "Using your saved background limits."}</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {([
+              { label: "Background today", spent: overview.background.spentTodayCents, limit: overview.background.dailyCents, reset: overview.background.dailyReset },
+              { label: "Background this month", spent: overview.background.spentMonthCents, limit: overview.background.monthlyCents, reset: overview.background.monthlyReset },
+            ]).map((window) => <div key={window.label} className="rounded-lg bg-paper p-3">
+              <p className="text-xs text-ink/60">{window.label}</p>
+              <p className="mt-1 text-lg tabular-nums text-ink">{dollars(window.spent)} <span className="text-sm text-ink/50">/ {window.limit === null ? "No additional cap" : dollars(window.limit)}</span></p>
+              <p className="mt-1 text-xs text-ink/50">Resets {window.reset} at 00:00 UTC</p>
+              {window.limit !== null && window.spent >= window.limit && <p className="mt-1 text-xs text-[#B42318]">Paid background work is paused. Direct checks continue.</p>}
+            </div>)}
+          </div>
+        </>}
+        <form onSubmit={(e) => void save(e, true)} className="mt-4">
+          <fieldset disabled={busy || loading || !overview} className="grid gap-3 sm:grid-cols-2 disabled:opacity-60">
+            <label className="text-sm text-ink" htmlFor="background-daily-limit">Background daily limit (USD)
+              <input id="background-daily-limit" inputMode="decimal" placeholder="No additional cap" value={backgroundDraft.daily}
+                onChange={(e) => { setBackgroundDraft((value) => ({ ...value, daily: e.target.value })); setNotice(null); }}
+                aria-describedby="background-limits-help" className="mt-1 block w-full rounded-lg border border-slate px-3 py-2" />
+            </label>
+            <label className="text-sm text-ink" htmlFor="background-monthly-limit">Background monthly limit (USD)
+              <input id="background-monthly-limit" inputMode="decimal" placeholder="No additional cap" value={backgroundDraft.monthly}
+                onChange={(e) => { setBackgroundDraft((value) => ({ ...value, monthly: e.target.value })); setNotice(null); }}
+                aria-describedby="background-limits-help" className="mt-1 block w-full rounded-lg border border-slate px-3 py-2" />
+            </label>
+          </fieldset>
+          <p id="background-limits-help" className="mt-2 text-xs text-ink/60">Enter 0 to pause paid background work. Leave a field blank to remove that additional cap. Changing a limit does not reset spending. Manual Deep search uses your overall allowance.</p>
+          <button type="submit" disabled={busy || loading || !overview} className="mt-3 rounded-lg bg-ink px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "Saving…" : "Save background limits"}</button>
+        </form>
+      </div>
       <p className="mt-3 text-xs text-ink/50">Spending is estimated from recorded API usage and may include work in progress. Requests already running can finish and take spending above a limit. Work that spans midnight counts toward the day it began. API key verification and usage outside this app are not included.</p>
     </section>
   );

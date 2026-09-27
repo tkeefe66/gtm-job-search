@@ -15,7 +15,7 @@ import { postingDetailFrom } from "@/lib/posting-detail";
 import { betterCompanyName } from "@/lib/company-name";
 import { notAPosting } from "@/lib/not-a-posting";
 import { autoFileStatus, shouldAutoFile } from "@/lib/fit-cutoff";
-import { readDetail, readPosting, type PostingRead } from "@/lib/posting-read";
+import { readDetail, readPosting, readPostingText, type PostingRead } from "@/lib/posting-read";
 import { describeWriteFailure } from "@/lib/write-failure";
 import {
   NORMALIZED_COMPANY_SQL,
@@ -25,6 +25,7 @@ import {
 } from "@/lib/role-key";
 import type { Role } from "@/lib/types";
 import { excludedJobSource } from "@/lib/job-source-policy";
+import {withAIAttribution} from "./ai-attribution";
 
 export interface IngestCompanyContext {
   tagline?: string | null;
@@ -57,6 +58,8 @@ export interface IngestOptions {
    * holds.
    */
   preRead?: Record<string, PostingRead>;
+  /** Employer API text already fetched by a verified board snapshot. */
+  postingBodies?: Record<string,string>;
   /**
    * How many postings this ingest may read, when it has to read them itself.
    * Defaults to MAX_INGEST_READS, which exists to fit the crawler's single
@@ -267,7 +270,9 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
       budget--;
       reads.set(
         i,
-        await readPosting({
+        opts.postingBodies?.[links[i].url] ? await readPostingText({
+          text:opts.postingBodies[links[i].url],company,roleTitle:fresh[i].role_title,label:`ingestRoles(${source})`,
+        }) : await readPosting({
           url: links[i].url,
           company,
           roleTitle: fresh[i].role_title,
@@ -381,7 +386,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           await recordGradeFailure(jobRes.job.id, gradingLease, 1, {kind:"blocked", message:paused});
           return;
         }
-        const scored = await scoreFit({
+        const scored = await withAIAttribution({jobId:jobRes.job.id,phase:"fit_grading"},()=>scoreFit({
           company: storedCompany,
           role_title: role.role_title,
           company_description: companyDescription,
@@ -394,7 +399,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
           // and nothing here drops a role for being below the floor.
           salary_range: role.salary_range || "",
           fitInputs,
-        });
+        }));
         if (scored.score > 0) {
           // Filed away rather than left New when the posting was READ and still
           // scored below the bar — see lib/fit-cutoff.ts for why the read is a
@@ -426,6 +431,60 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
   );
 
   return { added, skipped, seenTitles };
+}
+
+/** A changed employer listing can refresh only the crawler's untouched rows. */
+export const CLAIM_CRAWL_REFRESH_SQL = `update jobs set grading_lease=$4, grading_next_at=now()+interval '30 minutes'
+  where tenant_id=$1 and id=$2 and updated_at=$3
+    and source='Crawl' and status='New' and not grading_chosen and not never_live
+    and (grading_lease is null or grading_next_at < now()) returning id`;
+export const SAVE_CRAWL_REFRESH_SQL = `update jobs set posting=$5::jsonb,key_skills=$6,department=$7,
+  location=coalesce(nullif($8,''),location),salary_range=coalesce(nullif($9,''),salary_range),fit_score=$10,fit_summary=$11,
+  role_title=$12,
+  grading_state='graded',grading_error=null,grading_lease=null,grading_next_at=null,updated_at=now()
+  where tenant_id=$1 and id=$2 and grading_lease=$3 and updated_at=$4
+    and source='Crawl' and status='New' and not grading_chosen and not never_live returning id`;
+
+export async function refreshChangedCrawlRole(opts:{company:string;role:Role;body?:string;fitInputs:FitInputs;dryRun?:boolean}):Promise<boolean> {
+  const tenant=await resolveTenantId();
+  const {data,error}=await rawQuery<{id:string;source:string;status:string;grading_chosen:boolean;never_live:boolean;updated_at:string;company_description:string|null}>(
+    `select id,source,status,grading_chosen,never_live,updated_at::text as updated_at,company_description from jobs
+      where tenant_id=$1 and ${NORMALIZED_COMPANY_SQL}=$2 and (job_url=$3 or lower(role_title)=lower($4)) order by created_at limit 1`,
+    [tenant,normalizeCompanyName(opts.company),opts.role.job_url,opts.role.role_title],tenant);
+  const failure=describeWriteFailure(error?.message,"read changed crawl role");
+  if(failure!==undefined) throw new Error(failure);
+  const row=data[0];
+  if(!row) return false;
+  // A protected row is intentionally handled: repeated crawls must not spend
+  // anything on a user choice or keep trying to overwrite its source fields.
+  if(row.source!=="Crawl"||row.status!=="New"||row.grading_chosen||row.never_live) return true;
+  if(opts.dryRun) return false;
+  if(await gradingPaused()) return false;
+  const lease=randomUUID();
+  const claimed=await rawQuery(CLAIM_CRAWL_REFRESH_SQL,[tenant,row.id,row.updated_at,lease],tenant);
+  const claimFailure=describeWriteFailure(claimed.error?.message,"claim changed crawl role");
+  if(claimFailure!==undefined) throw new Error(claimFailure);
+  if(claimed.data.length===0) return false;
+  try {
+    const read=await withAIAttribution({jobId:row.id,phase:"posting_refresh"},()=>opts.body ? readPostingText({text:opts.body!,company:opts.company,roleTitle:opts.role.role_title,label:"changed crawl listing"}) :
+      readPosting({url:opts.role.job_url,company:opts.company,roleTitle:opts.role.role_title,label:"changed crawl listing"}));
+    if(read.kind!=="read") return false;
+    const score=await withAIAttribution({jobId:row.id,phase:"fit_refresh"},()=>scoreFit({company:opts.company,role_title:opts.role.role_title,company_description:row.company_description??"",
+      key_skills:read.summary,fit_summary:opts.role.fit_signal,department:read.department,
+      location:opts.role.location,salary_range:opts.role.salary_range,fitInputs:opts.fitInputs}));
+    if(score.score<=0) return false;
+    const saved=await rawQuery(SAVE_CRAWL_REFRESH_SQL,[tenant,row.id,lease,row.updated_at,JSON.stringify(readDetail(read)),read.summary,
+      read.department,opts.role.location,opts.role.salary_range,score.score,score.rationale??"",opts.role.role_title],tenant);
+    const saveFailure=describeWriteFailure(saved.error?.message,"save changed crawl role");
+    if(saveFailure!==undefined) throw new Error(saveFailure);
+    return saved.data.length>0;
+  } finally {
+    // A failed refresh preserves its prior grade/data. Releasing only our own
+    // lease cannot clear a newer grading worker's claim.
+    const released=await rawQuery("update jobs set grading_lease=null,grading_next_at=null where tenant_id=$1 and id=$2 and grading_lease=$3",[tenant,row.id,lease],tenant);
+    const releaseFailure=describeWriteFailure(released.error?.message,"release changed crawl role");
+    if(releaseFailure!==undefined) throw new Error(releaseFailure);
+  }
 }
 
 interface UpgradedLink {

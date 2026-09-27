@@ -5,6 +5,7 @@ import { billingScope, recordUsage } from "./billing-context";
 import { providerFor } from "./providers/registry";
 import { mustRefuseSearch } from "./providers/types";
 import { ANTHROPIC_DEFAULT_MODEL } from "./providers/anthropic-pricing";
+import { effectiveSearchMode } from "./providers/effective-search-mode";
 import type { Completion, Provider } from "./providers/types";
 
 /**
@@ -58,7 +59,18 @@ async function routing(): Promise<{ provider: Provider; apiKey: string; model: s
       maxSearches: null,
     };
   }
-  const provider = providerFor(s.provider);
+  const original = providerFor(s.provider);
+  const provider: Provider = s.trackCall ? {
+    ...original,
+    complete: opts => s.trackCall!({ kind: "complete", maxTokens: opts.maxTokens }, () => original.complete(opts)),
+    searchAndComplete: opts => {
+      const searchMode = effectiveSearchMode(s.provider, opts.model, opts.searchMode);
+      return s.trackCall!({ kind: "search", maxTokens: opts.maxTokens,
+        ...(opts.maxSearches !== undefined ? { maxSearches: opts.maxSearches } : {}),
+        searchMode,
+      }, () => original.searchAndComplete({ ...opts, searchMode }));
+    },
+  } : original;
   const allowance = s.refreshAllowance ? await s.refreshAllowance() : s;
   let maxSearches = allowance.maxSearches;
   if (allowance.availableCents !== undefined) {
@@ -77,8 +89,11 @@ async function routing(): Promise<{ provider: Provider; apiKey: string; model: s
 }
 
 async function collect(c: Completion): Promise<string> {
-  recordUsage(c.usage);
-  await billingScope()?.flushUsage?.();
+  // The durable hook owns usage and flush before returning the response.
+  if (!billingScope()?.trackCall) {
+    recordUsage(c.usage);
+    await billingScope()?.flushUsage?.();
+  }
   return c.text;
 }
 
@@ -94,8 +109,10 @@ export interface DetailedResponse {
 }
 
 async function collectDetailed(c: Completion): Promise<DetailedResponse> {
-  recordUsage(c.usage);
-  await billingScope()?.flushUsage?.();
+  if (!billingScope()?.trackCall) {
+    recordUsage(c.usage);
+    await billingScope()?.flushUsage?.();
+  }
   return { text: c.text, stopReason: c.stopReason };
 }
 
@@ -112,6 +129,7 @@ export async function callWithWebSearch(opts: {
   prompt: string;
   maxTokens?: number;
   maxSearches?: number;
+  searchMode?: "basic" | "filtered";
 }): Promise<string> {
   const result = await callWithWebSearchDetailed(opts);
   assertModelComplete(result.stopReason);
@@ -131,6 +149,7 @@ export async function callWithWebSearchDetailed(opts: {
   prompt: string;
   maxTokens?: number;
   maxSearches?: number;
+  searchMode?: "basic" | "filtered";
 }): Promise<DetailedResponse> {
   const { provider, apiKey, model, maxSearches } = await routing();
   const requested = opts.maxSearches ?? DEFAULT_ROLE_SEARCH_MAX_SEARCHES;
@@ -147,6 +166,7 @@ export async function callWithWebSearchDetailed(opts: {
       prompt: opts.prompt,
       maxTokens: opts.maxTokens ?? ROLE_SEARCH_MAX_TOKENS,
       ...(cap !== undefined ? { maxSearches: cap } : {}),
+      ...(opts.searchMode ? { searchMode: opts.searchMode } : {}),
     })
   );
 }

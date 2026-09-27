@@ -1,6 +1,19 @@
 import { rawQuery } from "@/lib/supabase";
 import { describeWriteFailure } from "@/lib/write-failure";
-import { SPEND_LIMITS_KEY, validateSpendLimits, type SpendLimits } from "@/lib/spend-limits";
+import { SPEND_LIMITS_KEY, BACKGROUND_SPEND_LIMITS_KEY, DEFAULT_BACKGROUND_SPEND_LIMITS, validateSpendLimits, type SpendLimits } from "@/lib/spend-limits";
+
+export async function readBackgroundSpendLimits(tenantId: string): Promise<
+  { limits: SpendLimits; usesDefaults: boolean; error?: undefined } | { limits?: undefined; usesDefaults?: undefined; error: string }
+> {
+  const { data, error } = await rawQuery<{ value: unknown }>(
+    `select value from app_settings where tenant_id = $1 and key = $2`, [tenantId, BACKGROUND_SPEND_LIMITS_KEY], tenantId);
+  const failure = describeWriteFailure(error?.message, "load background spending limits");
+  if (failure !== undefined) return { error: failure };
+  if (!data.length) return { limits: { ...DEFAULT_BACKGROUND_SPEND_LIMITS }, usesDefaults: true };
+  const invalid = validateSpendLimits(data[0].value);
+  if (invalid !== undefined) return { error: "Background spending limits are invalid. Save new limits in Settings." };
+  return { limits: data[0].value as SpendLimits, usesDefaults: false };
+}
 
 export async function readSpendLimits(tenantId: string, isAdmin: boolean): Promise<
   { limits: SpendLimits; error?: undefined } | { limits?: undefined; error: string }

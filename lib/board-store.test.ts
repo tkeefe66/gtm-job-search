@@ -43,6 +43,13 @@ describe("what a remembered board lets a crawl skip", () => {
     expect(boardRecall(null).kind).toBe("resolve");
   });
 
+  test("ordinary successful fetching cannot extend expired provenance or reuse a different configured source",()=>{
+    // Mutation: use last fetch time as verification age, or ignore careers URL changes.
+    const stored={...found,verifiedAt:at(BOARD_RECHECK_DAYS+1),checkedAt:at(0),lastFetchedAt:at(0),careersUrl:"https://old.example/careers"};
+    expect(boardRecall(stored,stored.careersUrl).kind).toBe("resolve");
+    expect(boardRecall({...stored,verifiedAt:at(0)},"https://new.example/careers").kind).toBe("resolve");
+  });
+
   // An unparseable timestamp must send the crawl down the RESOLVE path, not the
   // skip path: the cost of re-resolving is seconds, the cost of skipping
   // forever on a bad value is a company that silently never uses its board.

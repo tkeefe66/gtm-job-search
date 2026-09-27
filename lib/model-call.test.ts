@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, beforeEach } from "vitest";
-import { runWithBilling } from "./billing-context";
+import { runWithBilling, recordUsage } from "./billing-context";
 
 const complete = vi.fn();
 const searchAndComplete = vi.fn();
@@ -143,4 +143,39 @@ test("text-only completion refuses incomplete JSON after recording usage", async
   const s = scope();
   await expect(runWithBilling(s, () => completeCall({ system: "s", prompt: "p" }))).rejects.toThrow();
   expect(s.outputTokens).toBe(usage.outputTokens);
+});
+
+test("tracking hook owns usage exactly once before an incomplete answer is rejected", async () => {
+  // Mutation: collect records a second usage increment after tracked dispatch.
+  complete.mockResolvedValue({ text: "partial", usage, stopReason: "max_tokens" });
+  const flush = vi.fn();
+  const trackCall = vi.fn(async (_meta, call) => { const result = await call(); recordUsage(result.usage); await flush(); return result; });
+  const s = scope({ trackCall, flushUsage: flush });
+  await expect(runWithBilling(s, () => completeCall({ system: "s", prompt: "p", maxTokens: 123 }))).rejects.toThrow();
+  expect(trackCall).toHaveBeenCalledWith({ kind: "complete", maxTokens: 123 }, expect.any(Function));
+  expect(s.inputTokens).toBe(usage.inputTokens);
+  expect(flush).toHaveBeenCalledTimes(1);
+});
+test("search hook receives effective cap and explicit mode before provider dispatch", async () => {
+  // Mutation: tracking sees requested rather than effective cap, or filtered mode is dropped.
+  const trackCall = vi.fn(async (_meta, call) => { const result = await call(); recordUsage(result.usage); return result; });
+  const s = scope({ trackCall, maxSearches: 3 });
+  await runWithBilling(s, () => callWithWebSearch({ system: "s", prompt: "p", maxTokens: 123, maxSearches: 5, searchMode: "filtered" }));
+  expect(trackCall).toHaveBeenCalledWith({ kind: "search", maxTokens: 123, maxSearches: 3, searchMode: "filtered" }, expect.any(Function));
+  expect(searchAndComplete.mock.calls[0][0]).toMatchObject({ maxSearches: 3, searchMode: "filtered" });
+  expect(s.searches).toBe(usage.searches);
+});
+
+test.each([
+  { provider: "anthropic" as const, model: "claude-haiku-4-5-20251001", requested: "filtered" as const, effective: "basic" },
+  { provider: "anthropic" as const, model: "claude-sonnet-4-6", requested: undefined, effective: "basic" },
+  { provider: "anthropic" as const, model: "claude-sonnet-4-6", requested: "filtered" as const, effective: "filtered" },
+  { provider: "openai" as const, model: "gpt-4.1", requested: "filtered" as const, effective: "basic" },
+])("search hook records actual $effective mode for $provider/$model requested $requested", async ({provider,model,requested,effective}) => {
+  // Mutation: persist requested filtering when the selected adapter/model uses basic search.
+  const trackCall = vi.fn(async (_meta, call) => call());
+  await runWithBilling(scope({ provider, model, trackCall }), () =>
+    callWithWebSearch({ system: "s", prompt: "p", maxSearches: 5, searchMode: requested }));
+  expect(trackCall).toHaveBeenCalledWith(expect.objectContaining({ kind: "search", searchMode: effective }), expect.any(Function));
+  expect(searchAndComplete).toHaveBeenCalledWith(expect.objectContaining({ searchMode: effective }));
 });

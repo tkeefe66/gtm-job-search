@@ -8,7 +8,7 @@ function fakeClient(response: unknown) {
 
 const textOnly = {
   content: [{ type: "text", text: "hello" }],
-  usage: { input_tokens: 100, output_tokens: 20 },
+  usage: { input_tokens: 100, output_tokens: 20, server_tool_use: { web_search_requests: 0 } },
 };
 
 describe("the Anthropic adapter", () => {
@@ -52,7 +52,7 @@ describe("the Anthropic adapter", () => {
         { type: "server_tool_use", name: "web_search", input: { query: "b" } },
         { type: "text", text: "done" },
       ],
-      usage: { input_tokens: 10, output_tokens: 5 },
+      usage: { input_tokens: 10, output_tokens: 5, server_tool_use: { web_search_requests: 2 } },
     });
     const p = createAnthropicProvider({ createClient: factory });
 
@@ -130,7 +130,7 @@ describe("the Anthropic adapter", () => {
   test("a json schema is sent as a forced tool, because constrained decoding is what makes weak models return parseable JSON", async () => {
     const { factory, create } = fakeClient({
       content: [{ type: "tool_use", name: "emit", input: { score: 4 } }],
-      usage: { input_tokens: 10, output_tokens: 5 },
+      usage: { input_tokens: 10, output_tokens: 5, server_tool_use: { web_search_requests: 0 } },
     });
     const p = createAnthropicProvider({ createClient: factory });
 
@@ -152,7 +152,7 @@ describe("stop_reason", () => {
   test("searchAndComplete reports the stop reason the API gave", async () => {
     const { factory } = fakeClient({
       content: [{ type: "text", text: "I found a careers page." }],
-      usage: { input_tokens: 10, output_tokens: 5 },
+      usage: { input_tokens: 10, output_tokens: 5, server_tool_use: { web_search_requests: 0 } },
       stop_reason: "max_tokens",
     });
     const p = createAnthropicProvider({ createClient: factory });

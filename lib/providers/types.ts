@@ -20,9 +20,11 @@ export type ProviderId = "anthropic" | "openai" | "google";
 export type SearchCapEnforcement = "in-request" | "none";
 
 export interface Usage {
-  /** EXCLUDING cached input. Normalised across providers. */
+  /** Fresh input only, EXCLUDING cache reads and cache writes. */
   inputTokens: number;
   cachedInputTokens: number;
+  cacheWrite5mTokens?: number;
+  cacheWrite1hTokens?: number;
   outputTokens: number;
   /** Counted by the adapter from what the model ISSUED, never from the cap. */
   searches: number;
@@ -43,6 +45,17 @@ export interface Completion {
    * the gap is visible at the seam instead of being silently defaulted.
    */
   stopReason: string | null;
+  providerRequestId?: string | null;
+  providerResponseId?: string | null;
+  usageSource?: "provider" | "inferred";
+}
+
+export interface AIRequestMeta {
+  kind: "complete" | "search";
+  maxTokens: number;
+  maxSearches?: number;
+  /** Actual selected tool mode, after provider/model capability resolution. */
+  searchMode?: "basic" | "filtered";
 }
 
 export interface CallOpts {
@@ -62,6 +75,8 @@ export interface CompleteOpts extends CallOpts {
 
 export interface SearchOpts extends CallOpts {
   maxSearches?: number;
+  /** Explicit company fallback opt-in; unsupported models keep basic search. */
+  searchMode?: "basic" | "filtered";
 }
 
 /**

@@ -4,6 +4,7 @@ import { scoreFit } from "@/app/actions/parse-role";
 import { loadScoringInputs } from "./search-criteria";
 import { resolveTenantId } from "./tenant";
 import { rawQuery } from "./supabase";
+import { withAIAttribution } from "./ai-attribution";
 import { withBudget } from "./metered";
 import { autoFileStatus, shouldAutoFile } from "./fit-cutoff";
 import { scoringArgsFor, type ScoredJobRow } from "./rescore-scope";
@@ -13,7 +14,7 @@ import { gradingPaused, recordGradeFailure, updateMissingGrade } from "./grading
 export interface RecoveryResult { graded: number; attempted: number; error?: string }
 
 /** One role per request keeps recovery below the proxy timeout and budgets current. */
-export async function recoverMissingGrade(isAdmin: boolean): Promise<RecoveryResult> {
+export async function recoverMissingGrade(isAdmin: boolean, workload: "foreground" | "background" = "foreground"): Promise<RecoveryResult> {
   const paused = await gradingPaused();
   if (paused) return { graded: 0, attempted: 0, error: paused };
   const statuses = await getJobStatuses();
@@ -22,14 +23,14 @@ export async function recoverMissingGrade(isAdmin: boolean): Promise<RecoveryRes
   const fitInputs = await loadScoringInputs();
   if (!fitInputs.fitBrain.trim()) return { graded: 0, attempted: 0, error: "Finish your profile in Settings before retrying grades." };
   const tenant = await resolveTenantId();
-  const budget = await withBudget({ action: "score-fit", estimateCents: 2, isAdmin, fn: async (): Promise<RecoveryResult> => {
+  const budget = await withBudget({ action: "score-fit", workload, estimateCents: 2, isAdmin, fn: async (): Promise<RecoveryResult> => {
     const lease = randomUUID();
     const { data, error } = await rawQuery<ScoredJobRow & {grading_attempts:number; grading_chosen:boolean}>(CLAIM_GRADE_SQL, [tenant,terminal,lease], tenant);
     if (error) return { graded: 0, attempted: 0, error: "Could not claim a missing grade. Try again shortly." };
     const row = data[0];
     if (!row) return { graded: 0, attempted: 0 };
     try {
-      const scored = await scoreFit({ ...scoringArgsFor(row), fitInputs });
+      const scored = await withAIAttribution({company:row.company,jobId:row.id,trigger:workload==="background"?"recovery":"manual",phase:"grading"}, () => scoreFit({ ...scoringArgsFor(row), fitInputs }));
       if (scored.score <= 0) {
         const failure = { kind: scored.failureKind ?? "transient" as const,
           message: scored.error || "Grading failed temporarily. It will retry automatically." };

@@ -9,8 +9,12 @@ import { readCompanyInput } from "@/lib/company-input";
 import { crawlCompany, type CrawlOutcome } from "@/lib/crawler";
 import { DEFAULT_BATCH_LIMIT, DUE_COMPANIES_SQL, crawlIntervalError } from "@/lib/crawl-schedule";
 import { findExistingCompany } from "@/lib/find-existing-company";
-import { normalizeCompanyName } from "@/lib/role-key";
+import { normalizeCompanyName, companyIdentityKey } from "@/lib/role-key";
 import { watchlistSignalFields } from "@/lib/watchlist-signal";
+import { withAIAttribution } from "@/lib/ai-attribution";
+import { readCompanySpendSummaries, type CompanySpendSummary } from "@/lib/ai-ledger";
+import type { CrawlTrigger } from "@/lib/crawl-policy";
+export type { CompanySpendSummary } from "@/lib/ai-ledger";
 import { withBudget } from "@/lib/metered";
 import { rawQuery, supabase } from "@/lib/supabase";
 import { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
@@ -496,12 +500,14 @@ export async function trackCompanyByName(
   // Metered for the same reason checkCompanyNow is: tracking a company runs a
   // full crawl immediately, and an unmetered one bills the platform key.
   const actor = await requireActor();
-  const budget = await withBudget({
+  const budget = await withAIAttribution({company,trigger:"on-track"}, () => withBudget({
     action: "crawl-on-track",
+    workload: "background",
+    allowFreeWork: true,
     estimateCents: 10,
     isAdmin: actor.isAdmin,
-    fn: () => crawlCompany(company),
-  });
+    fn: () => crawlCompany(company, {trigger:"automatic"}),
+  }));
 
   // The company IS now tracked — the write above succeeded — so a refused crawl
   // is reported as an outcome rather than as a failure to track. Saying "could
@@ -600,9 +606,17 @@ export async function renameTrackedCompany(
        update jobs set company = $2 where tenant_id = $3 and company = $1
      ), d as (
        update discovered_roles set company = $2 where tenant_id = $3 and company = $1
+     ), ao as (
+       update ai_operations set company = $2 where tenant_id = $3 and company = $1
+     ), ar as (
+       update ai_usage_requests set company = $2 where tenant_id = $3 and company = $1
+     ), cb as (
+       delete from company_boards where tenant_id = $3 and company_key = $4
+     ), cs as (
+       delete from company_crawl_snapshots where tenant_id = $3 and company_key = $4
      )
      update crawl_runs set company = $2 where tenant_id = $3 and company = $1`,
-    [target.company, nextName, tenantId],
+    [target.company, nextName, tenantId, companyIdentityKey(target.company)],
     tenantId
   );
 
@@ -731,17 +745,19 @@ export async function setCareersUrl(
  * `estimateCents: 10` matches the per-company figure the cron route uses
  * (`10 * slice.limit` for a batch).
  */
-export async function checkCompanyNow(company: string): Promise<CrawlOutcome> {
+export async function checkCompanyNow(company: string, trigger: "check" | "deep" = "check"): Promise<CrawlOutcome> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   const actor = await requireActor();
 
-  const budget = await withBudget({
+  const mode: CrawlTrigger = trigger === "deep" ? "deep" : "check";
+  const budget = await withAIAttribution({company,trigger:"manual"}, () => withBudget({
     action: "crawl-now",
+    allowFreeWork: true,
     estimateCents: 10,
     isAdmin: actor.isAdmin,
-    fn: () => crawlCompany(company),
-  });
+    fn: () => crawlCompany(company, {trigger:mode}),
+  }));
 
   // Presence, not truthiness: `error` can be an empty string, and a capped
   // refusal is a sentence rather than a failure. Both surface through
@@ -848,9 +864,23 @@ export async function setCrawlInterval(
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
 
-  const { error } = await supabase.forTenant(await resolveTenantId())
-    .from("watchlist")
-    .update({ crawl_interval_days: days })
-    .eq("company", target.company);
+  const tenantId = await resolveTenantId();
+  const { error } = await rawQuery(`update watchlist set crawl_interval_days=$3,
+    next_attempt_at=coalesce(last_attempted_at,last_checked_at) + ($3 || ' days')::interval
+    where tenant_id=$1 and company=$2`,[tenantId,target.company,days],tenantId);
   return { error: error?.message };
+}
+
+export async function setAutomaticPaidSearch(company:string, enabled:boolean):Promise<{error?:string}> {
+  await requireActor();
+  if(typeof enabled!=="boolean")return{error:"Choose whether automatic paid search is enabled."};
+  const target=await resolveWriteTarget(company);
+  if(target.error!==undefined)return{error:target.error};
+  const tenantId=await resolveTenantId();
+  const {error}=await rawQuery(`update watchlist set allow_paid_search=$3 where tenant_id=$1 and company=$2`,[tenantId,target.company,enabled],tenantId);
+  return{error:describeWriteFailure(error?.message,"save automatic paid search")};
+}
+export async function getCompanySpendSummaries():Promise<{summaries:CompanySpendSummary[];error?:string}> {
+  const actor=await requireActor();
+  return readCompanySpendSummaries(actor.tenantId);
 }

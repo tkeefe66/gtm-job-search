@@ -2,6 +2,11 @@ import { beforeEach, expect, test, vi } from "vitest";
 let spent = 0;
 let onRead: (() => Promise<void>) | undefined;
 const providerCall = vi.fn();
+vi.mock("./ai-ledger",()=>({
+  recoverStaleAIOperations:async()=>({recovered:0}),beginAIRequest:async()=>"request",
+  finishAIRequest:async()=>{},markAIRequestUnknown:async()=>{},
+  exactCompletionCost:(_ctx:unknown,c:{usage:{inputTokens:number;searches:number}})=>(c.usage.inputTokens+c.usage.searches)*10000,
+}));
 vi.mock("@/lib/tenant", () => ({ resolveTenantId: async () => "tenant-a" }));
 vi.mock("@/lib/secret-box", () => ({ open: () => "test-key" }));
 vi.mock("@/lib/supabase", () => ({ rawQuery: async (sql: string) => ({ data:

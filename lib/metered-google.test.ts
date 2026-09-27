@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 const reconcileSpend = vi.fn(async () => ({}));
-vi.mock("@/lib/usage-store", () => ({ reconcileSpend: (...args: unknown[]) => reconcileSpend(...args), reserveSpend: vi.fn() }));
+vi.mock("@/lib/usage-store", () => ({ reconcileSpend: (...args: unknown[]) => reconcileSpend(...args), reserveSpend: vi.fn(async()=>({ok:true,spentCents:10,availableCents:Infinity})) }));
 vi.mock("@/lib/tenant", () => ({ resolveTenantId: async () => "tenant-test" }));
 vi.mock("@/lib/secret-box", () => ({ open: () => "test-key" }));
 vi.mock("@/lib/supabase", () => ({ rawQuery: async (sql: string) => ({ data: sql.includes("from tenant_api_keys") ? [{ provider: "google", model: "gemini-2.5-flash" }] : [], error: null }) }));

@@ -3,13 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   checkCompanyNow,
+  getCompanySpendSummaries,
   getTrackedCompanies,
   renameTrackedCompany,
   setCareersUrl,
+  setAutomaticPaidSearch,
   setCrawlInterval,
   setIgnoreLocationRule,
   setTracking,
   trackCompanyByName,
+  type CompanySpendSummary,
 } from "@/app/actions/watchlist";
 import { readCompanyInput } from "@/lib/company-input";
 import { isDue, nextCheckDue } from "@/lib/crawl-schedule";
@@ -20,6 +23,9 @@ import type { CrawlOutcome } from "@/lib/crawler";
 import type { TrackedCompany } from "@/lib/types";
 import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
+import CompanyCheckDetails from "./CompanyCheckDetails";
+import { crawlOutcomeText } from "@/lib/watchlist-display";
+import { describeWriteFailure } from "@/lib/write-failure";
 
 // The dot colour and its sentence in one place, so the legend can never
 // describe a colour the rows do not use. Kept in components/ deliberately:
@@ -55,6 +61,10 @@ const STATE_STYLE: Record<
     label: "Needs a URL",
     legend: "No careers page found — needs you",
   },
+  skipped: { dot: "bg-[#A8A29E]", label: "Deferred", legend: "Check deferred — see the reason" },
+  partial: { dot: "bg-[#92400E]", label: "Partial", legend: "Only part of the check completed" },
+  unchanged: { dot: "bg-[#22C55E]", label: "Unchanged", legend: "Source checked; nothing changed" },
+  error: { dot: "bg-[#92400E]", label: "Check failed", legend: "Last check failed — see the reason" },
 };
 
 // Legend order is reading order, not the enum's: healthy first, the ones that
@@ -77,6 +87,8 @@ type Sort = "original" | "company-asc" | "company-desc" | "next-asc" | "next-des
 
 export default function Watchlist() {
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
+  const [costs, setCosts] = useState<CompanySpendSummary[]>([]);
+  const [costError, setCostError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [newCompany, setNewCompany] = useState("");
   const [tracking, setTrackingBusy] = useState(false);
@@ -133,19 +145,25 @@ export default function Watchlist() {
 
   async function load() {
     setLoading(true);
-    const res = await getTrackedCompanies();
-    if (res.error) setNotice(`Couldn't load your list: ${res.error}`);
-    setCompanies(res.companies);
-    setLoading(false);
+    try {
+      const [list, spending] = await Promise.allSettled([getTrackedCompanies(), getCompanySpendSummaries()]);
+      if (list.status === "rejected") setNotice("Could not load your list. Refresh and try again.");
+      else {
+        const failure = describeWriteFailure(list.value.error, "load your list");
+        if (failure !== undefined) setNotice(failure);
+        else setCompanies(list.value.companies);
+      }
+      if (spending.status === "rejected") { setCosts([]); setCostError("Could not load company costs. Refresh to try again."); }
+      else {
+        const failure = describeWriteFailure(spending.value.error, "load company costs");
+        setCostError(failure ?? null);
+        setCosts(failure === undefined ? spending.value.summaries : []);
+      }
+    } finally { setLoading(false); }
   }
 
   function describe(outcome: CrawlOutcome): string {
-    if (outcome.status === "error") return outcome.error ?? "Check failed.";
-    if (outcome.status === "needs_url") {
-      return outcome.error ?? "No careers page found — add one below.";
-    }
-    if (outcome.status === "empty") return "No matching roles right now.";
-    return `${outcome.rolesFound} role${outcome.rolesFound === 1 ? "" : "s"} found, ${outcome.newRoles} new.`;
+    return crawlOutcomeText(outcome);
   }
 
   async function handleTrack(e: React.FormEvent) {
@@ -169,13 +187,16 @@ export default function Watchlist() {
     setNotice(null);
     try {
       const res = await trackCompanyByName(name, careersUrl);
-      if (res.error) setNotice(res.error);
-      else if (res.outcome) setNotice(`${name}: ${describe(res.outcome)}`);
-      if (!res.error) {
+      const failure = describeWriteFailure(res.error, "track this company");
+      if (failure !== undefined) setNotice(failure);
+      else if (res.outcome) setNotice(`${name} is tracked. ${describe(res.outcome)}`);
+      if (failure === undefined) {
         setNewCompany("");
         setPendingUrl(null);
       }
       await load();
+    } catch {
+      setNotice("Could not confirm the company was tracked. Reload your list before trying again.");
     } finally {
       setTrackingBusy(false);
     }
@@ -186,8 +207,9 @@ export default function Watchlist() {
     setNotice(null);
     try {
       const res = await renameTrackedCompany(from, to);
-      if (res.error) {
-        setNotice(res.error);
+      const failure = describeWriteFailure(res.error, "rename this company");
+      if (failure !== undefined) {
+        setNotice(failure);
         return;
       }
       // Both keyed by company name, so both would point at a row that no longer
@@ -210,13 +232,15 @@ export default function Watchlist() {
     }
   }
 
-  async function handleCheckNow(company: string) {
+  async function handleCheckNow(company: string, trigger: "check" | "deep" = "check") {
     setChecking(company);
     setNotice(null);
     try {
-      const outcome = await checkCompanyNow(company);
+      const outcome = await checkCompanyNow(company, trigger);
       setNotice(`${company}: ${describe(outcome)}`);
       await load();
+    } catch {
+      setNotice(`${company}: Could not confirm the check completed. Reload before retrying.`);
     } finally {
       setChecking(null);
     }
@@ -226,7 +250,8 @@ export default function Watchlist() {
     setRowBusy(company, true);
     try {
       const res = await setTracking(company, enabled);
-      if (res.error) setNotice(res.error);
+      const failure = describeWriteFailure(res.error, "change tracking");
+      if (failure !== undefined) setNotice(failure);
       await load();
     } finally {
       setRowBusy(company, false);
@@ -237,11 +262,25 @@ export default function Watchlist() {
     setRowBusy(company, true);
     try {
       const res = await setIgnoreLocationRule(company, ignore);
-      if (res.error) setNotice(res.error);
+      const failure = describeWriteFailure(res.error, "save the location setting");
+      if (failure !== undefined) setNotice(failure);
       await load();
     } finally {
       setRowBusy(company, false);
     }
+  }
+
+  async function handleAutomaticPaidSearch(company: string, enabled: boolean) {
+    setRowBusy(company, true);
+    setNotice(null);
+    try {
+      const res = await setAutomaticPaidSearch(company, enabled);
+      const failure = describeWriteFailure(res.error, "save automatic paid search");
+      if (failure !== undefined) { setNotice(failure); return; }
+      await load();
+    } catch {
+      setNotice("Could not confirm that automatic paid search was saved. Reload before trying again.");
+    } finally { setRowBusy(company, false); }
   }
 
   async function handleSaveUrl(company: string) {
@@ -254,8 +293,9 @@ export default function Watchlist() {
     setRowBusy(company, true);
     try {
       const res = await setCareersUrl(company, url);
-      if (res.error) {
-        setNotice(res.error);
+      const failure = describeWriteFailure(res.error, "save the careers page");
+      if (failure !== undefined) {
+        setNotice(failure);
         return;
       }
       // Drop the draft entirely (not set to "") so the input falls back to
@@ -302,7 +342,7 @@ export default function Watchlist() {
       trackingEnabled: c.tracking_enabled,
       lastCrawlStatus: c.last_crawl_status,
       consecutiveFailures: c.consecutive_failures,
-      isDue: isDue(c.last_checked_at, c.crawl_interval_days),
+      isDue: isDue(c.last_attempted_at ?? c.last_checked_at, c.crawl_interval_days, new Date(), c.next_attempt_at),
     });
   }
 
@@ -333,8 +373,8 @@ export default function Watchlist() {
       if (sort === "company-asc") return nameOrder;
       if (sort === "company-desc") return -nameOrder;
       // Never-checked companies are due immediately, ahead of dated checks.
-      const aDue = nextCheckDue(a.last_checked_at, a.crawl_interval_days)?.getTime() ?? -Infinity;
-      const bDue = nextCheckDue(b.last_checked_at, b.crawl_interval_days)?.getTime() ?? -Infinity;
+      const aDue = nextCheckDue(a.last_attempted_at ?? a.last_checked_at, a.crawl_interval_days, a.next_attempt_at)?.getTime() ?? -Infinity;
+      const bDue = nextCheckDue(b.last_attempted_at ?? b.last_checked_at, b.crawl_interval_days, b.next_attempt_at)?.getTime() ?? -Infinity;
       const dueOrder = aDue === bDue ? 0 : aDue < bDue ? -1 : 1;
       return (sort === "next-asc" ? dueOrder : -dueOrder) || nameOrder;
     });
@@ -353,7 +393,7 @@ export default function Watchlist() {
   function renderRow(c: TrackedCompany, i: number) {
     const state = stateOf(c);
     const style = STATE_STYLE[state];
-    const due = nextCheckDue(c.last_checked_at, c.crawl_interval_days);
+    const due = nextCheckDue(c.last_attempted_at ?? c.last_checked_at, c.crawl_interval_days, c.next_attempt_at);
     const open = openRows.has(c.company);
     const busy = busyRows.has(c.company);
     // Whatever the tenant's own hiringSignal.extraFields named — contract_value
@@ -382,7 +422,7 @@ export default function Watchlist() {
             <span className="hidden truncate text-xs text-ink/45 sm:block">
               {c.signal ?? c.tagline ?? ""}
             </span>
-            {needsYou(state) && (
+            {(needsYou(state) || ["skipped", "partial", "unchanged", "error"].includes(state)) && (
               <span className="flex-none rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-medium text-[#92400E]">
                 {style.label}
               </span>
@@ -496,9 +536,6 @@ export default function Watchlist() {
                 {c.signal && <p className="mt-1 text-sm text-ink/70">{c.signal}</p>}
                 <p className="mt-1.5 text-xs text-ink/40">
                   Added {formatDate(c.added_at)}
-                  {c.last_checked_at
-                    ? ` · Last checked ${formatDate(c.last_checked_at)}`
-                    : " · Never checked"}
                 </p>
                 {state === "empty" && (
                   <p className="mt-1 text-xs text-ink/40">
@@ -508,7 +545,6 @@ export default function Watchlist() {
                 {state === "failing" && (
                   <p className="mt-1 text-xs text-[#92400E]">
                     Failing — {c.consecutive_failures} checks in a row.
-                    {c.last_crawl_error ? ` ${c.last_crawl_error}` : ""}
                   </p>
                 )}
               </div>
@@ -529,6 +565,13 @@ export default function Watchlist() {
                 Search here even outside my location rule
               </label>
             </div>
+
+            <CompanyCheckDetails company={c} summary={costs.find((item) => item.company === c.company)} costError={costError} />
+            <label className="mt-3 flex items-start gap-2 text-xs text-ink/60">
+              <input type="checkbox" className="mt-0.5" checked={c.allow_paid_search ?? false} disabled={busy}
+                onChange={(e) => void handleAutomaticPaidSearch(c.company, e.target.checked)} />
+              Allow automatic paid web search when direct sources cannot be read (up to 5 searches per check; background limits apply).
+            </label>
 
             <div
               className={`mt-3 flex flex-wrap items-center gap-2 ${
@@ -567,10 +610,14 @@ export default function Watchlist() {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => handleCheckNow(c.company)}
-                disabled={!!checking}
+                disabled={!!checking || busy}
                 className="rounded-md border border-ink px-3 py-1.5 text-sm font-medium transition hover:bg-ink hover:text-white disabled:opacity-50"
               >
                 {checking === c.company ? "Checking…" : "Check now"}
+              </button>
+              <button onClick={() => void handleCheckNow(c.company, "deep")} disabled={!!checking || busy}
+                className="rounded-md border border-slate px-3 py-1.5 text-sm font-medium transition hover:border-ink disabled:opacity-50">
+                Deep search · up to 5 paid searches
               </button>
               {c.careers_url && (
                 <a
@@ -591,6 +638,7 @@ export default function Watchlist() {
                 Stop tracking
               </button>
             </div>
+            <p className="mt-2 text-xs text-ink/45">Check now reads direct sources. Deep search can use paid web search when needed. Processing new or changed listings may use AI.</p>
           </div>
         )}
       </div>
@@ -640,7 +688,7 @@ export default function Watchlist() {
       trackingEnabled: c.tracking_enabled,
       crawlIntervalDays: c.crawl_interval_days,
       consecutiveFailures: c.consecutive_failures,
-      lastCheckedAt: c.last_checked_at,
+      lastCheckedAt: c.last_attempted_at ?? c.last_checked_at,
       failingSince: c.failing_since,
     }))
   );
@@ -652,7 +700,7 @@ export default function Watchlist() {
           <h2 className="text-xl font-heading font-semibold">Tracked companies</h2>
           <p className="max-w-prose text-sm text-ink/60">
             Tracked companies have their careers page checked automatically. New roles
-            land in Roles, already scored.
+            land in Roles; AI grading runs within your spending limits.
           </p>
         </div>
 

@@ -70,7 +70,8 @@ test("no saved limits means no app cap", async () => {
   const result = await withBudget({ action: "test", estimateCents: 10000, isAdmin: false,
     fn: async () => billingScope()?.maxSearches });
   expect(result).toEqual({ result: null });
-  expect(reserveSpend).not.toHaveBeenCalled();
+  // Uncapped work still reserves uncertainty durably; this is not a spending ceiling.
+  expect(reserveSpend).toHaveBeenCalledWith(expect.objectContaining({dailyCeilingCents:null,monthlyCeilingCents:null,operation:expect.any(Object)}));
 });
 
 // Mutation: skip atomic reservation for a BYO user below the cap.

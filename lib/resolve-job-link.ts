@@ -5,6 +5,7 @@ import {
   boardPageUrl,
   findPosting,
   parseBoard,
+  parseBoardSnapshot,
   boardIdentityFrom,
   boardIdentityUrl,
   parsePostingBody,
@@ -31,6 +32,24 @@ import type { BoardResolution } from "./board-source";
  */
 
 const TIMEOUT_MS = 8000;
+
+export type BoardSnapshotResult =
+  | { kind: "ok"; postings: Posting[] }
+  | { kind: "missing" }
+  | { kind: "unavailable"; message: string };
+
+/** Typed enumeration transport: an outage never erases source ownership. */
+export async function fetchBoardSnapshot(vendor: BoardVendor, slug: string): Promise<BoardSnapshotResult> {
+  try {
+    const res = await safeHttp(boardApiUrl(vendor, slug), {timeoutMs:TIMEOUT_MS, headers:{Accept:"application/json"}});
+    if (res.status === 404 || res.status === 410) return {kind:"missing"};
+    if (!res.ok) return {kind:"unavailable",message:`Board returned HTTP ${res.status}. Try again later.`};
+    const postings = parseBoardSnapshot(vendor, await res.json());
+    return postings === null ? {kind:"unavailable",message:"Board returned an unrecognized listing. Try again later."} : {kind:"ok",postings};
+  } catch {
+    return {kind:"unavailable",message:"Board could not be fetched. Try again later."};
+  }
+}
 
 export interface ResolvedLink {
   url: string;

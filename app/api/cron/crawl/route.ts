@@ -5,6 +5,7 @@ import { getDueCompanies } from "@/app/actions/watchlist";
 import { repairJobLinks, type LinkRepairReport } from "@/app/actions/link-health";
 import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
 import { splitCrawlBatch } from "@/lib/crawl-fairness";
+import { withAIAttribution } from "@/lib/ai-attribution";
 import { withBudget } from "@/lib/metered";
 import { listCrawlableTenants } from "@/app/actions/admin";
 import { cronAuthorized } from "@/lib/cron-auth";
@@ -82,20 +83,8 @@ async function handleCrawl(req: Request) {
     const isAdmin = tenants.find((t) => t.id === slice.tenantId)?.isAdmin ?? false;
 
     await runAsTenant(slice.tenantId, async () => {
-      // METERED, like every interactive path. This is the only work that spends
-      // while nobody is watching, so leaving it uncapped would mean the ceiling
-      // bounded the clicks and not the thing most able to run away.
-      //
-      // A capped tenant is SKIPPED, not failed: their budget is exhausted, which
-      // is a normal state, and a nightly job that reports failure for it would
-      // cry wolf every night until the period rolled over.
-      const budget = await withBudget({
-        action: "crawl",
-        estimateCents: 10 * slice.limit,
-        isAdmin,
-        fn: async () => {
       const { companies: due, error } = await getDueCompanies(slice.limit);
-      if (error) {
+      if (error !== undefined) {
         console.error(`cron/crawl: due companies failed for a tenant — ${error}`);
         return;
       }
@@ -103,18 +92,17 @@ async function handleCrawl(req: Request) {
         const ctx = await loadRunContext();
         for (const company of due) {
           try {
-            results.push(await crawlCompany(company, { dryRun, ctx }));
+            const budget = await withAIAttribution({company,trigger:"scheduled"}, () => withBudget({
+              action:"crawl",workload:"background",allowFreeWork:true,estimateCents:10,isAdmin,
+              fn:()=>crawlCompany(company,{dryRun,ctx,trigger:"automatic"}),
+            }));
+            if (budget.result) results.push(budget.result);
+            else results.push({company,method:null,rolesFound:0,newRoles:0,status:budget.capped!==undefined?"skipped":"error",
+              error:budget.capped??budget.error??"Could not start the company check."});
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`cron/crawl: ${company} threw — ${message}`);
-            results.push({
-              company,
-              method: null,
-              rolesFound: 0,
-              newRoles: 0,
-              status: "error",
-              error: message,
-            });
+            results.push({company,method:null,rolesFound:0,newRoles:0,status:"error",error:message});
           }
         }
       }
@@ -124,7 +112,9 @@ async function handleCrawl(req: Request) {
       // links, under RLS, and reported the count as if it covered everyone.
       if (!dryRun) {
         try {
-          const report = await repairJobLinks();
+          const repaired = await withBudget({action:"link-repair",workload:"background",allowFreeWork:true,estimateCents:1,isAdmin,fn:()=>repairJobLinks()});
+          if (!repaired.result) { console.warn("cron/crawl: link repair unavailable",repaired.capped??repaired.error); return; }
+          const report = repaired.result;
           const prev = linkAcc.value;
           // Summed across tenants, not replaced. Reporting only the last
           // tenant's numbers would understate the run and look like link repair
@@ -145,16 +135,7 @@ async function handleCrawl(req: Request) {
           );
         }
       }
-        },
-      });
 
-      if (budget.capped) {
-        // Expected, not exceptional. Logged so a quiet night is explainable
-        // rather than looking like a crawler that stopped working.
-        console.log(`cron/crawl: skipped a tenant — ${budget.capped}`);
-      } else if (budget.error !== undefined) {
-        console.error(`cron/crawl: budget check failed — ${budget.error}`);
-      }
     });
   }
 

@@ -1,6 +1,7 @@
 import type { CompleteOpts, Provider, SearchOpts } from "./types";
 import { OPENAI_DEFAULT_MODEL, OPENAI_PRICED_MODELS, openaiCostCents } from "./openai-pricing";
 import { array, postJson, record, tokens, type HttpDeps } from "./http";
+import { ProviderUsageUnknownError, safeProviderId } from "./errors";
 
 export function createOpenAIProvider(deps: HttpDeps = {}): Provider {
   const fetcher = deps.fetch ?? fetch;
@@ -22,9 +23,14 @@ export function createOpenAIProvider(deps: HttpDeps = {}): Provider {
       body.tool_choice = { type: "function", name: "emit" };
       body.parallel_tool_calls = false;
     }
-    const raw = await postJson(fetcher, "OpenAI", "https://api.openai.com/v1/responses", { Authorization: `Bearer ${opts.apiKey}` }, body);
-    const usage = record(raw.usage); const cached = tokens(record(usage.input_tokens_details).cached_tokens, true); const total = tokens(usage.input_tokens);
-    if (cached > total) throw new Error("OpenAI returned invalid cached usage.");
+    const { data: raw, providerRequestId } = await postJson(fetcher, "OpenAI", "https://api.openai.com/v1/responses", { Authorization: `Bearer ${opts.apiKey}` }, body);
+    const metadata = { providerRequestId, providerResponseId: safeProviderId(raw.id), stopReason: safeProviderId(raw.status) };
+    const usage = record(raw.usage);
+    let cached: number, total: number, outputTokens: number;
+    try {
+      cached = tokens(record(usage.input_tokens_details).cached_tokens, true); total = tokens(usage.input_tokens); outputTokens = tokens(usage.output_tokens);
+      if (cached > total) throw new ProviderUsageUnknownError(metadata);
+    } catch { throw new ProviderUsageUnknownError(metadata); }
     const output = array(raw.output);
     const emitted = output.find(b => b.type === "function_call" && b.name === "emit");
     const content = output.flatMap(b => array(b.content));
@@ -42,7 +48,8 @@ export function createOpenAIProvider(deps: HttpDeps = {}): Provider {
       text: content.some(b => b.type === "refusal") || searches.some(b => b.status !== "completed")
         ? ""
         : opts.jsonSchema && typeof emitted?.arguments === "string" ? emitted.arguments : content.filter(b => b.type === "output_text" && typeof b.text === "string").map(b => b.text).join("\n").trim(),
-      usage: { inputTokens: total - cached, cachedInputTokens: cached, outputTokens: tokens(usage.output_tokens), searches: searches.length },
+      usage: { inputTokens: total - cached, cachedInputTokens: cached, outputTokens, searches: searches.length },
+      providerRequestId, providerResponseId: metadata.providerResponseId, usageSource: "provider" as const,
       stopReason,
     };
   }

@@ -36,6 +36,8 @@ export function anthropicCostCents(usage: Usage, model: string): number {
   const tokenDollars =
     (usage.inputTokens * p.input +
       usage.cachedInputTokens * p.cachedInput +
+      (usage.cacheWrite5mTokens ?? 0) * p.input * 1.25 +
+      (usage.cacheWrite1hTokens ?? 0) * p.input * 2 +
       usage.outputTokens * p.output) /
     1_000_000;
   return Math.round(tokenDollars * 100) + usage.searches * ANTHROPIC_CENTS_PER_SEARCH;

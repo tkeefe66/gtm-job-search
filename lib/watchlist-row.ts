@@ -12,7 +12,7 @@
  * arbitrary-value class written in lib/ is never generated and renders
  * unstyled through a green build.
  */
-export type RowState = "needs_url" | "failing" | "due" | "empty" | "ok";
+export type RowState = "needs_url" | "failing" | "due" | "empty" | "ok" | "skipped" | "partial" | "unchanged" | "error";
 
 export interface RowStateInput {
   trackingEnabled: boolean;
@@ -22,7 +22,7 @@ export interface RowStateInput {
 }
 
 /** A row the user has to act on — nothing the crawler will resolve by itself. */
-export const NEEDS_YOU: readonly RowState[] = ["needs_url", "failing"];
+export const NEEDS_YOU: readonly RowState[] = ["needs_url", "failing", "error", "partial", "skipped"];
 
 export function needsYou(state: RowState): boolean {
   return NEEDS_YOU.includes(state);
@@ -38,6 +38,8 @@ export function rowStateFor(input: RowStateInput): RowState {
   // to the one without.
   if (input.lastCrawlStatus === "needs_url") return "needs_url";
 
+  if (input.lastCrawlStatus === "error" || input.lastCrawlStatus === "skipped" || input.lastCrawlStatus === "partial") return input.lastCrawlStatus;
+
   // Matches the existing threshold in the row copy: three in a row is what the
   // page has always called failing.
   if (input.consecutiveFailures >= 3) return "failing";
@@ -46,6 +48,7 @@ export function rowStateFor(input: RowStateInput): RowState {
   // check, and "due" is the one that describes what happens next.
   if (input.isDue) return "due";
 
+  if (input.lastCrawlStatus === "unchanged") return "unchanged";
   if (input.lastCrawlStatus === "empty") return "empty";
 
   return "ok";

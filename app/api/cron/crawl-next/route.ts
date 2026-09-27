@@ -5,6 +5,7 @@ import { getCrawlCandidate } from "@/app/actions/watchlist";
 import { listCrawlableTenants } from "@/app/actions/admin";
 import { pickNextTenant, type TenantCandidate } from "@/lib/crawl-next";
 import { runAsPlatform, runAsTenant } from "@/lib/platform-context";
+import { withAIAttribution } from "@/lib/ai-attribution";
 import { withBudget } from "@/lib/metered";
 import { recoverMissingGrade } from "@/lib/grading-worker";
 
@@ -82,7 +83,7 @@ async function handleCrawlNext(req: Request) {
     if (!dryRun) {
       for (const tenant of tenants) {
         try {
-          const recovery = await runAsTenant(tenant.id, () => recoverMissingGrade(tenant.isAdmin));
+          const recovery = await runAsTenant(tenant.id, () => recoverMissingGrade(tenant.isAdmin, "background"));
           if (recovery.attempted > 0) {
             return NextResponse.json({ crawled: true, kind: "grading-recovery", recovery, tenantsWithWork, tenantsCapped: 0 });
           }
@@ -109,17 +110,19 @@ async function handleCrawlNext(req: Request) {
     //
     // A capped tenant is SKIPPED, not failed — an exhausted budget is a normal
     // state. Try the next candidate before ending the caller's loop.
-    const budget = await runAsTenant(pick.tenantId, () => withBudget({
+    const budget = await runAsTenant(pick.tenantId, () => withAIAttribution({company,trigger:"scheduled"}, () => withBudget({
       action: "crawl",
+      workload: "background",
+      allowFreeWork: true,
       estimateCents: 10,
       isAdmin,
       fn: async () => {
         const ctx = await loadRunContext();
-        return crawlCompany(company, { dryRun, ctx });
+        return crawlCompany(company, { dryRun, ctx, trigger:"automatic" });
       },
-    }));
+    })));
 
-    if (budget.capped) {
+    if (budget.capped !== undefined) {
       console.log(`cron/crawl-next: skipped a tenant — ${budget.capped}`);
       tenantsCapped++;
       continue;

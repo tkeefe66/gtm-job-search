@@ -19,6 +19,12 @@ export interface StoredBoard {
   /** 'read' or 'guessed' — see lib/board-source.ts. Null on a remembered failure. */
   source: string | null;
   checkedAt: string;
+  verifiedAt?: string | null;
+  lastFetchedAt?: string | null;
+  careersUrl?: string | null;
+  evidenceUrl?: string | null;
+  boardUrl?: string | null;
+  evidenceKind?: string | null;
 }
 
 /**
@@ -48,16 +54,18 @@ export type BoardRecall =
  * read-versus-guessed distinction is the whole safety story and a row that
  * cannot state it may not be acted on.
  */
-export function boardRecall(stored: StoredBoard | null): BoardRecall {
+export function boardRecall(stored: StoredBoard | null, careersUrl?: string | null): BoardRecall {
   if (!stored) return { kind: "resolve" };
+  if (careersUrl !== undefined && stored.careersUrl !== careersUrl) return {kind:"resolve"};
 
-  const checked = Date.parse(stored.checkedAt);
+  const checked = Date.parse(stored.verifiedAt ?? stored.checkedAt);
   if (!Number.isFinite(checked)) return { kind: "resolve" };
   const ageDays = (Date.now() - checked) / (24 * 60 * 60 * 1000);
   if (ageDays > BOARD_RECHECK_DAYS) return { kind: "resolve" };
 
   if (stored.vendor === null || stored.slug === null) return { kind: "skip" };
   if (stored.source !== "read" && stored.source !== "guessed") return { kind: "resolve" };
+  if (!["greenhouse", "ashby", "lever", "workable", "breezy"].includes(stored.vendor)) return {kind:"resolve"};
 
   return {
     kind: "use",

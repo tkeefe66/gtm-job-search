@@ -1,26 +1,26 @@
 import { getJobStatuses } from "@/app/actions/jobs";
 import { dispositionStatus } from "@/lib/job-dispositions";
-import { ModelResponseError } from "./model-response";
+import { ModelResponseError, assertModelComplete } from "./model-response";
 import {
   callStructured,
-  callWithWebSearch,
+  SpendLimitReachedError,
+  SearchUnavailableError,
   callWithWebSearchDetailed,
   parseJson,
 } from "@/lib/model-call";
 import { resolveTenantId } from "@/lib/tenant";
 import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
-import { ingestRoles } from "@/lib/ingest-roles";
-import { isJsShell, stripHtml, type ExtractedPage } from "@/lib/page-extract";
+import { ingestRoles, refreshChangedCrawlRole, MAX_INGEST_READS } from "@/lib/ingest-roles";
+import { isJsShell, stripHtml, MAX_PAGE_CHARS, type ExtractedPage } from "@/lib/page-extract";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
-import { boardTrust, rolesFromBoard, type BoardResolution } from "@/lib/board-source";
-import { boardRecall, type StoredBoard } from "@/lib/board-store";
-import type { BoardVendor, Posting } from "@/lib/ats-boards";
-import { companyIdentityKey } from "@/lib/role-key";
-import {
-  fetchBoardIdentity,
-  fetchBoardPostings,
-  resolveBoardForCompany,
-} from "@/lib/resolve-job-link";
+import { rolesFromBoard } from "@/lib/board-source";
+import { verifiedCompanyBoard } from "./employer-board-source";
+import { candidatesToProcess, crawlProcessingQueue, carryListingAttempts, contentFingerprint, criteriaFingerprint, listingKey, pageFingerprint, type CrawlSnapshot, type ListingSnapshot } from "./crawl-snapshot";
+import { readCrawlSnapshot, saveCrawlSnapshot, settledCrawlRoles } from "./crawl-snapshot-store";
+import { billingScope } from "./billing-context";
+import { paidSearchDecision, crawlPolicyOutcome, COMPANY_SEARCH_LIMIT, type CrawlTrigger } from "./crawl-policy";
+import { withAIAttribution, aiAttribution } from "./ai-attribution";
+import { describeWriteFailure } from "./write-failure";
 import { arrayUnder, parseOrSalvage } from "@/lib/salvage-call";
 import { ROLE_FIELDS } from "@/lib/types";
 import { NORMALIZED_COMPANY_SQL, normalizeCompanyName, normalizeTitle } from "@/lib/role-key";
@@ -41,10 +41,6 @@ import type {
   Role,
   TrackedCompany,
 } from "@/lib/types";
-
-const FETCH_TIMEOUT_MS = 10_000;
-const USER_AGENT =
-  "GTMJobSearchBot/1.0 (personal job-search tool; contact tkeefe66@gmail.com)";
 
 export interface CrawlOutcome {
   company: string;
@@ -209,8 +205,8 @@ export function runsEligibleForClosure(
   });
 }
 
-async function resolveCareersUrl(company: string): Promise<string | null> {
-  const raw = await callWithWebSearch({
+async function resolveCareersUrl(company: string, maxSearches:number): Promise<string | null> {
+  const response = await callWithWebSearchDetailed({
     system:
       "You find official careers pages. Return ONLY valid JSON, no markdown, no preamble.",
     prompt: `Find the official careers / open-roles page for the company "${company}". Return a JSON object: {"careers_url": "https://..."} — or {"careers_url": ""} if you cannot find one with confidence.`,
@@ -218,9 +214,12 @@ async function resolveCareersUrl(company: string): Promise<string | null> {
     // truncation-before-JSON failure mode documented on extractViaSearch's
     // call, silently degrading to needs_url even when a URL was found.
     maxTokens: 4000,
+    maxSearches,
+    searchMode:"filtered",
   });
+  assertModelComplete(response.stopReason);
   try {
-    const parsed = parseJson<{ careers_url: string }>(raw);
+    const parsed = parseJson<{ careers_url: string }>(response.text);
     if (!parsed || typeof parsed.careers_url !== "string") throw new ModelResponseError();
     return parsed.careers_url.trim() || null;
   } catch {
@@ -271,99 +270,10 @@ export function classifyFetchOutcome(html: string): FetchClassification {
  * blip permanently pins the company to the ~10-billed-search path.
  */
 type FetchTierResult =
-  | { kind: "roles"; roles: Role[] }
+  | { kind: "roles"; roles: Role[]; snapshot:CrawlSnapshot|null; cached:boolean; complete:boolean }
   | { kind: "shell" }
   | { kind: "unavailable" };
 
-/**
- * The BOARD tier: ask the employer's own hiring system what is open.
- *
- * Tried before the page tiers because it is the only source that is verifiable
- * rather than merely readable — the board answers with the employer's own
- * titles and canonical URLs, and answers honestly when a req closes. It costs
- * no Claude tokens for the listing itself; each role is still READ and scored
- * by ingestRoles, bounded by MAX_INGEST_READS.
- *
- * Returns null whenever the board may not source roles, which sends the company
- * down the existing fetch/search path unchanged. `boardTrust` is what decides
- * that: a guessed slug with no corroborating employer name never enumerates.
- */
-/**
- * The board we last resolved for this company, or null.
- *
- * Keyed on companyIdentityKey, not the raw string — "RTX (Raytheon)" and
- * "Raytheon (RTX)" are one employer, and keying on the spelling would resolve
- * and store them separately. A failed read returns null, which resolves again:
- * the cost is seconds, and the alternative is a company silently pinned to
- * whatever a broken read implied.
- */
-async function readStoredBoard(company: string): Promise<StoredBoard | null> {
-  const tenantId = await resolveTenantId();
-  const { data, error } = await rawQuery<StoredBoard>(
-    `select vendor, slug, source, checked_at as "checkedAt"
-       from company_boards where tenant_id = $2 and company_key = $1`,
-    [companyIdentityKey(company), tenantId],
-    tenantId
-  );
-  if (error) {
-    console.warn(`crawler: could not read the stored board for ${company} — ${error.message}`);
-    return null;
-  }
-  return (data ?? [])[0] ?? null;
-}
-
-/** Records what resolution found, INCLUDING that it found nothing. */
-async function writeStoredBoard(
-  company: string,
-  resolution: BoardResolution | null
-): Promise<void> {
-  const tenantId = await resolveTenantId();
-  const { error } = await rawQuery(
-    `insert into company_boards (tenant_id, company_key, company, vendor, slug, source, checked_at)
-     values ($1, $2, $3, $4, $5, $6, now())
-     on conflict (tenant_id, company_key) do update
-       set company = excluded.company, vendor = excluded.vendor, slug = excluded.slug,
-           source = excluded.source, checked_at = now()`,
-    [
-      tenantId,
-      companyIdentityKey(company),
-      company,
-      resolution?.vendor ?? null,
-      resolution?.slug ?? null,
-      resolution?.source ?? null,
-    ],
-    tenantId
-  );
-  if (error) {
-    // Never fatal: the crawl works without the memory, it just re-resolves.
-    console.warn(`crawler: could not remember the board for ${company} — ${error.message}`);
-  }
-}
-
-/** The postings for a board we already know about, without re-resolving it. */
-async function postingsForRemembered(
-  board: { vendor: BoardVendor; slug: string; source: string | null }
-): Promise<{ resolution: BoardResolution; postings: Posting[] } | null> {
-  const postings = await fetchBoardPostings(board.vendor, board.slug);
-  if (postings === null || postings.length === 0) return null;
-  return {
-    resolution: {
-      vendor: board.vendor,
-      slug: board.slug,
-      source: board.source === "read" ? "read" : "guessed",
-    },
-    postings,
-  };
-}
-
-/**
- * ATS deep links this company already has rows for, newest first.
- *
- * rawQuery rather than the builder for the same reason ingestRoles uses it: the
- * filter is a normalizing expression the builder cannot express. Failure is
- * swallowed to an empty list on purpose — a board resolution is an OPTIONAL
- * improvement, and a company should still crawl if this read fails.
- */
 async function storedAtsLinks(company: string): Promise<string[]> {
   const tenantId = await resolveTenantId();
   const { data, error } = await rawQuery<{ job_url: string }>(
@@ -381,70 +291,13 @@ async function storedAtsLinks(company: string): Promise<string[]> {
   return (data ?? []).map((r) => r.job_url);
 }
 
-async function extractViaBoard(
-  company: string,
-  criteria: Criteria,
-  storedUrls: (string | null)[]
-): Promise<{ roles: Role[]; resolution: BoardResolution } | null> {
-  // What we already know about this company's board, including that it has
-  // none. Resolution costs no tokens but real time — see lib/board-store.ts.
-  const remembered = boardRecall(await readStoredBoard(company));
-  if (remembered.kind === "skip") return null;
-
-  const found =
-    remembered.kind === "use"
-      ? await postingsForRemembered(remembered.board)
-      : await resolveBoardForCompany(company, storedUrls);
-
-  if (!found) {
-    // A company that HAD a board and now resolves none is the failure this
-    // design goes quiet on otherwise: it falls back to the HTML path, which
-    // succeeds, so dead-tracking never fires and crawl health reports the
-    // tenant healthy. The only other symptom is spend going back up, noticed
-    // on a bill weeks later.
-    if (remembered.kind === "use") {
-      console.error(
-        `crawler: ${company} — board ${remembered.board.vendor}:${remembered.board.slug} ` +
-          `no longer resolves; falling back to the page tiers`
-      );
-    }
-    await writeStoredBoard(company, null);
-    return null;
-  }
-
-  // The corroborator a guessed slug needs. Asked of the BOARD, not of a
-  // posting: a company on a custom careers domain publishes posting URLs no
-  // slug can be parsed back out of, so the posting route failed for exactly the
-  // boards most in need of corroboration (measured: Databricks).
-  let declared: string[] = [];
-  if (found.resolution.source === "guessed") {
-    const name = await fetchBoardIdentity(found.resolution.vendor, found.resolution.slug);
-    if (name) declared = [name];
-  }
-
-  await writeStoredBoard(company, found.resolution);
-
-  if (boardTrust(found.resolution, company, declared) !== "source") {
-    console.log(
-      `crawler: ${company} — board ${found.resolution.vendor}:${found.resolution.slug} ` +
-        `was ${found.resolution.source} and uncorroborated, not used for sourcing`
-    );
-    return null;
-  }
-
-  const roles = rolesFromBoard(found.postings, criteria.titles);
-  console.log(
-    `crawler: ${company} — board ${found.resolution.vendor}:${found.resolution.slug} ` +
-      `(${found.resolution.source}) listed ${found.postings.length}, ${roles.length} match the titles`
-  );
-  return { roles, resolution: found.resolution };
-}
-
 async function extractViaFetch(
   company: string,
   careersUrl: string,
   criteria: Criteria,
-  profile: Profile
+  profile: Profile,
+  criteriaHash:string,
+  modelCall:<T>(fn:()=>Promise<T>)=>Promise<T>
 ): Promise<FetchTierResult> {
   if (!(await fetchAllowed(careersUrl))) {
     console.log(
@@ -462,7 +315,15 @@ async function extractViaFetch(
     return { kind: "shell" };
   }
 
-  const raw = await callStructured({
+  const sourceKey=`page:${careersUrl}`;
+  const tenant=await resolveTenantId();
+  const complete=classification.page.text.length<MAX_PAGE_CHARS;
+  const previous=complete?await readCrawlSnapshot(tenant,company,sourceKey,criteriaHash):null;
+  const hash=pageFingerprint(classification.page,careersUrl);
+  if(previous?.contentHash===hash) return {kind:"roles",roles:previous.listings.map(item=>item.role),
+    snapshot:{...previous,capturedAt:new Date().toISOString()},cached:true,complete};
+
+  const roles = await modelCall(async()=>rolesFromRaw(await callStructured({
     system: roleSearchSystem(profile.searchSubject),
     prompt: buildExtractionPrompt(
       company,
@@ -473,15 +334,18 @@ async function extractViaFetch(
       profile.buildingUpside
     ),
     maxTokens: 4000,
-  });
-  return { kind: "roles", roles: rolesFromRaw(raw) };
+  })));
+  return { kind: "roles", roles, cached:false,complete,
+    snapshot:complete?{sourceKey,criteriaHash,contentHash:hash,listings:carryListingAttempts(roles.map(role=>({role,hash:contentFingerprint(role)})),previous?.listings??[]),
+      processed:previous?.processed??{},capturedAt:new Date().toISOString()}:null };
 }
 
 async function extractViaSearch(
   company: string,
   careersUrl: string | null,
   criteria: Criteria,
-  profile: Profile
+  profile: Profile,
+  maxSearches:number
 ): Promise<{ roles: Role[]; salvaged: boolean }> {
   const prompt = buildCompanyRolePrompt({
     company,
@@ -498,6 +362,8 @@ async function extractViaSearch(
     // Search narration counts against the budget; 2000 has truncated the
     // response before the JSON was emitted.
     maxTokens: 16000,
+    maxSearches,
+    searchMode:"filtered",
   });
 
   // A prose response is recoverable; a TRUNCATED one is not, and parseOrSalvage
@@ -569,8 +435,9 @@ export function runProvidesClosureEvidence(
 }
 
 export const LAST_TRUSTWORTHY_RUN_SQL = `select role_titles, finished_at from crawl_runs
-      where tenant_id = $2 and company = $1 and status in ('ok', 'empty')
+      where tenant_id = $2 and company = $1 and status in ('ok', 'empty', 'unchanged')
         and not salvaged
+        and closure_eligible and source_key=$3 and criteria_fingerprint=$4
       order by started_at desc
       limit 1`;
 
@@ -601,9 +468,9 @@ export function closureRunsFromRows(rows: TrustworthyRunRow[]): ClosureRun[] {
  * The single most recent run that produced a trustworthy "here's what's
  * currently listed" signal (status 'ok' or 'empty'), or [] if there is none.
  */
-async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
+async function lastSuccessfulTitles(company: string,sourceKey:string,criteriaHash:string): Promise<ClosureRun[]> {
   const { data } = await rawQuery<TrustworthyRunRow>(LAST_TRUSTWORTHY_RUN_SQL,
-    [company, await resolveTenantId()],
+    [company, await resolveTenantId(),sourceKey,criteriaHash],
     await resolveTenantId()
   );
   return closureRunsFromRows(data ?? []);
@@ -631,8 +498,9 @@ async function lastSuccessfulTitles(company: string): Promise<ClosureRun[]> {
 export const STALE_POSTING_CANDIDATES_SQL = `select id, role_title from jobs
       where tenant_id = $2
         and company = $1
-        and source = 'Crawl'
-        and status = 'New'`;
+         and source = 'Crawl'
+         and status = 'New'
+         and not grading_chosen`;
 
 /**
  * The title lists titlesToClose is allowed to weigh, with any run predating
@@ -703,7 +571,10 @@ async function closeStalePostings(
     const { error: closeError } = await supabase.forTenant(await resolveTenantId())
       .from("jobs")
       .update({ status: missingStatus, disposition: "job_not_found", disposition_reason: null, updated_at: new Date().toISOString() })
-      .eq("id", job.id);
+      .eq("id", job.id)
+      .eq("status", "New")
+      .eq("source", "Crawl")
+      .eq("grading_chosen", false);
     // The update's result was previously discarded, so a failed write still
     // logged "closed stale posting" as though it had succeeded. Log the
     // truth instead.
@@ -727,9 +598,14 @@ async function closeStalePostings(
  */
 export async function crawlCompany(
   company: string,
-  opts: { dryRun?: boolean; ctx?: RunContext } = {}
+  opts: { dryRun?: boolean; ctx?: RunContext; trigger?: CrawlTrigger } = {}
 ): Promise<CrawlOutcome> {
   const dryRun = opts.dryRun ?? false;
+  const trigger=opts.trigger??"check";
+  const tenantId=await resolveTenantId();
+  const startingSearches=billingScope()?.searches??0;
+  let reservedSearches=0;
+  const searchRemaining=()=>Math.max(0,COMPANY_SEARCH_LIMIT-(billingScope() ? (billingScope()!.searches-startingSearches) : reservedSearches));
   const ctx = opts.ctx ?? (await loadRunContext());
 
   const { data: row, error: watchlistReadError } = await supabase.forTenant(await resolveTenantId())
@@ -807,146 +683,155 @@ export async function crawlCompany(
   // from a prose response? Only the search tier can salvage today.
   let salvaged = false;
 
+  let sourceKey:string|null=null;
+  let criteriaHash:string|null=null;
+  let closureEligible=false;
+  let modelAttempt:"none"|"success"|"failure"="none";
+  let snapshot:CrawlSnapshot|null=null;
+  let snapshotPersisted=false;
+  const listingModel=async <T,>(fn:()=>Promise<T>):Promise<T>=>{
+    try { const value=await fn();modelAttempt="success";return value; }
+    catch(error) {
+      if(!(error instanceof SpendLimitReachedError) && !(error instanceof SearchUnavailableError) &&
+        !(error as {billingPersistence?:boolean}|null)?.billingPersistence) modelAttempt="failure";
+      throw error;
+    }
+  };
   try {
-    let careersUrl = tracked.careers_url;
-    if (!careersUrl) {
-      careersUrl = await resolveCareersUrl(company);
-      // A dry run previews a crawl; it must not permanently write a
-      // model-guessed careers_url the user never reviewed.
-      if (careersUrl && !dryRun) {
-        const { error: careersUrlError } = await supabase.forTenant(await resolveTenantId())
-          .from("watchlist")
-          .update({ careers_url: careersUrl })
-          .eq("company", company);
-        if (careersUrlError) {
-          console.error(
-            `crawler: ${company} failed to persist resolved careers_url — ${careersUrlError.message}`
-          );
+    await withAIAttribution({company,crawlRunId:runId??undefined,trigger:aiAttribution().trigger??(trigger==="automatic"?"scheduled":"manual"),phase:"company_check"},async()=>{
+      let careersUrl=tracked.careers_url;
+      const criteria=criteriaForCompany(ctx.criteria,tracked.ignore_location_rule);
+      criteriaHash=criteriaFingerprint({criteria,fitInputs:ctx.fitInputs,profile:ctx.profile});
+      const paid=paidSearchDecision({trigger,allowPaidSearch:tracked.allow_paid_search??false,modelRetryAfter:tracked.model_retry_after??null});
+      const useSearch=async <T,>(max:number,fn:(cap:number)=>Promise<T>):Promise<T>=>{
+        if(!paid.allowed) throw new SpendLimitReachedError(paid.reason??"Paid search is not enabled for this check. Use Deep search to permit it.");
+        const cap=Math.min(max,searchRemaining());
+        if(cap<=0) throw new SpendLimitReachedError("This company check reached its five-search limit.");
+        reservedSearches+=cap;
+        return listingModel(()=>fn(cap));
+      };
+
+      // Known employer boards are checked before any paid URL discovery.
+      const board=await verifiedCompanyBoard({tenantId,company,careersUrl,storedUrls:await storedAtsLinks(company),dryRun});
+      let directComplete=false;
+      let listingComplete=false;
+      if(board) {
+        runMethod="fetch";
+        boardSource=board.resolution.source;
+        sourceKey=`board:${board.resolution.vendor}:${board.resolution.slug}:${careersUrl??""}`;
+        const previous=await readCrawlSnapshot(tenantId,company,sourceKey,criteriaHash);
+        roles=rolesFromBoard(board.postings,criteria.titles);
+        const listings=roles.map(role=>{
+          const posting=board.postings.find(item=>item.url===role.job_url);
+          const body=posting?.body;
+          // Vendors that omit description bodies need a bounded periodic read
+          // even when title/URL remain unchanged. It is never proof of no change.
+          const hash=criteriaFingerprint({content:contentFingerprint(role,body),material:posting?.material??null,
+            bodyRefreshWindow:body?null:Math.floor(Date.now()/(7*86400000))});
+          return {role,hash,...(body?{body}:{})};
+        });
+        snapshot={sourceKey,criteriaHash,contentHash:criteriaFingerprint(listings.map(item=>({key:listingKey(item.role),hash:item.hash})).sort((a,b)=>a.key.localeCompare(b.key))),
+          listings:carryListingAttempts(listings,previous?.listings??[]),processed:previous?.processed??{},capturedAt:new Date().toISOString()};
+        directComplete=board.resolution.source==="read" && board.postings.length>0;
+        listingComplete=true;
+      } else {
+        if(!careersUrl) {
+          careersUrl=await useSearch(2,cap=>resolveCareersUrl(company,cap));
+          if(careersUrl&&!dryRun) {
+            const saved=await supabase.forTenant(tenantId).from("watchlist").update({careers_url:careersUrl}).eq("company",company);
+            const failure=describeWriteFailure(saved.error?.message,"remember the careers URL");
+            if(failure!==undefined) throw new Error(failure);
+          }
+        }
+        if(!careersUrl) {status="needs_url";errorMessage=`Could not find a careers page for "${company}". Add one on the Watchlist.`;return;}
+        // Retry the inexpensive page even when an old run learned 'search'.
+        // Sites change, and a permanent shell flag must not become permanent spend.
+        const fetched=await extractViaFetch(company,careersUrl,criteria,ctx.profile,criteriaHash,listingModel);
+        if(fetched.kind==="roles") {
+          runMethod="fetch";learnedMethod="fetch";roles=fetched.roles;snapshot=fetched.snapshot;
+          sourceKey=snapshot?.sourceKey??`page:${careersUrl}`;directComplete=fetched.complete;listingComplete=fetched.complete;
+        } else {
+          learnedMethod=fetched.kind==="shell"?"search":null;
+          runMethod="search";
+          const searched=await useSearch(COMPANY_SEARCH_LIMIT,cap=>extractViaSearch(company,careersUrl,criteria,ctx.profile,cap));
+          roles=searched.roles;salvaged=searched.salvaged;
+          sourceKey=`search:${careersUrl}`;
+          // A bounded search can find useful roles, never establish absence.
+          directComplete=false;
         }
       }
-    }
 
-    if (!careersUrl) {
-      status = "needs_url";
-      errorMessage = `Could not find a careers page for "${company}". Add one manually on the Watchlist page.`;
-    } else {
-      // This company's own override, not ctx.criteria mutated in place —
-      // ctx is shared across every company in a cron batch.
-      const criteria = criteriaForCompany(ctx.criteria, tracked.ignore_location_rule);
-
-      // A company that previously needed the search tier skips the fetch
-      // attempt. A 'fetch' company that now returns a shell re-learns 'search'.
-      // The board tier first. A company whose board is certainly its own gives
-      // verifiable roles for free; everything else falls through to the page
-      // tiers exactly as before.
-      const board = await extractViaBoard(company, criteria, [
-        // A link this company already has a row for is the best source of a
-        // READ slug — 57 of 195 rows carry an employer ATS link, and a read
-        // slug needs no corroboration because it was never a guess.
-        ...(await storedAtsLinks(company)),
-        tracked.careers_url,
-      ]);
-      if (board) {
-        boardSource = board.resolution.source;
-        runMethod = "fetch";
-        roles = board.roles;
+      seenTitles=roles.map(role=>normalizeTitle(role.role_title));
+      const candidates:ListingSnapshot[]=snapshot?candidatesToProcess(snapshot.listings,snapshot.processed):roles.map(role=>({role,hash:contentFingerprint(role)}));
+      const previous=snapshot?(await readCrawlSnapshot(tenantId,company,snapshot.sourceKey,snapshot.criteriaHash)??
+        await readCrawlSnapshot(tenantId,company,snapshot.sourceKey)??await readCrawlSnapshot(tenantId,company)):null;
+      const oldKeys=new Set(previous?.listings.map(item=>listingKey(item.role))??[]);
+      const oldTitles=new Set(previous?.listings.map(item=>normalizeTitle(item.role.role_title))??[]);
+      const wasObserved=(item:ListingSnapshot)=>oldKeys.has(listingKey(item.role))||oldTitles.has(normalizeTitle(item.role.role_title));
+      const work=snapshot?crawlProcessingQueue(snapshot.listings,snapshot.processed,MAX_INGEST_READS):candidates.slice(0,MAX_INGEST_READS);
+      const lastAttempt=Math.max(0,...(snapshot?.listings??[]).map(item=>Date.parse(item.lastAttemptedAt??"")||0));
+      const attemptedAt=new Date(Math.max(Date.now(),lastAttempt+1)).toISOString();
+      const newItems:typeof work=[];
+      for(const item of work) {
+        item.lastAttemptedAt=attemptedAt;
+        const key=listingKey(item.role);
+        if(snapshot&&wasObserved(item)) {
+          const done=await withAIAttribution({phase:"changed_listing"},()=>refreshChangedCrawlRole({company,role:item.role,body:item.body,fitInputs:ctx.fitInputs,dryRun}));
+          if(done) snapshot.processed[key]=item.hash;
+          // A previously observed listing may never have been inserted (a
+          // budget or failed write). Ingest still owns safe insertion/dedupe.
+          if(!done) newItems.push(item);
+        } else newItems.push(item);
       }
-
-      let fetchResult: FetchTierResult | null = board ? { kind: "roles", roles: board.roles } : null;
-      if (!board && tracked.crawl_method !== "search") {
-        fetchResult = await extractViaFetch(company, careersUrl, criteria, ctx.profile);
+      if(newItems.length) {
+        const bodies:Record<string,string>={};
+        for(const item of newItems) if(item.body) bodies[item.role.job_url]=item.body;
+        const result=await withAIAttribution({phase:"new_listings"},()=>ingestRoles({company,roles:newItems.map(item=>item.role),
+          companyContext:{tagline:tracked.tagline,traction:tracked.traction,careers_url:careersUrl,category:tracked.category,raised:tracked.raised,stage:tracked.stage},
+          source:"Crawl",dryRun,fitInputs:ctx.fitInputs,postingBodies:bodies}));
+        newRoles=result.added.length;
+        if(snapshot&&!dryRun) {
+          const settled=await settledCrawlRoles(tenantId,company,newItems.filter(item=>!wasObserved(item)).map(item=>item.role));
+          for(const role of settled) {
+            const item=newItems.find(candidate=>listingKey(candidate.role)===listingKey(role));
+            if(item) snapshot.processed[listingKey(role)]=item.hash;
+          }
+          // For observed-but-never-stored roles only a NEW insert may settle
+          // an old key; a failed refresh cannot borrow the previous grade.
+          const inserted=await settledCrawlRoles(tenantId,company,result.added);
+          for(const role of inserted) {
+            const item=newItems.find(candidate=>listingKey(candidate.role)===listingKey(role));
+            if(item) snapshot.processed[listingKey(role)]=item.hash;
+          }
+        }
       }
-
-      if (board) {
-        // Nothing is LEARNED from a board run: crawl_method is the page-tier
-        // state machine, and stamping it here would teach the fetch tier a
-        // lesson the board tier learned.
-        learnedMethod = null;
-      } else if (fetchResult?.kind === "roles") {
-        runMethod = "fetch";
-        learnedMethod = "fetch";
-        roles = fetchResult.roles;
-      } else {
-        // "shell" is a stable property of the page — learn 'search' so
-        // future runs skip the fetch attempt. "unavailable" (robots block,
-        // network error, timeout, non-2xx) is transient: learnedMethod stays
-        // null, and coalesce($2, crawl_method) in the watchlist update below
-        // then preserves whatever crawl_method already was, so the next run
-        // retries the fetch tier instead of being stuck on search forever.
-        // runMethod is "search" unconditionally here — the search tier is
-        // what actually ran, whether or not this run taught us anything new.
-        learnedMethod = fetchResult?.kind === "shell" ? "search" : null;
-        runMethod = "search";
-        const searchResult = await extractViaSearch(
-          company,
-          careersUrl,
-          criteria,
-          ctx.profile
-        );
-        roles = searchResult.roles;
-        salvaged = searchResult.salvaged;
+      const pending=snapshot?candidatesToProcess(snapshot.listings,snapshot.processed).length:Math.max(0,candidates.length-work.length);
+      status=!listingComplete||pending>0?"partial":candidates.length===0&&roles.length>0?"unchanged":roles.length>0?"ok":"empty";
+      if(status==="partial") errorMessage="Listings were checked; some processing is incomplete or the search covered only part of the source. Try again or review the saved roles.";
+      closureEligible=directComplete&&runProvidesClosureEvidence(status==="unchanged"?"ok":status,salvaged,
+        boardSource===null?undefined:{source:boardSource});
+      if(snapshot&&!dryRun) {await saveCrawlSnapshot(tenantId,company,snapshot);snapshotPersisted=true;}
+      if(closureEligible&&!dryRun&&sourceKey&&criteriaHash) {
+        const previousRun=await lastSuccessfulTitles(company,sourceKey,criteriaHash);
+        await closeStalePostings(company,[{finished_at:new Date().toISOString(),titles:seenTitles},...previousRun],ctx);
       }
-
-      // Read the previous trustworthy run BEFORE this run's row is finalized.
-      const previousRun = await lastSuccessfulTitles(company);
-
-      const result = await ingestRoles({
-        company,
-        roles,
-        companyContext: {
-          tagline: tracked.tagline,
-          traction: tracked.traction,
-          careers_url: careersUrl,
-          category: tracked.category,
-          raised: tracked.raised,
-          stage: tracked.stage,
-        },
-        source: "Crawl",
-        dryRun,
-        fitInputs: ctx.fitInputs,
-      });
-
-      newRoles = result.added.length;
-      seenTitles = result.seenTitles;
-      status = roles.length > 0 ? "ok" : "empty";
-
-      // Ruling 2026-08-12: empty crawls may close too, not just 'ok' ones —
-      // a company taking down its last remaining posting is the most common
-      // real case, and excluding 'empty' meant it never closed. 'error' and
-      // 'needs_url' still never reach this branch at all (status is only
-      // ever "ok" or "empty" here, set two lines above from roles.length) —
-      // that's the safety property, and it holds structurally, not just by
-      // this check: a fetch failure must never close a live job.
-      if (
-        !dryRun &&
-        runProvidesClosureEvidence(
-          status,
-          salvaged,
-          boardSource === null ? undefined : { source: boardSource }
-        )
-      ) {
-        // [current run, previous trustworthy run] — a role closes only when
-        // absent from both, so nothing found today is ever closed today.
-        //
-        // The current run's crawl_runs row is not finalized until after this
-        // block, so it has no finished_at to read back. Stamping "now" here is
-        // deliberate and correct: the run IS finishing, and leaving it
-        // null/undefined would make runsEligibleForClosure drop the current
-        // run as unparseable, permanently disabling closure after the first
-        // criteria edit.
-        await closeStalePostings(
-          company,
-          [{ finished_at: new Date().toISOString(), titles: seenTitles }, ...previousRun],
-          ctx
-        );
-      }
-    }
+    });
   } catch (err) {
-    status = "error";
-    errorMessage = err instanceof Error ? err.message : String(err);
+    closureEligible=false;
+    status=err instanceof SpendLimitReachedError||err instanceof SearchUnavailableError?(roles.length?"partial":"skipped"):"error";
+    errorMessage=(err instanceof Error?err.message:"")||"The company check failed. Try again.";
     console.error(`crawler: ${company} failed — ${errorMessage}`);
   }
-
+  // Extraction survives a processing failure, but only successful receipts
+  // suppress another attempt. Dry runs cannot warm or mutate persistent state.
+  if(snapshot&&!dryRun&&!snapshotPersisted) {
+    try {await saveCrawlSnapshot(tenantId,company,snapshot);} catch(error) {
+      status="error";closureEligible=false;errorMessage=error instanceof Error?error.message:"Could not save crawl source evidence.";
+    }
+  }
+  // Assignments inside the attribution callback are real runtime outcomes;
+  // TypeScript otherwise narrows this outer variable to only catch outcomes.
+  status=status as CrawlStatus;
   if (!dryRun) {
     if (runId) {
       const { error: crawlRunUpdateError } = await supabase.forTenant(await resolveTenantId())
@@ -959,6 +844,9 @@ export async function crawlCompany(
           role_titles: seenTitles,
           status,
           salvaged,
+          closure_eligible:closureEligible,
+          source_key:sourceKey,
+          criteria_fingerprint:criteriaHash,
           error: errorMessage ?? null,
         })
         .eq("id", runId);
@@ -973,7 +861,7 @@ export async function crawlCompany(
     // unreachable. Preserve health evidence on those outcomes; clear old
     // counters only after a successful listing. This pipeline has no typed,
     // verified page-unavailability result, so it cannot auto-disable tracking.
-    const healthy = status === "ok" || status === "empty";
+    const healthy = status === "ok" || status === "empty" || status === "unchanged";
     const { error: watchlistUpdateError } = await rawQuery(
       `update watchlist
           set last_checked_at = now(),
@@ -1001,6 +889,8 @@ export async function crawlCompany(
         ? `${errorMessage} (also failed to record the crawl on the watchlist: ${watchlistUpdateError.message})`
         : `Crawl finished as "${priorStatus}" but the watchlist record could not be updated — ${watchlistUpdateError.message}. last_checked_at was not advanced; this company may be re-crawled prematurely.`;
     }
+    const policy=await crawlPolicyOutcome(tenantId,company,{trigger,modelAttempt,status});
+    if(policy.error!==undefined) {status="error";errorMessage=policy.error;}
   }
 
   return {

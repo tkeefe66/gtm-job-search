@@ -1,175 +1,110 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { report } from "../usage.js";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_PRICES, anthropicCostCents } from "./anthropic-pricing";
+import { ProviderRequestError, ProviderUsageUnknownError, safeProviderId, type ProviderMetadata } from "./errors";
+import { record, tokens } from "./http";
+import { effectiveSearchMode } from "./effective-search-mode";
 import type { Completion, CompleteOpts, KeyVerdict, Provider, SearchOpts, Usage } from "./types";
 
-// The installed @anthropic-ai/sdk's ContentBlock union (TextBlock | ToolUseBlock)
-// predates the web_search server tool and has no type for the `server_tool_use`
-// blocks the API actually returns. There is no SDK type to import, so this is a
-// hand-written structural guard rather than a cast to `any` — it only reads
-// fields it has checked exist, and a block that doesn't match falls through.
-interface WebSearchUseBlock {
-  type: "server_tool_use";
-  name: "web_search";
-  input: { query?: unknown };
+/** SDK 0.32 lacks server-tool types but its APIPromise exposes withResponse. */
+type MessageRequest = Promise<unknown> & {
+  withResponse?: () => Promise<{ data: unknown; response: Response }>;
+};
+export interface AnthropicDeps {
+  createClient?: (apiKey: string) => { messages: {
+    create: (body: unknown, options?: { timeout: number; maxRetries: number }) => MessageRequest;
+  } };
 }
 
-function isWebSearchUseBlock(block: unknown): block is WebSearchUseBlock {
-  if (typeof block !== "object" || block === null) return false;
-  const b = block as { type?: unknown; name?: unknown };
-  return b.type === "server_tool_use" && b.name === "web_search";
-}
-
-interface RawUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-}
-
-/**
- * Anthropic's `input_tokens` already EXCLUDES cached reads, so it maps straight
- * across. Cache CREATION is charged as (more expensive) fresh input, so it is
- * added to inputTokens rather than to cachedInputTokens — putting it in the
- * cached bucket would under-price it by 12x.
- */
-function normaliseUsage(raw: RawUsage | undefined, searches: number): Usage {
-  return {
-    inputTokens: (raw?.input_tokens ?? 0) + (raw?.cache_creation_input_tokens ?? 0),
-    cachedInputTokens: raw?.cache_read_input_tokens ?? 0,
-    outputTokens: raw?.output_tokens ?? 0,
-    searches,
-  };
+function normaliseUsage(value: unknown, search: boolean, metadata: ProviderMetadata): Usage {
+  const raw = record(value);
+  try {
+    const inputTokens = tokens(raw.input_tokens);
+    const outputTokens = tokens(raw.output_tokens);
+    const cachedInputTokens = tokens(raw.cache_read_input_tokens, true);
+    const created = tokens(raw.cache_creation_input_tokens, true);
+    const breakdown = record(raw.cache_creation);
+    const write5m = tokens(breakdown.ephemeral_5m_input_tokens, true);
+    const write1h = tokens(breakdown.ephemeral_1h_input_tokens, true);
+    // Positive cache totals alone do not say which TTL price was charged.
+    if (created !== write5m + write1h) throw new ProviderUsageUnknownError(metadata);
+    const searches = search ? tokens(record(raw.server_tool_use).web_search_requests) : 0;
+    return { inputTokens, outputTokens, cachedInputTokens, searches,
+      ...(created > 0 ? { cacheWrite5mTokens: write5m, cacheWrite1hTokens: write1h } : {}),
+    };
+  } catch { throw new ProviderUsageUnknownError(metadata); }
 }
 
 function textOf(content: unknown[]): string {
-  return content
-    .filter((b): b is { type: "text"; text: string } =>
-      typeof b === "object" && b !== null && (b as { type?: unknown }).type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-}
-
-/** The injected seam is what lets the adapter be tested without a network. */
-export interface AnthropicDeps {
-  createClient?: (apiKey: string) => { messages: { create: (body: unknown, options?: {timeout:number; maxRetries:number}) => Promise<unknown> } };
+  return content.map(record).filter(b => b.type === "text" && typeof b.text === "string")
+    .map(b => b.text).join("\n").trim();
 }
 
 export function createAnthropicProvider(deps: AnthropicDeps = {}): Provider {
-  const createClient =
-    deps.createClient ??
-    ((apiKey: string) =>
-      new Anthropic({ apiKey }) as unknown as {
-        messages: { create: (body: unknown, options?: {timeout:number; maxRetries:number}) => Promise<unknown> };
+  const createClient = deps.createClient ?? ((apiKey: string) =>
+    new Anthropic({ apiKey, maxRetries: 0 }) as unknown as ReturnType<NonNullable<AnthropicDeps["createClient"]>>);
+
+  async function request(opts: CompleteOpts, body: Record<string, unknown>, search: boolean): Promise<Completion> {
+    let data: unknown;
+    let providerRequestId: string | null = null;
+    try {
+      // Explicit per-call no-retry policy also covers injected clients.
+      const pending = createClient(opts.apiKey).messages.create(body, { timeout: opts.timeoutMs ?? 120000, maxRetries: 0 });
+      if (pending.withResponse) {
+        const envelope = await pending.withResponse();
+        data = envelope.data;
+        providerRequestId = safeProviderId(envelope.response.headers.get("request-id") ?? envelope.response.headers.get("x-request-id"));
+      } else {
+        // Existing injected mocks can return a plain promise without HTTP metadata.
+        data = await pending;
+      }
+    } catch (error) {
+      const e = error as { status?: unknown; request_id?: unknown };
+      throw new ProviderRequestError("Anthropic", {
+        status: typeof e?.status === "number" ? e.status : undefined,
+        providerRequestId: e?.request_id,
       });
+    }
+    const message = record(data);
+    const metadata = { providerRequestId, providerResponseId: safeProviderId(message.id), stopReason: safeProviderId(message.stop_reason) };
+    const usage = normaliseUsage(message.usage, search, metadata);
+    report("gtm-job-search", opts.model, message.usage);
+    const content = Array.isArray(message.content) ? message.content : [];
+    const toolBlock = opts.jsonSchema ? content.map(record).find(b => b.type === "tool_use" && b.name === "emit") : undefined;
+    // Log only aggregate counts; queries and provider bodies are not accounting metadata.
+    if (search) console.log(`anthropic.searchAndComplete: provider reported ${usage.searches} billed searches`);
+    return { text: toolBlock ? JSON.stringify(toolBlock.input ?? null) : textOf(content), usage, ...metadata, usageSource: "provider" };
+  }
 
   return {
-    id: "anthropic",
-    defaultModel: ANTHROPIC_DEFAULT_MODEL,
-    searchCapEnforcement: "in-request",
-
-    costCents: anthropicCostCents,
-    pricedModels: Object.keys(ANTHROPIC_PRICES),
-
-    async complete(opts: CompleteOpts): Promise<Completion> {
-      const body: Record<string, unknown> = {
-        model: opts.model,
-        max_tokens: opts.maxTokens,
-        system: opts.system,
-        messages: [{ role: "user", content: opts.prompt }],
-      };
+    id: "anthropic", defaultModel: ANTHROPIC_DEFAULT_MODEL, searchCapEnforcement: "in-request",
+    costCents: anthropicCostCents, pricedModels: Object.keys(ANTHROPIC_PRICES),
+    complete(opts: CompleteOpts): Promise<Completion> {
+      const body: Record<string, unknown> = { model: opts.model, max_tokens: opts.maxTokens, system: opts.system, messages: [{ role: "user", content: opts.prompt }] };
       if (opts.jsonSchema) {
-        // Constrained decoding, expressed the way this SDK version allows: a
-        // single tool the model is FORCED to call. The tool input is the JSON.
         body.tools = [{ name: "emit", description: "Return the result.", input_schema: opts.jsonSchema }];
         body.tool_choice = { type: "tool", name: "emit" };
       }
-
-      const message = (await createClient(opts.apiKey).messages.create(body,
-        opts.timeoutMs ? {timeout:opts.timeoutMs,maxRetries:0} : undefined)) as {
-        content: unknown[];
-        usage?: RawUsage;
-        stop_reason?: string | null;
-      };
-      report("gtm-job-search", opts.model, message.usage);
-
-      const toolBlock = opts.jsonSchema
-        ? (message.content.find(
-            (b) => typeof b === "object" && b !== null && (b as { type?: unknown }).type === "tool_use"
-          ) as { input?: unknown } | undefined)
-        : undefined;
-
-      return {
-        text: toolBlock ? JSON.stringify(toolBlock.input) : textOf(message.content),
-        usage: normaliseUsage(message.usage, 0),
-        stopReason: message.stop_reason ?? null,
-      };
+      return request(opts, body, false);
     },
-
-    async searchAndComplete(opts: SearchOpts): Promise<Completion> {
-      // The same force-cast as before, and for the same reason: the installed
-      // SDK (0.32.1) has no type for the web_search server tool at all, so
-      // neither the `type` discriminator nor `max_uses` is expressible against
-      // Anthropic.Tool. Built as a plain literal so its shape is still checked
-      // internally, then cast once at the boundary.
-      const webSearchTool = {
-        type: "web_search_20250305",
-        name: "web_search",
-        ...(opts.maxSearches !== undefined ? { max_uses: opts.maxSearches } : {}),
-      };
-
-      const message = (await createClient(opts.apiKey).messages.create({
-        model: opts.model,
-        max_tokens: opts.maxTokens,
-        system: opts.system,
-        tools: [webSearchTool],
-        messages: [{ role: "user", content: opts.prompt }],
-      })) as { content: unknown[]; usage?: RawUsage; stop_reason?: string | null };
-
-      report("gtm-job-search", opts.model, message.usage);
-
-      const issued = message.content.filter(isWebSearchUseBlock);
-
-      // Logging side-channel: which searches the model actually issued, as
-      // opposed to which ones it was offered. Never let this break the call.
-      try {
-        if (issued.length > 0) {
-          const queries = issued.map((b) =>
-            typeof b.input?.query === "string" ? b.input.query : JSON.stringify(b.input)
-          );
-          console.log(`anthropic.searchAndComplete: issued ${issued.length} searches — ${queries.join(" | ")}`);
-        }
-      } catch (err) {
-        console.error("anthropic.searchAndComplete: failed to log issued searches —", err);
+    searchAndComplete(opts: SearchOpts): Promise<Completion> {
+      if (opts.maxSearches !== undefined && (!Number.isSafeInteger(opts.maxSearches) || opts.maxSearches <= 0)) {
+        return Promise.reject(new Error("Anthropic search ceiling must be a positive integer."));
       }
-
-      return {
-        text: textOf(message.content),
-        usage: normaliseUsage(message.usage, issued.length),
-        stopReason: message.stop_reason ?? null,
-      };
+      // Explicit company call opt-in only. Filtering auto-provisions code execution.
+      // https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+      const tool = { type: effectiveSearchMode("anthropic", opts.model, opts.searchMode) === "filtered" ? "web_search_20260209" : "web_search_20250305",
+        name: "web_search", ...(opts.maxSearches !== undefined ? { max_uses: opts.maxSearches } : {}) };
+      return request(opts, { model: opts.model, max_tokens: opts.maxTokens, system: opts.system,
+        tools: [tool], messages: [{ role: "user", content: opts.prompt }] }, true);
     },
-
     async validateKey(key: string, model: string): Promise<KeyVerdict> {
       if (!key.startsWith("sk-ant-")) return { ok: false, reason: "format" };
       try {
-        // The cheapest possible call — one token — against the model this key
-        // will actually run on, NOT the default. A probe of the default proves
-        // nothing about a key that cannot reach the model the tenant chose:
-        // the row saves, and the failure surfaces later as "check your
-        // ANTHROPIC_API_KEY" against a key that was never the problem.
-        await createClient(key).messages.create({
-          model,
-          max_tokens: 1,
-          messages: [{ role: "user", content: "hi" }],
-        });
+        // Existing one-token key probe stays outside tenant operation accounting.
+        await createClient(key).messages.create({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }, { timeout: 120000, maxRetries: 0 });
         return { ok: true };
-      } catch {
-        // Deliberately drops the SDK's text: it embeds request URLs and
-        // sometimes the key itself, and the caller renders this to a browser.
-        return { ok: false, reason: "rejected" };
-      }
+      } catch { return { ok: false, reason: "rejected" }; }
     },
   };
 }

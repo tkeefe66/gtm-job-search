@@ -10,7 +10,7 @@ function fake(response: unknown) { return vi.fn<typeof fetch>().mockResolvedValu
 test("OpenAI uses real search, subtracts cache, and prices preview calls", async () => {
   const fetch = fake(openResponse); const p = createOpenAIProvider({ fetch });
   const result = await p.searchAndComplete(opts);
-  expect(result).toEqual({ text: "answer", stopReason: "completed", usage: { inputTokens: 800, cachedInputTokens: 200, outputTokens: 30, searches: 1 } });
+  expect(result).toEqual({ text: "answer", stopReason: "completed", usage: { inputTokens: 800, cachedInputTokens: 200, outputTokens: 30, searches: 1 }, providerRequestId: null, providerResponseId: null, usageSource: "provider" });
   expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).tools).toEqual([{ type: "web_search_preview" }]);
   expect(p.costCents({ inputTokens: 1000000, cachedInputTokens: 1000000, outputTokens: 1000000, searches: 2 }, opts.model)).toBe(1055);
 });

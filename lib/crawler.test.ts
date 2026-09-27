@@ -402,8 +402,10 @@ describe("LAST_TRUSTWORTHY_RUN_SQL", () => {
   // widens it to include 'error'/'needs_url' (breaking the safety property
   // that a fetch failure must never be read as "role is gone").
 
-  test("includes both trustworthy statuses", () => {
-    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("status in ('ok', 'empty')");
+  test("includes direct unchanged runs only with matching persisted closure evidence", () => {
+    // Mutation: reuse a partial or unrelated source/criteria snapshot as absence.
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("status in ('ok', 'empty', 'unchanged')");
+    expect(LAST_TRUSTWORTHY_RUN_SQL).toContain("and closure_eligible and source_key=$3 and criteria_fingerprint=$4");
   });
 
   test("does not scope to 'ok' alone", () => {

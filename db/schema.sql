@@ -136,6 +136,13 @@ alter table watchlist add column if not exists last_crawl_status    text;
 alter table watchlist add column if not exists last_crawl_error     text;
 alter table watchlist add column if not exists consecutive_failures integer not null default 0;
 alter table watchlist add column if not exists source               text;
+-- Existing installations receive these fields through migration 027.
+alter table watchlist add column if not exists allow_paid_search boolean not null default false;
+alter table watchlist add column if not exists consecutive_model_failures integer not null default 0;
+alter table watchlist add column if not exists model_retry_after timestamptz;
+alter table watchlist add column if not exists last_attempted_at timestamptz;
+alter table watchlist add column if not exists last_successful_check_at timestamptz;
+alter table watchlist add column if not exists next_attempt_at timestamptz;
 
 -- One row per crawl attempt. Without this, a silently failing crawler is
 -- indistinguishable from a company that genuinely is not hiring.
@@ -159,6 +166,12 @@ create table if not exists crawl_runs (
   error        text
 );
 create index if not exists crawl_runs_company_idx on crawl_runs (company, started_at desc);
+-- Complete matched source evidence is required before closing missing roles.
+alter table crawl_runs add column if not exists closure_eligible boolean not null default false;
+alter table crawl_runs add column if not exists source_key text;
+alter table crawl_runs add column if not exists criteria_fingerprint text;
+-- company_crawl_snapshots (026), ai_operations and ai_usage_requests (028) are
+-- created after users/tenant_id exist, with forced row security and grants.
 
 -- Cached role-first search results per (family, search_term). Same
 -- cache-first pattern as discovered_startups and insights_cache.
