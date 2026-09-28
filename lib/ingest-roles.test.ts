@@ -773,18 +773,17 @@ describe("a caller may raise or lower how many postings one ingest reads", () =>
     };
   });
 
-  test("a higher budget reads more of one run's roles", async () => {
+  test("an explicit read budget overrides the default", async () => {
     await ingestRoles({ ...OPTS, roles: many(12), maxReads: 12 });
 
     expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(12);
   });
 
-  // The default is unchanged, which is what keeps the crawler inside its
-  // request: a caller that says nothing gets the cron-safe number.
-  test("saying nothing keeps the crawler's bound", async () => {
-    await ingestRoles({ ...OPTS, roles: many(12) });
+  // Mutation: retain the old six-role default or remove the read bound entirely.
+  test("the default reads twenty postings and leaves overflow for later", async () => {
+    await ingestRoles({ ...OPTS, roles: many(21) });
 
-    expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(MAX_INGEST_READS);
+    expect(vi.mocked(readPosting)).toHaveBeenCalledTimes(20);
   });
 
   // A posting the caller already read costs NOTHING from the budget — it is

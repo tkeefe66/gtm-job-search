@@ -62,9 +62,8 @@ export interface IngestOptions {
   postingBodies?: Record<string,string>;
   /**
    * How many postings this ingest may read, when it has to read them itself.
-   * Defaults to MAX_INGEST_READS, which exists to fit the crawler's single
-   * request inside Railway's 300s edge timeout. A user-initiated action is
-   * waiting on its own response and can afford more.
+   * Defaults to MAX_INGEST_READS to bound work within one request. Callers
+   * can override the read count; model calls still obey spending limits.
    */
   maxReads?: number;
   /**
@@ -81,29 +80,20 @@ export interface IngestOptions {
 }
 
 /**
- * How many of one ingest's new roles get their posting READ.
+ * Maximum listings processed per company check, and the default number of
+ * new postings one ingest reads.
  *
- * Not a ration on quality — a bound on one REQUEST. Railway closes a request
- * that transfers no data after 300s, the crawler gets exactly one request per
- * company, and a measured crawl already costs up to 91s before any of this. A
- * company posting thirty new roles must not turn one crawl into thirty fetches
- * and thirty model calls; the rest are stored unread, stay in the backfill's
- * queue (`thinJobs` keys on the enrichedAt stamp, not on the column), and the
- * Enrich button on /roles covers them at the user's pace.
+ * Twenty lets ordinary boards finish in one check while bounding request work.
+ * The crawler retains overflow in its snapshot for a later check; other ingest
+ * callers leave unread postings in the enrichment queue. Spending limits and
+ * request timeouts still apply, so this is a work cap, not a completion promise.
  */
-export const MAX_INGEST_READS = 6;
+export const MAX_INGEST_READS = 20;
 
 /**
- * The read budget for a USER-INITIATED search, which is a different kind of
- * request from a cron crawl: nobody is holding a 300s edge timeout open for a
- * batch of companies, one person is waiting on their own click and would rather
- * wait longer for rows they can act on.
- *
- * Measured 2026-09-07, this is the bound that matters most: Role Search made
- * 133 of 195 rows and owns 46 of the 59 unread-and-open ones, so the cron-safe
- * six was rationing exactly the path that produces four fifths of the table.
- * Twenty covers a normal run whole; beyond that the Enrich button on /roles
- * picks up the remainder at the user's pace.
+ * The explicit read budget for a user-initiated search. It currently matches
+ * the ingest default but remains independently adjustable. Beyond it, the
+ * Enrich button on /roles picks up the remaining unread postings.
  */
 export const MAX_SEARCH_READS = 20;
 
@@ -256,7 +246,7 @@ export async function ingestRoles(opts: IngestOptions): Promise<IngestResult> {
     let budget = opts.maxReads ?? MAX_INGEST_READS;
     // The loop runs over EVERY fresh role, not only while budget remains: a
     // posting the caller already read costs nothing, and gating it behind the
-    // budget dropped every pre-read past the sixth — silently, for the one
+    // budget dropped every pre-read beyond the limit — silently, for the one
     // caller that hands over reads in bulk.
     for (let i = 0; i < fresh.length; i++) {
       const deadUrl = urlStatuses[i] === "dead";

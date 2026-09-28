@@ -11,7 +11,10 @@ vi.mock("./supabase",()=>({rawQuery:vi.fn(async()=>({data:[],error:null})),supab
 }})}}));
 vi.mock("./employer-board-source",()=>({verifiedCompanyBoard:vi.fn(async()=>null)}));
 vi.mock("./crawl-snapshot-store",()=>({readCrawlSnapshot:vi.fn(async()=>null),saveCrawlSnapshot:vi.fn(async()=>{}),settledCrawlRoles:vi.fn(async(_t:string,_c:string,roles:unknown[])=>roles)}));
-vi.mock("./ingest-roles",()=>({MAX_INGEST_READS:6,ingestRoles:vi.fn(async({roles}:any)=>({added:roles,skipped:[],seenTitles:roles.map((r:any)=>r.role_title)})),refreshChangedCrawlRole:vi.fn(async()=>true)}));
+vi.mock("./ingest-roles",async()=>{
+  const {MAX_INGEST_READS}=await vi.importActual<typeof import("./ingest-roles")>("./ingest-roles");
+  return {MAX_INGEST_READS,ingestRoles:vi.fn(async({roles}:any)=>({added:roles,skipped:[],seenTitles:roles.map((r:any)=>r.role_title)})),refreshChangedCrawlRole:vi.fn(async()=>true)};
+});
 vi.mock("./fetch-page",()=>({fetchAllowed:vi.fn(async()=>true),fetchPage:vi.fn()}));
 vi.mock("./model-call",async()=>{
   const actual=await vi.importActual<typeof import("./model-call")>("./model-call");
@@ -89,17 +92,41 @@ test("link truncation prevents closure even when visible page text fits",async()
   expect(state.writes.find(w=>w.table==="crawl_runs"&&w.patch.finished_at)?.patch.closure_eligible).toBe(false);
 });
 
-test("six unsuccessful listings cannot starve a later valid listing",async()=>{
-  // Mutation: repeatedly select the first six pending entries instead of rotating failed attempts.
-  const roles=Array.from({length:7},(_,i)=>({...role,role_title:`Systems Lead ${i}`,job_url:`https://example.test/jobs/${i}`}));
+test.each([7,20])("a complete board with %i matching roles finishes in one check",async count=>{
+  // Mutation: retain the six-role processing cap, leaving a readable board needlessly partial.
+  const roles=Array.from({length:count},(_,i)=>({...role,role_title:`Systems Lead ${i}`,job_url:`https://example.test/jobs/${i}`}));
+  vi.mocked(verifiedCompanyBoard).mockResolvedValue({resolution:{vendor:"ashby",slug:"example",source:"read"},
+    postings:roles.map(r=>({title:r.role_title,url:r.job_url,body:"Build systems"}))});
+  expect(await crawlCompany("Example",{ctx,trigger:"check"})).toMatchObject({status:"ok",rolesFound:count,newRoles:count});
+  expect(Object.keys(snapshots.at(-1)!.processed)).toHaveLength(count);
+  expect(callWithWebSearchDetailed).not.toHaveBeenCalled();
+  expect((await crawlCompany("Example",{ctx,trigger:"check"})).status).toBe("unchanged");
+  expect(ingestRoles).toHaveBeenCalledTimes(1);
+});
+
+test("a board with more than twenty matching roles keeps the remainder for the next check",async()=>{
+  // Mutation: remove the per-check cap or acknowledge unprocessed overflow as complete.
+  const roles=Array.from({length:21},(_,i)=>({...role,role_title:`Systems Lead ${i}`,job_url:`https://example.test/jobs/${i}`}));
+  vi.mocked(callStructured).mockResolvedValue(JSON.stringify(roles));
+  expect((await crawlCompany("Example",{ctx,trigger:"check"})).status).toBe("partial");
+  expect(Object.keys(snapshots.at(-1)!.processed)).toHaveLength(20);
+  expect((await crawlCompany("Example",{ctx,trigger:"check"})).status).toBe("ok");
+  expect(Object.keys(snapshots.at(-1)!.processed)).toHaveLength(21);
+  expect(ingestRoles).toHaveBeenCalledTimes(1);
+  expect(refreshChangedCrawlRole).toHaveBeenCalledTimes(1);
+});
+
+test("twenty unsuccessful listings cannot starve a later valid listing",async()=>{
+  // Mutation: repeatedly select the first twenty pending entries instead of rotating failed attempts.
+  const roles=Array.from({length:21},(_,i)=>({...role,role_title:`Systems Lead ${i}`,job_url:`https://example.test/jobs/${i}`}));
   vi.mocked(callStructured).mockResolvedValue(JSON.stringify(roles));
   vi.mocked(ingestRoles).mockResolvedValue({added:[],skipped:[],seenTitles:[]});
   vi.mocked(settledCrawlRoles).mockResolvedValue([]);
   vi.mocked(refreshChangedCrawlRole).mockResolvedValue(false);
   await crawlCompany("Example",{ctx});
   await crawlCompany("Example",{ctx});
-  expect(vi.mocked(ingestRoles).mock.calls[0][0].roles).toHaveLength(6);
-  expect(vi.mocked(ingestRoles).mock.calls[1][0].roles[0].job_url).toBe("https://example.test/jobs/6");
+  expect(vi.mocked(ingestRoles).mock.calls[0][0].roles).toHaveLength(20);
+  expect(vi.mocked(ingestRoles).mock.calls[1][0].roles[0].job_url).toBe("https://example.test/jobs/20");
 });
 
 test("a truncated direct page remains partial and cannot populate or reuse complete extraction cache",async()=>{
