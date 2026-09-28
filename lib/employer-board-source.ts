@@ -1,4 +1,5 @@
 import {safeHttp} from "./safe-http";
+import {CAREERS_PAGE_MAX_BYTES} from "./careers-page-limits";
 import {fetchAllowed} from "./fetch-page";
 import {employerBoardCandidates} from "./employer-board-evidence";
 import {parseBoardUrl, parseBoardLink, classifyJobLink} from "./job-link";
@@ -55,7 +56,7 @@ export async function verifiedCompanyBoard(opts:{tenantId:string;company:string;
   let resolution:BoardResolution|null=null;
   if(careersUrl && classifyJobLink(careersUrl)==="other" && await fetchAllowed(careersUrl)) {
     try {
-      const response=await safeHttp(careersUrl,{timeoutMs:10000});
+      const response=await safeHttp(careersUrl,{timeoutMs:10000,maxBytes:CAREERS_PAGE_MAX_BYTES});
       if(response.ok) {
         const redirected=parseBoardUrl(response.url);
         if(redirected) resolution={...redirected,source:"read",evidenceKind:"employer_redirect",evidenceUrl:careersUrl,boardUrl:response.url};
@@ -70,7 +71,9 @@ export async function verifiedCompanyBoard(opts:{tenantId:string;company:string;
   }
   // Legacy deep links retain their previous trust boundary. A bare guessed
   // board is never upgraded simply because it appears in a stored URL.
-  const sourceChanged=previous!==null&&previous.careersUrl!==careersUrl;
+  // A legacy failed lookup records no board at all. It cannot prove that the
+  // configured careers page moved away from a previously known source.
+  const sourceChanged=!!previous?.vendor&&!!previous.slug&&previous.careersUrl!==careersUrl;
   const expiredEmployerProof=previous?.evidenceKind==="employer_link"||previous?.evidenceKind==="employer_redirect";
   if(!resolution&&!sourceChanged&&!expiredEmployerProof) for(const url of opts.storedUrls) {
     const link=parseBoardLink(url);

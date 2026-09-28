@@ -19,6 +19,23 @@ beforeEach(()=>{
   vi.mocked(safeHttp).mockResolvedValue({status:200,ok:true,url:opts.careersUrl,text:async()=>'<a href="https://jobs.ashbyhq.com/example">Jobs</a>',json:async()=>({})});
 });
 
+test("discovers an official board linked from a careers page larger than the generic download cap",async()=>{
+  // Mutation: update page extraction but leave employer-board discovery at the old 2 MiB cap.
+  const largeHtml=`<script>${"x".repeat(5*1024*1024)}</script><a href="https://jobs.ashbyhq.com/example">Jobs</a>`;
+  vi.mocked(safeHttp).mockImplementation(async(_url,options)=>{
+    if(Buffer.byteLength(largeHtml)>(options?.maxBytes??2*1024*1024)) throw new Error("Outbound HTTP decoded body limit exceeded");
+    return {status:200,ok:true,url:opts.careersUrl,text:async()=>largeHtml,json:async()=>({})};
+  });
+  expect(await verifiedCompanyBoard({...opts,dryRun:true})).toMatchObject({resolution:{vendor:"ashby",slug:"example",source:"read"},postings});
+});
+
+test("an old failed board lookup does not block existing posting evidence after a careers URL is saved",async()=>{
+  // Mutation: treat a negative cache row as a known former source and suppress fresh stored-posting evidence.
+  vi.mocked(rawQuery).mockResolvedValue({data:[{vendor:null,slug:null,source:null,checkedAt:new Date().toISOString(),careersUrl:null}],error:null});
+  vi.mocked(safeHttp).mockResolvedValue({status:200,ok:true,url:opts.careersUrl,text:async()=>"Careers are rendered by JavaScript",json:async()=>({})});
+  expect(await verifiedCompanyBoard({...opts,storedUrls:[postings[0].url],dryRun:true})).toMatchObject({resolution:{vendor:"ashby",slug:"example",source:"read",evidenceKind:"stored_posting"},postings});
+});
+
 test("only an employer-published link upgrades an uncorroborated Ashby candidate",async()=>{
   // Mutation: accept a guessed nonempty board without employer evidence.
   const verified=await verifiedCompanyBoard(opts);

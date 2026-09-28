@@ -8,6 +8,8 @@ vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
 vi.mock("node:http", () => ({ request: mocks.request }));
 vi.mock("node:https", () => ({ request: mocks.request }));
 import { safeHttp, isPublicAddress } from "./safe-http";
+import { fetchPage } from "./fetch-page";
+import { fetchBoardSnapshot, fetchPostingBody } from "./resolve-job-link";
 
 let responses: Array<{ status?: number; headers?: Record<string, string>; body?: Buffer; hang?: boolean }>;
 let streams: PassThrough[];
@@ -38,6 +40,37 @@ beforeEach(() => {
 });
 
 describe("public outbound HTTP", () => {
+  // Mutation: board enumeration succeeds but enrichment of the same feed still fails at the smaller default cap.
+  test("whole-board posting reads share the larger allowance while single-posting endpoints stay bounded", async () => {
+    const json = JSON.stringify({jobs:[{id:"role",title:"Systems Lead",jobUrl:"https://jobs.ashbyhq.com/example/role",descriptionPlain:"Build systems",isListed:true}],metadata:"x".repeat(3*1024*1024)});
+    responses.push({ headers: { "content-encoding": "gzip" }, body: gzipSync(Buffer.from(json)) });
+    expect(await fetchPostingBody("https://jobs.ashbyhq.com/example/role")).toMatchObject({text:"Build systems"});
+    responses.push({ headers: { "content-encoding": "gzip" }, body: gzipSync(Buffer.from(JSON.stringify({content:"x".repeat(3*1024*1024)}))) });
+    expect(await fetchPostingBody("https://boards.greenhouse.io/example/jobs/123")).toBeNull();
+  });
+  // Mutation: increase HTML downloads but leave the public board feed that contains the jobs at 2 MiB.
+  test("reads a large official board feed within the careers allowance", async () => {
+    const json = JSON.stringify({jobs:[{title:"Systems Lead",jobUrl:"https://jobs.ashbyhq.com/example/role",descriptionPlain:"A".repeat(3*1024*1024),isListed:true}]});
+    responses.push({ headers: { "content-encoding": "gzip" }, body: gzipSync(Buffer.from(json)) });
+    const board=await fetchBoardSnapshot("ashby","example");
+    expect(board).toMatchObject({kind:"ok",postings:[{title:"Systems Lead",url:"https://jobs.ashbyhq.com/example/role"}]});
+  });
+  // Mutation: ignore the careers reader's larger allowance, or raise the global default instead.
+  test("reads a large careers page with an explicit allowance while other downloads retain the default cap", async () => {
+    const body = gzipSync(Buffer.alloc(5 * 1024 * 1024, 65));
+    responses.push({ headers: { "content-encoding": "gzip" }, body });
+    expect((await fetchPage("https://example.com/careers", { maxBytes: 8 * 1024 * 1024 }))?.length).toBe(5 * 1024 * 1024);
+    responses.push({ headers: { "content-encoding": "gzip" }, body });
+    await expect(safeHttp("https://example.com/other")).rejects.toThrow(/limit/);
+  });
+  // Mutation: the new allowance removes the decoded-body boundary or accepts partial HTML after overflow.
+  test("the larger careers allowance still rejects a decompressed page above its cap", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    responses.push({ headers: { "content-encoding": "gzip" }, body: gzipSync(Buffer.alloc(8 * 1024 * 1024 + 1, 65)) });
+    expect(await fetchPage("https://example.com/careers", { maxBytes: 8 * 1024 * 1024 })).toBeNull();
+    expect(streams[0].destroyed).toBe(true);
+    vi.restoreAllMocks();
+  });
   // Mutation this catches: allowing a reserved range or mapped private IPv4.
   test.each(["127.0.0.1", "10.1.2.3", "169.254.169.254", "100.64.0.1", "192.0.0.1", "192.0.2.1", "198.18.0.1", "224.0.0.1", "0.0.0.0", "::1", "::", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "2001:db8::1", "2002:7f00:1::", "64:ff9b::7f00:1"])("rejects %s", address => {
     expect(isPublicAddress(address)).toBe(false);

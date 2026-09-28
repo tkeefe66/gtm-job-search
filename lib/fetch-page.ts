@@ -16,10 +16,11 @@ const USER_AGENT =
   "GTMJobSearchBot/1.0 (personal job-search tool; contact tkeefe66@gmail.com)";
 
 /** Fetches a page's HTML, or null for any non-2xx, timeout or network error. */
-export async function fetchPage(url: string): Promise<string | null> {
+export async function fetchPage(url: string, options: { maxBytes?: number } = {}): Promise<string | null> {
   try {
     const res = await safeHttp(url, {
       timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: options.maxBytes,
       headers: { "User-Agent": USER_AGENT },
     });
     if (!res.ok) {

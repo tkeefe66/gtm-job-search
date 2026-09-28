@@ -60,6 +60,35 @@ beforeEach(()=>{
   vi.mocked(saveCrawlSnapshot).mockImplementation(async(_t,_c,snapshot)=>{snapshots.push(structuredClone(snapshot));});
 });
 
+test("a large careers page remains readable without enabling paid search or expanding the AI prompt",async()=>{
+  // Mutation: increase board discovery's allowance but forget the crawler's ordinary HTML reader.
+  const largeHtml=`<script>${"x".repeat(5*1024*1024)}</script>${html}`;
+  vi.mocked(fetchPage).mockImplementation(async(_url,options)=>
+    Buffer.byteLength(largeHtml)>(options?.maxBytes??2*1024*1024)?null:largeHtml);
+  expect(await crawlCompany("Example",{ctx,trigger:"check"})).toMatchObject({status:"ok",rolesFound:1,newRoles:1});
+  expect(callWithWebSearchDetailed).not.toHaveBeenCalled();
+  expect(vi.mocked(callStructured).mock.calls[0][0].prompt.length).toBeLessThan(10000);
+});
+
+test("a link-heavy careers page keeps AI input bounded and cannot close roles or cache a complete result",async()=>{
+  // Mutation: cap visible text but forward millions of link characters, or treat omitted links as a complete inventory.
+  const links=Array.from({length:10000},(_,i)=>`<a href="/jobs/${i}?details=${"x".repeat(500)}">Systems Lead ${i}</a>`).join("");
+  vi.mocked(fetchPage).mockResolvedValue(`${html}${links}`);
+  expect((await crawlCompany("Example",{ctx,trigger:"check"})).status).toBe("partial");
+  expect(vi.mocked(callStructured).mock.calls[0][0].prompt.length).toBeLessThan(65000);
+  expect(saveCrawlSnapshot).not.toHaveBeenCalled();
+  expect(state.writes.filter(w=>w.table==="crawl_runs"&&w.patch.finished_at).every(w=>w.patch.closure_eligible===false)).toBe(true);
+});
+
+test("link truncation prevents closure even when visible page text fits",async()=>{
+  // Mutation: detect text truncation but ignore link-list truncation when marking extraction complete.
+  vi.mocked(fetchPage).mockResolvedValue(`${html}<a href="/jobs/large?details=${"x".repeat(25000)}">Systems Lead</a>`);
+  expect((await crawlCompany("Example",{ctx,trigger:"check"})).status).toBe("partial");
+  expect(vi.mocked(callStructured).mock.calls[0][0].prompt).not.toContain("x".repeat(25000));
+  expect(saveCrawlSnapshot).not.toHaveBeenCalled();
+  expect(state.writes.find(w=>w.table==="crawl_runs"&&w.patch.finished_at)?.patch.closure_eligible).toBe(false);
+});
+
 test("six unsuccessful listings cannot starve a later valid listing",async()=>{
   // Mutation: repeatedly select the first six pending entries instead of rotating failed attempts.
   const roles=Array.from({length:7},(_,i)=>({...role,role_title:`Systems Lead ${i}`,job_url:`https://example.test/jobs/${i}`}));

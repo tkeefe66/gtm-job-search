@@ -13,6 +13,7 @@ import { buildCompanyRolePrompt } from "@/lib/company-role-prompt";
 import { ingestRoles, refreshChangedCrawlRole, MAX_INGEST_READS } from "@/lib/ingest-roles";
 import { isJsShell, stripHtml, MAX_PAGE_CHARS, type ExtractedPage } from "@/lib/page-extract";
 import { fetchAllowed, fetchPage } from "@/lib/fetch-page";
+import { CAREERS_PAGE_MAX_BYTES } from "./careers-page-limits";
 import { rolesFromBoard } from "@/lib/board-source";
 import { verifiedCompanyBoard } from "./employer-board-source";
 import { candidatesToProcess, crawlProcessingQueue, carryListingAttempts, contentFingerprint, criteriaFingerprint, listingKey, pageFingerprint, type CrawlSnapshot, type ListingSnapshot } from "./crawl-snapshot";
@@ -107,6 +108,21 @@ export function criteriaForCompany(criteria: Criteria, ignoreLocation: boolean):
   };
 }
 
+// Download size is not model input size. Keep complete link lines within a
+// separate allowance and mark omitted links as incomplete source evidence.
+function extractionLinks(page: ExtractedPage): { text: string; complete: boolean } {
+  const lines: string[] = [];
+  let length = 0;
+  for (const link of page.links) {
+    const line = `${link.text || "(no text)"} -> ${link.href}`;
+    const added = line.length + (lines.length ? 1 : 0);
+    if (length + added > 20_000) return { text: lines.join("\n"), complete: false };
+    lines.push(line);
+    length += added;
+  }
+  return { text: lines.join("\n"), complete: true };
+}
+
 export function buildExtractionPrompt(
   company: string,
   page: ExtractedPage,
@@ -115,9 +131,7 @@ export function buildExtractionPrompt(
   buildingConcept: string,
   buildingUpside: string
 ): string {
-  const links = page.links
-    .map((l) => `${l.text || "(no text)"} -> ${l.href}`)
-    .join("\n");
+  const links = extractionLinks(page).text;
 
   return `Below is the text and link list scraped from the careers page of "${company}".
 
@@ -130,7 +144,7 @@ ${roleExtractionSchema(persona, buildingConcept, buildingUpside)}
 Use the link list to fill job_url — resolve relative URLs against the careers page where you can, otherwise return the relative path as-is. If no role on the page qualifies, return exactly [] and nothing else. Return ONLY the JSON array.
 
 --- PAGE TEXT ---
-${page.text}
+${page.text.slice(0, MAX_PAGE_CHARS)}
 
 --- LINKS ---
 ${links}`;
@@ -306,7 +320,7 @@ async function extractViaFetch(
     return { kind: "unavailable" };
   }
 
-  const html = await fetchPage(careersUrl);
+  const html = await fetchPage(careersUrl, { maxBytes: CAREERS_PAGE_MAX_BYTES });
   if (!html) return { kind: "unavailable" };
 
   const classification = classifyFetchOutcome(html);
@@ -317,7 +331,7 @@ async function extractViaFetch(
 
   const sourceKey=`page:${careersUrl}`;
   const tenant=await resolveTenantId();
-  const complete=classification.page.text.length<MAX_PAGE_CHARS;
+  const complete=classification.page.text.length<MAX_PAGE_CHARS && extractionLinks(classification.page).complete;
   const previous=complete?await readCrawlSnapshot(tenant,company,sourceKey,criteriaHash):null;
   const hash=pageFingerprint(classification.page,careersUrl);
   if(previous?.contentHash===hash) return {kind:"roles",roles:previous.listings.map(item=>item.role),

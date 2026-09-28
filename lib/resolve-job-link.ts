@@ -1,4 +1,5 @@
 import { safeHttp } from "./safe-http";
+import { CAREERS_PAGE_MAX_BYTES } from "./careers-page-limits";
 import {
   BOARD_VENDORS,
   boardApiUrl,
@@ -41,7 +42,7 @@ export type BoardSnapshotResult =
 /** Typed enumeration transport: an outage never erases source ownership. */
 export async function fetchBoardSnapshot(vendor: BoardVendor, slug: string): Promise<BoardSnapshotResult> {
   try {
-    const res = await safeHttp(boardApiUrl(vendor, slug), {timeoutMs:TIMEOUT_MS, headers:{Accept:"application/json"}});
+    const res = await safeHttp(boardApiUrl(vendor, slug), {timeoutMs:TIMEOUT_MS, maxBytes:CAREERS_PAGE_MAX_BYTES, headers:{Accept:"application/json"}});
     if (res.status === 404 || res.status === 410) return {kind:"missing"};
     if (!res.ok) return {kind:"unavailable",message:`Board returned HTTP ${res.status}. Try again later.`};
     const postings = parseBoardSnapshot(vendor, await res.json());
@@ -151,6 +152,7 @@ async function fetchBoard(vendor: BoardVendor, slug: string) {
   try {
     const res = await safeHttp(boardApiUrl(vendor, slug), {
       timeoutMs: TIMEOUT_MS,
+      maxBytes: CAREERS_PAGE_MAX_BYTES,
       headers: { Accept: "application/json" },
     });
     // 404 is the honest answer for a missing board on Greenhouse and Ashby.
@@ -337,8 +339,9 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
   // posting needs its own call there; Ashby and Lever publish every description
   // in the board payload, so the board URL IS the body source for them. Breezy
   // has no verified shape and is not guessed at.
+  const postingEndpoint = postingBodyUrl(link.vendor, link.slug, link.id);
   const endpoint =
-    postingBodyUrl(link.vendor, link.slug, link.id) ??
+    postingEndpoint ??
     (link.vendor === "ashby" || link.vendor === "lever"
       ? boardApiUrl(link.vendor, link.slug)
       : null);
@@ -347,6 +350,7 @@ export async function fetchPostingBody(url: string): Promise<PostingBody | null>
   try {
     const res = await safeHttp(endpoint, {
       timeoutMs: TIMEOUT_MS,
+      maxBytes: postingEndpoint === null ? CAREERS_PAGE_MAX_BYTES : undefined,
       headers: { Accept: "application/json" },
     });
     // Both vendors 404 honestly for a missing board AND for a missing posting
