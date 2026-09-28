@@ -48,3 +48,13 @@ Implementation is retained on `codex/cost-efficiency`, based on production/origi
 Release requires migrations **026–028** through the existing migration runner before serving the new build. Migration 025 is reserved for separate, undeployed chat work and is not part of this branch. Health verifies required columns and grants. Release should verify the exact deployed commit, authenticated Settings/Watchlist readback, and direct checks at a paid cap. Any live paid-search quality/cost comparison needs its own explicit spending bound.
 
 Key-verification probes retain their documented exception outside operation metering. Provider HTTP refusals without reported usage remain conservatively unknown rather than assuming zero billing. Historical provider-dashboard differences remain unresolved by this forward-looking request ledger.
+
+## September 28 release verification
+
+The user authorized the release after reviewing the remaining steps. The fresh full suite passed 2,291 tests (16 skipped), and the production build passed before release.
+
+The native PostgreSQL gap is now covered by `node scripts/verify-postgres-concurrency.mjs`. It starts an already-cached PostgreSQL 18 image on an ephemeral loopback port, uses disposable in-memory database storage, refuses production connection URLs, and removes its container afterward. Six tests passed on PostgreSQL 18.4 using separate connections under `app_rw` and the actual accounting SQL. Observed lock contention proves overall and background reservation limits, rollback after a background-month refusal, idempotent concurrent settlement, and both orderings of recovery versus request admission. A test-adapter-only negative control removed the reservation guard and correctly failed with 20 admissions instead of 10; the restored six-test run passed again. All disposable containers were removed. The ordinary suite skips these six tests unless the disposable harness supplies its dedicated configuration.
+
+Production preflight found exactly migrations 026–028 pending. All three were applied through the existing migration runner before the new application build. Record counts and hashes matched before and after for 336 jobs, 38 watchlist entries, 34 board records, 133 crawl runs, 483 usage events, 30 settings, 3 saved résumés, and 8 résumé chats, excluding only the intentionally added fields. All 336 historical jobs received refresh protection; automatic paid search is disabled on every watchlist entry.
+
+This entry records pre-deployment evidence. The terminal Railway deployment status, authenticated browser checks, and any separately bounded provider probe must be verified against the released commit; they are not claimed by this document.
