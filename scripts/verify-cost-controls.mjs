@@ -66,5 +66,19 @@ try{
  await page.getByRole('button',{name:'Save spending limits',exact:true}).click();
  await page.getByText('Overall spending limits saved and confirmed.',{exact:false}).waitFor();
  assert.equal(await page.locator('#background-daily-limit').inputValue(),'3');
- console.log(JSON.stringify({passed:true,outputDir,checks:['automatic toggle persistence','empty-string toggle failure retains saved state','direct and deep triggers','zero pauses','blank removes extra cap','limits read back','empty save error visible','admin background controls','390px no overflow','no browser errors','saving one limits form preserves edits in the other'],width}));
+ // Mutation caught: the row keeps the generic badge, details leak legacy provider JSON, or longer labels overflow mobile.
+ for (const [issue,label,remedy] of [['credit','API credits too low','Review credits and billing limits'],['incomplete','AI response incomplete','Use Check now to retry the direct source']]) {
+  await page.goto(`${baseUrl}__costqa?issue=${issue}`);
+  await page.getByText(label,{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Open',exact:true}).click();
+  await page.getByText(`Last check: ${label}`,{exact:true}).waitFor();
+  assert.ok((await page.locator('body').innerText()).includes(remedy));
+  assert.ok(!(await page.locator('body').innerText()).includes('synthetic-request'));
+  assert.equal(await page.getByRole('link',{name:'Careers ↗',exact:true}).getAttribute('href'),'https://example.test/careers');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390);
+  assert.deepEqual(await page.evaluate(()=>window.costQA.calls),[]);
+  await page.screenshot({path:path.join(outputDir,`mobile-${issue}.png`),fullPage:true});
+ }
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({passed:true,outputDir,checks:['automatic toggle persistence','empty-string toggle failure retains saved state','direct and deep triggers','zero pauses','blank removes extra cap','limits read back','empty save error visible','admin background controls','390px no overflow','no browser errors','saving one limits form preserves edits in the other','specific failure badges and explanations','saved careers links remain available','viewing failures triggers no check'],width}));
 }finally{await browser?.close();await server.close();}

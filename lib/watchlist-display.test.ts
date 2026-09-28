@@ -1,5 +1,45 @@
 import { expect, test } from "vitest";
-import { companyCostDisplay, crawlOutcomeText, formatAICost } from "./watchlist-display";
+import { companyCostDisplay, crawlIssueDisplay, crawlOutcomeText, formatAICost } from "./watchlist-display";
+
+const legacyCreditError = '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"synthetic-request"}';
+
+// Mutation caught: treating a historical credit refusal as a missing job board or showing raw SDK JSON.
+test("explains legacy credit refusals and current billing refusals without asserting today's balance", () => {
+  const legacy = crawlIssueDisplay("error", legacyCreditError);
+  expect(legacy).toMatchObject({ label: "API credits too low" });
+  expect(legacy?.explanation).toContain("last attempt");
+  expect(legacy?.nextStep).toContain("billing");
+  expect(JSON.stringify(legacy)).not.toContain("synthetic-request");
+  expect(crawlOutcomeText({ status: "error", rolesFound: 0, newRoles: 0, error: legacyCreditError })).toContain(legacy!.explanation);
+  expect(crawlIssueDisplay("error", "Anthropic: billing allowance exhausted. Add API credits or check your provider billing limit before retrying.")?.label).toBe("API billing blocked");
+});
+
+// Mutation caught: summarizing the first failure hides the crawler's appended persistence failure.
+test("keeps a failed watchlist write visible alongside a recognized AI failure", () => {
+  for (const cause of [legacyCreditError, "Anthropic: billing allowance exhausted. Add API credits or check your provider billing limit before retrying.", "The AI did not finish a usable answer. Please retry."]) {
+    const error = `${cause} (also failed to record the crawl on the watchlist: connection refused)`;
+    expect(crawlOutcomeText({ status: "error", rolesFound: 0, newRoles: 0, error })).toContain("also failed to record the crawl on the watchlist: connection refused");
+    expect(crawlIssueDisplay("error", error)?.explanation).toContain("also failed to record the crawl on the watchlist: connection refused");
+  }
+});
+
+// Mutation caught: collapsing incomplete AI output into a source failure or losing the partial-result warning.
+test("distinguishes unusable AI answers from a missing careers URL", () => {
+  const error = "The AI did not finish a usable answer. Please retry.";
+  expect(crawlIssueDisplay("error", error)).toMatchObject({ label: "AI response incomplete" });
+  expect(crawlIssueDisplay("partial", error)?.label).toBe("Partial · AI response incomplete");
+  expect(crawlOutcomeText({ status: "partial", rolesFound: 4, newRoles: 2, error })).toContain("Partial check: 4 roles found, 2 new.");
+  expect(crawlIssueDisplay("error", "The search produced too much data to finish. Please retry.")?.label).toBe("AI response incomplete");
+  expect(crawlIssueDisplay("needs_url", legacyCreditError)?.label).toBe("Needs a careers URL");
+});
+
+// Mutation caught: a blank error disappears, an unknown reason is discarded, or a stale error overrides success.
+test("keeps unknown failures explicit and ignores stale errors after successful checks", () => {
+  expect(crawlIssueDisplay("error", "")?.label).toBe("Check failed");
+  expect(crawlIssueDisplay("error", "")?.explanation).toContain("No reason was recorded");
+  expect(crawlIssueDisplay("error", "Could not read the careers page: HTTP 403.")?.explanation).toContain("HTTP 403");
+  for (const status of ["ok", "empty", "unchanged"]) expect(crawlIssueDisplay(status, legacyCreditError)).toBeNull();
+});
 
 // Mutation caught: rounding a paid sub-cent call down to a displayed $0.00,
 // or coercing missing historical evidence into a free check.

@@ -24,7 +24,7 @@ import type { TrackedCompany } from "@/lib/types";
 import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
 import CompanyCheckDetails from "./CompanyCheckDetails";
-import { crawlOutcomeText } from "@/lib/watchlist-display";
+import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
 import { describeWriteFailure } from "@/lib/write-failure";
 
 // The dot colour and its sentence in one place, so the legend can never
@@ -393,6 +393,7 @@ export default function Watchlist() {
   function renderRow(c: TrackedCompany, i: number) {
     const state = stateOf(c);
     const style = STATE_STYLE[state];
+    const issue = crawlIssueDisplay(c.last_crawl_status, c.last_crawl_error);
     const due = nextCheckDue(c.last_attempted_at ?? c.last_checked_at, c.crawl_interval_days, c.next_attempt_at);
     const open = openRows.has(c.company);
     const busy = busyRows.has(c.company);
@@ -413,18 +414,18 @@ export default function Watchlist() {
           onClick={() => toggleRow(c.company)}
           className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-x-4 px-4 py-2.5 transition hover:bg-canvas sm:grid-cols-[1fr_auto_7rem_4rem]"
         >
-          <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
             <span
               className={`h-[7px] w-[7px] flex-none rounded-full ${style.dot}`}
-              title={style.legend}
+              title={issue?.explanation ?? style.legend}
             />
-            <span className="font-heading text-sm font-semibold">{c.company}</span>
+            <span className="min-w-0 break-words font-heading text-sm font-semibold">{c.company}</span>
             <span className="hidden truncate text-xs text-ink/45 sm:block">
               {c.signal ?? c.tagline ?? ""}
             </span>
             {(needsYou(state) || ["skipped", "partial", "unchanged", "error"].includes(state)) && (
-              <span className="flex-none rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-medium text-[#92400E]">
-                {style.label}
+              <span className="max-w-full rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-medium text-[#92400E]" title={issue?.explanation ?? style.legend}>
+                {issue?.label ?? style.label}
               </span>
             )}
           </div>
