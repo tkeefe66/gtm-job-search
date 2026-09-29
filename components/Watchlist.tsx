@@ -25,6 +25,7 @@ import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
 import CompanyCheckDetails from "./CompanyCheckDetails";
 import WatchlistBatchResults from "./WatchlistBatchResults";
+import WatchlistCheckSelection from "./WatchlistCheckSelection";
 import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { requestWithDeadline } from "@/lib/client-request";
@@ -902,12 +903,14 @@ export default function Watchlist() {
         <section className="mb-4 rounded-lg border border-slate bg-white p-4" aria-label="Watchlist batch check">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">Check due and unresolved companies</h3>
+              <h3 className="text-base font-semibold">{batchCandidates.length} {batchCandidates.length === 1 ? "company to check" : "companies to check"}</h3>
               <p className="mt-1 max-w-prose text-sm text-ink/70">
-                Checks companies due on their schedule and retries failed, deferred, or incomplete checks.
-                Reads careers pages and job boards; AI processing uses your existing spending limits.
+                Select a company to review its careers link and check options, or check all of them at once.
               </p>
-              <p className="mt-1 max-w-prose text-xs text-ink/70">Companies that need a different careers URL or paid Deep search may remain unresolved. Runs one company at a time; keep this page open until it finishes.</p>
+              <details className="mt-2 text-xs text-ink/60">
+                <summary className="cursor-pointer">How the batch check works</summary>
+                <p className="mt-1 max-w-prose">Checks due and unresolved companies one at a time. Keep this page open until it finishes. AI processing uses your spending limits; paid Deep search is not included. Unreadable sources may need a new careers link or Deep search.</p>
+              </details>
             </div>
             {batchRunning ? (
               <button type="button" disabled={batchStopping} onClick={() => { stopBatch.current = true; setBatchStopping(true); }}
@@ -922,22 +925,12 @@ export default function Watchlist() {
               </button>
             )}
           </div>
-          {!batchRunning && batchCandidates.length > 0 && <details className="mt-3 text-sm">
-            <summary className="cursor-pointer font-medium">View the {batchCandidates.length} selected {batchCandidates.length === 1 ? "company" : "companies"} and why</summary>
-            <ul className="mt-2 space-y-2 text-ink/70">
-              {batchCandidates.map(name => {
-                const company = companies.find(item => item.company === name)!;
-                const issue = crawlIssueDisplay(company.last_crawl_status, company.last_crawl_error);
-                const reason = issue ? `${issue.label}: ${issue.explanation}` : stateOf(company) === "failing"
-                  ? `${company.consecutive_failures} unsuccessful checks in a row. Review the careers URL.`
-                  : !company.last_checked_at ? "No check has been recorded yet." : "Due for its next scheduled check.";
-                return <li key={name} className="break-words"><button type="button" onClick={() => reviewCompany(name)} className="font-medium text-ink underline underline-offset-2">{name}</button>: {reason}</li>;
-              })}
-            </ul>
-          </details>}
           {batchRunning && !batchProgress && <p className="mt-3 text-sm text-ink/60" role="status">Preparing checks…</p>}
           {checkUnconfirmed && <p className="mt-3 text-xs text-[#92400E]" role="alert">Checks are disabled because the last request may still be running. Reload to inspect saved results before retrying.</p>}
           {batchProgress && <WatchlistBatchResults progress={batchProgress} onReview={reviewCompany} />}
+          {!batchRunning && batchCandidates.length > 0 && <div className="mt-4 border-t border-slate">
+            <WatchlistCheckSelection companies={batchCandidates.map(name => companies.find(item => item.company === name)!)} onReview={reviewCompany} previousBatch={batchProgress} />
+          </div>}
         </section>
       )}
 

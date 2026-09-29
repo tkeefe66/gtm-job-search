@@ -7,9 +7,10 @@ const legacyCreditError = '400 {"type":"error","error":{"type":"invalid_request_
 test("legacy direct-only deferrals explain the limitation without inventing a source failure", () => {
   const error = "Direct check finished. Choose Deep search to search beyond direct sources.";
   const issue = crawlIssueDisplay("skipped", error);
-  expect(issue?.label).toBe("Direct source needs review");
-  expect(issue?.explanation).toContain("could not obtain readable listings");
-  expect(issue?.explanation).toContain("exact source problem was not recorded");
+  expect(issue?.label).toBe("Job listings couldn’t be read");
+  expect(issue?.explanation).toContain("couldn’t read listings");
+  expect(issue?.explanation).toContain("exact cause wasn’t recorded");
+  expect(issue?.explanation).toContain("paid search wasn’t tried");
   expect(issue?.nextStep).toContain("careers URL");
   expect(issue?.nextStep).toContain("5 paid searches");
   expect(crawlOutcomeText({ status: "skipped", rolesFound: 0, newRoles: 0, error })).not.toContain("Direct check finished");
@@ -20,7 +21,8 @@ test("partial checks distinguish unfinished roles, source coverage, and older un
   expect(crawlIssueDisplay("partial", "2 matching roles still need processing. Details were not saved.")?.nextStep).toContain("Check now");
   expect(crawlIssueDisplay("partial", "Only part of the careers page fit within this check's reading limit.")?.nextStep).toContain("job-board URL");
   const legacy = crawlIssueDisplay("partial", "Listings were checked; some processing is incomplete or the search covered only part of the source. Try again or review the saved roles.");
-  expect(legacy?.explanation).toContain("did not record which step");
+  expect(legacy?.explanation).toContain("Role processing or source coverage was incomplete");
+  expect(legacy?.explanation).toContain("didn’t record which");
   expect(legacy?.nextStep).toContain("Check now");
 });
 

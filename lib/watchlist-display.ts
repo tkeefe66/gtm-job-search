@@ -5,7 +5,7 @@ export function formatAICost(microusd: number | null | undefined): string {
   return `$${(microusd / 1_000_000).toFixed(2)}`;
 }
 
-interface CrawlIssue {
+export interface CrawlIssue {
   label: string;
   explanation: string;
   nextStep: string;
@@ -22,9 +22,9 @@ function knownCrawlIssue(error: string | null | undefined): CrawlIssue | null {
     return cause ? { ...cause, explanation: `${cause.explanation}${message.slice(saveFailure)}` } : null;
   }
   if (message === "Direct check finished. Choose Deep search to search beyond direct sources.") return {
-    label: "Direct source needs review",
-    explanation: "The direct check could not obtain readable listings, and paid web search was not used. The exact source problem was not recorded for this older check.",
-    nextStep: "Review or add the careers URL, then use Save and check. If the listings still cannot be read, choose Deep search (up to 5 paid searches).",
+    label: "Job listings couldn’t be read",
+    explanation: "The last check couldn’t read listings. The exact cause wasn’t recorded; paid search wasn’t tried.",
+    nextStep: "Review the careers URL. If it’s correct, try Deep search (up to 5 paid searches).",
   };
   if (message.startsWith("No careers URL is saved")) return {
     label: "Needs a careers URL", explanation: message,
@@ -47,8 +47,8 @@ function knownCrawlIssue(error: string | null | undefined): CrawlIssue | null {
     nextStep: "Review the roles already saved in Roles. Use Check now to retry unfinished processing; AI work uses your spending limits.",
   };
   if (message.startsWith("Listings were checked; some processing is incomplete")) return {
-    label: "Incomplete check", explanation: "Some role processing or source coverage was incomplete. This older check did not record which step was unfinished or how many roles were affected.",
-    nextStep: "Review saved roles in Roles, then use Check now to retry and get a more specific result. If source coverage is still incomplete, review the careers URL.",
+    label: "Only partial results", explanation: "Role processing or source coverage was incomplete. The previous check didn’t record which.",
+    nextStep: "Review saved roles in Roles, then use Check now to retry.",
   };
   const lowCredits = /credit balance is too low/i.test(message);
   if (lowCredits || /^(Anthropic|OpenAI|Google): billing allowance exhausted\./.test(message)) {
