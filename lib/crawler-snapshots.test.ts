@@ -211,6 +211,50 @@ test("budget refusal cannot become an empty listing or model failure",async()=>{
   expect(state.writes.find(w=>w.table==="crawl_runs"&&w.patch.finished_at)?.patch.closure_eligible).toBe(false);
 });
 
+// Mutation: return only the paid-search policy refusal and discard the reason direct collection could not continue.
+test.each([
+  ["missing URL", null, html, "No careers URL is saved"],
+  ["JavaScript page", "https://example.test/careers", "<div>Shell</div>", "JavaScript"],
+  ["unavailable page", "https://example.test/careers", null, "could not be downloaded"],
+])("records why a direct check stopped for a %s without starting paid search", async (_name, url, page, reason) => {
+  state.tracked.careers_url = url as string;
+  vi.mocked(fetchPage).mockResolvedValue(page);
+  const outcome = await crawlCompany("Example", {ctx, trigger:"check"});
+  expect(outcome.status).toBe("skipped");
+  expect(outcome.error).toContain(reason);
+  expect(outcome.error).toContain("Deep search");
+  expect(callWithWebSearchDetailed).not.toHaveBeenCalled();
+  expect(state.writes.find(w=>w.table==="crawl_runs"&&w.patch.finished_at)?.patch.error).toBe(outcome.error);
+});
+
+// Mutation: replace the measured pending count with the same generic message used for partial source coverage.
+test("records how many matching roles remain unprocessed", async () => {
+  vi.mocked(settledCrawlRoles).mockResolvedValue([]);
+  const outcome = await crawlCompany("Example", {ctx, trigger:"check"});
+  expect(outcome.status).toBe("partial");
+  expect(outcome.error).toContain("1 matching role still needs processing");
+  expect(outcome.error).not.toContain("reading limit");
+});
+
+// Mutation: attribute every pending role to the cap even when twenty attempts also failed to settle.
+test("separates deferred roles from attempted processing that did not finish", async () => {
+  vi.mocked(callStructured).mockResolvedValue(JSON.stringify(Array.from({length:21},(_,i)=>({...role,job_url:`https://example.test/jobs/${i}`}))));
+  vi.mocked(settledCrawlRoles).mockResolvedValue([]);
+  const outcome = await crawlCompany("Example", {ctx, trigger:"check"});
+  expect(outcome.error).toContain("21 matching roles still need processing");
+  expect(outcome.error).toContain("1 role was left for another check");
+  expect(outcome.error).toContain("20 attempted roles did not finish");
+  expect(outcome.error).toContain("in this company check");
+});
+
+// Mutation: blame unfinished role processing when all returned roles were processed but source text was truncated.
+test("records incomplete page coverage without inventing a processing backlog", async () => {
+  vi.mocked(fetchPage).mockResolvedValue(`<p>${"Words ".repeat(MAX_PAGE_CHARS)}</p>${html}`);
+  const outcome = await crawlCompany("Example", {ctx, trigger:"check"});
+  expect(outcome.error).toContain("Only part of the careers page");
+  expect(outcome.error).not.toContain("still need");
+});
+
 test("a material change refreshes its old listing and retains every observed title",async()=>{
   // Mutation: persist only changed titles, causing unchanged live listings to look absent.
   const other={...role,role_title:"Systems Architect",job_url:"https://example.test/jobs/2"};

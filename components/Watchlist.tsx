@@ -24,6 +24,7 @@ import type { TrackedCompany } from "@/lib/types";
 import { displayableExtras } from "@/lib/watchlist-signal";
 import { Spinner, Tag } from "./ui";
 import CompanyCheckDetails from "./CompanyCheckDetails";
+import WatchlistBatchResults from "./WatchlistBatchResults";
 import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { requestWithDeadline } from "@/lib/client-request";
@@ -114,6 +115,7 @@ export default function Watchlist() {
   // Which rows are open. Keyed by company for the same reason busyRows is: the
   // list reloads after every mutation, so an index would reopen the wrong row.
   const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+  const [reviewTarget, setReviewTarget] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("original");
@@ -147,6 +149,22 @@ export default function Watchlist() {
       return next;
     });
   }
+
+  function reviewCompany(company: string) {
+    setFilter("all");
+    setQuery("");
+    if (companies.some(item => item.company === company && !item.tracking_enabled)) setShowUntracked(true);
+    setOpenRows(prev => new Set(prev).add(company));
+    setReviewTarget(company);
+  }
+
+  useEffect(() => {
+    if (!reviewTarget) return;
+    const row = document.getElementById(`watchlist-company-${encodeURIComponent(reviewTarget)}`);
+    row?.focus({ preventScroll: true });
+    row?.scrollIntoView({ block: "start" });
+    setReviewTarget(null);
+  }, [reviewTarget]);
 
   useEffect(() => {
     mounted.current = true;
@@ -239,6 +257,14 @@ export default function Watchlist() {
         delete next[from];
         return next;
       });
+      // The retained batch uses the same company key as the watchlist rows.
+      // Keep its Review links valid after a confirmed rename.
+      if (res.company) {
+        const renamed = res.company;
+        setBatchProgress(prev => prev ? { ...prev, results: prev.results.map(result =>
+          result.company === from ? { ...result, company: renamed,
+            outcome: result.outcome ? { ...result.outcome, company: renamed } : undefined } : result) } : prev);
+      }
       setRenaming(null);
       setNotice(`Renamed to "${res.company}".`);
       await load();
@@ -409,9 +435,6 @@ export default function Watchlist() {
   const attentionCount = tracked.filter((c) => needsYou(stateOf(c))).length;
   const dueCount = tracked.filter((c) => stateOf(c) === "due").length;
   const batchCandidates = watchlistCheckCandidates(companies);
-  const batchNewRoles = batchProgress?.results.reduce((sum, result) => sum + (result.outcome?.newRoles ?? 0), 0) ?? 0;
-  const batchNeedsAttention = batchProgress?.results.filter(result => result.error !== undefined ||
-    (result.outcome && !["ok", "empty", "unchanged"].includes(result.outcome.status))).length ?? 0;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -473,7 +496,8 @@ export default function Watchlist() {
     const showLegacyTags = !c.signal && extras.length === 0;
 
     return (
-      <div key={c.company} className={i > 0 ? "border-t border-slate" : ""}>
+      <div key={c.company} id={`watchlist-company-${encodeURIComponent(c.company)}`} tabIndex={-1}
+        className={`scroll-mt-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink ${i > 0 ? "border-t border-slate" : ""}`}>
         <div
           onClick={() => toggleRow(c.company)}
           className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-x-4 px-4 py-2.5 transition hover:bg-canvas sm:grid-cols-[1fr_auto_7rem_4rem]"
@@ -721,7 +745,9 @@ export default function Watchlist() {
     return (
       <div
         key={c.company}
-        className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${
+        id={`watchlist-company-${encodeURIComponent(c.company)}`}
+        tabIndex={-1}
+        className={`flex scroll-mt-4 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink ${
           i > 0 ? "border-t border-slate" : ""
         }`}
       >
@@ -876,12 +902,12 @@ export default function Watchlist() {
         <section className="mb-4 rounded-lg border border-slate bg-white p-4" aria-label="Watchlist batch check">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">Check companies that need it</h3>
-              <p className="mt-1 max-w-prose text-xs text-ink/60">
-                Includes companies due for a check or needing attention, across your watchlist.
-                Direct sources only; AI processing uses your existing spending limits.
+              <h3 className="text-sm font-semibold">Check due and unresolved companies</h3>
+              <p className="mt-1 max-w-prose text-sm text-ink/70">
+                Checks companies due on their schedule and retries failed, deferred, or incomplete checks.
+                Reads careers pages and job boards; AI processing uses your existing spending limits.
               </p>
-              <p className="mt-1 text-xs text-ink/45">Runs one company at a time. Keep this page open until the batch finishes.</p>
+              <p className="mt-1 max-w-prose text-xs text-ink/70">Companies that need a different careers URL or paid Deep search may remain unresolved. Runs one company at a time; keep this page open until it finishes.</p>
             </div>
             {batchRunning ? (
               <button type="button" disabled={batchStopping} onClick={() => { stopBatch.current = true; setBatchStopping(true); }}
@@ -892,32 +918,26 @@ export default function Watchlist() {
               <button type="button" onClick={() => void handleBatchCheck()}
                 disabled={checkUnconfirmed || loading || tracking || !!checking || busyRows.size > 0 || batchCandidates.length === 0}
                 className="rounded-md border border-ink bg-ink px-3 py-2 text-sm font-medium text-white hover:bg-ink/90 disabled:opacity-50">
-                Check all that need it ({batchCandidates.length})
+                Check {batchCandidates.length} {batchCandidates.length === 1 ? "company" : "companies"}
               </button>
             )}
           </div>
+          {!batchRunning && batchCandidates.length > 0 && <details className="mt-3 text-sm">
+            <summary className="cursor-pointer font-medium">View the {batchCandidates.length} selected {batchCandidates.length === 1 ? "company" : "companies"} and why</summary>
+            <ul className="mt-2 space-y-2 text-ink/70">
+              {batchCandidates.map(name => {
+                const company = companies.find(item => item.company === name)!;
+                const issue = crawlIssueDisplay(company.last_crawl_status, company.last_crawl_error);
+                const reason = issue ? `${issue.label}: ${issue.explanation}` : stateOf(company) === "failing"
+                  ? `${company.consecutive_failures} unsuccessful checks in a row. Review the careers URL.`
+                  : !company.last_checked_at ? "No check has been recorded yet." : "Due for its next scheduled check.";
+                return <li key={name} className="break-words"><button type="button" onClick={() => reviewCompany(name)} className="font-medium text-ink underline underline-offset-2">{name}</button>: {reason}</li>;
+              })}
+            </ul>
+          </details>}
           {batchRunning && !batchProgress && <p className="mt-3 text-sm text-ink/60" role="status">Preparing checks…</p>}
           {checkUnconfirmed && <p className="mt-3 text-xs text-[#92400E]" role="alert">Checks are disabled because the last request may still be running. Reload to inspect saved results before retrying.</p>}
-          {batchProgress && (
-            <div className="mt-3">
-              <p className="text-sm font-medium" role="status" aria-live="polite">
-                {batchProgress.currentCompany ? `Checking ${batchProgress.currentCompany} · ` :
-                  batchProgress.interrupted ? "Batch interrupted · " : batchProgress.stopped ? "Batch stopped · " : "Batch finished · "}
-                {batchProgress.completed} of {batchProgress.total} checked · {batchNewRoles} new roles · {batchNeedsAttention} need attention
-              </p>
-              {batchProgress.interrupted && <p className="mt-1 text-xs text-[#92400E]">The last request could not be confirmed and may still finish. Reload to see saved results before retrying.</p>}
-              {batchProgress.stopped && <p className="mt-1 text-xs text-ink/60">Completed results are saved. Unchecked companies remain for the next batch.</p>}
-              {batchProgress.results.length > 0 && (
-                <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto text-xs text-ink/70" aria-label="Batch results">
-                  {batchProgress.results.map(result => (
-                    <li key={result.company}><span className="font-semibold">{result.company}:</span>{" "}
-                      {result.outcome ? describe(result.outcome) : result.error || "Could not confirm this check completed."}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
+          {batchProgress && <WatchlistBatchResults progress={batchProgress} onReview={reviewCompany} />}
         </section>
       )}
 

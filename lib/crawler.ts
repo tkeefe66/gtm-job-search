@@ -286,7 +286,7 @@ export function classifyFetchOutcome(html: string): FetchClassification {
 type FetchTierResult =
   | { kind: "roles"; roles: Role[]; snapshot:CrawlSnapshot|null; cached:boolean; complete:boolean }
   | { kind: "shell" }
-  | { kind: "unavailable" };
+  | { kind: "unavailable"; reason: string };
 
 async function storedAtsLinks(company: string): Promise<string[]> {
   const tenantId = await resolveTenantId();
@@ -317,11 +317,11 @@ async function extractViaFetch(
     console.log(
       `crawler: robots.txt disallows (or could not be read for) ${careersUrl}, using search tier for this run`
     );
-    return { kind: "unavailable" };
+    return { kind: "unavailable", reason: "The site's automated-access rules blocked the direct check, or those rules could not be read." };
   }
 
   const html = await fetchPage(careersUrl, { maxBytes: CAREERS_PAGE_MAX_BYTES });
-  if (!html) return { kind: "unavailable" };
+  if (!html) return { kind: "unavailable", reason: "The careers page could not be downloaded for this check. A more specific download failure was not recorded." };
 
   const classification = classifyFetchOutcome(html);
   if (classification.kind === "shell") {
@@ -717,8 +717,10 @@ export async function crawlCompany(
       const criteria=criteriaForCompany(ctx.criteria,tracked.ignore_location_rule);
       criteriaHash=criteriaFingerprint({criteria,fitInputs:ctx.fitInputs,profile:ctx.profile});
       const paid=paidSearchDecision({trigger,allowPaidSearch:tracked.allow_paid_search??false,modelRetryAfter:tracked.model_retry_after??null});
-      const useSearch=async <T,>(max:number,fn:(cap:number)=>Promise<T>):Promise<T>=>{
-        if(!paid.allowed) throw new SpendLimitReachedError(paid.reason??"Paid search is not enabled for this check. Use Deep search to permit it.");
+      const useSearch=async <T,>(max:number,fn:(cap:number)=>Promise<T>,sourceReason:string):Promise<T>=>{
+        if(!paid.allowed) throw new SpendLimitReachedError(`${sourceReason} ${trigger === "check"
+          ? "Check now does not use paid web search. Choose Deep search to allow up to 5 paid searches."
+          : paid.reason ?? "Paid search is not enabled for this check. Use Deep search to permit it."}`);
         const cap=Math.min(max,searchRemaining());
         if(cap<=0) throw new SpendLimitReachedError("This company check reached its five-search limit.");
         reservedSearches+=cap;
@@ -750,7 +752,7 @@ export async function crawlCompany(
         listingComplete=true;
       } else {
         if(!careersUrl) {
-          careersUrl=await useSearch(2,cap=>resolveCareersUrl(company,cap));
+          careersUrl=await useSearch(2,cap=>resolveCareersUrl(company,cap),"No careers URL is saved, and no usable job board was found by the direct check.");
           if(careersUrl&&!dryRun) {
             const saved=await supabase.forTenant(tenantId).from("watchlist").update({careers_url:careersUrl}).eq("company",company);
             const failure=describeWriteFailure(saved.error?.message,"remember the careers URL");
@@ -767,7 +769,8 @@ export async function crawlCompany(
         } else {
           learnedMethod=fetched.kind==="shell"?"search":null;
           runMethod="search";
-          const searched=await useSearch(COMPANY_SEARCH_LIMIT,cap=>extractViaSearch(company,careersUrl,criteria,ctx.profile,cap));
+          const searched=await useSearch(COMPANY_SEARCH_LIMIT,cap=>extractViaSearch(company,careersUrl,criteria,ctx.profile,cap),
+            fetched.kind === "shell" ? "The direct reader could not extract listings from this page. It may load jobs with JavaScript or use a layout the reader does not recognize." : fetched.reason);
           roles=searched.roles;salvaged=searched.salvaged;
           sourceKey=`search:${careersUrl}`;
           // A bounded search can find useful roles, never establish absence.
@@ -821,7 +824,20 @@ export async function crawlCompany(
       }
       const pending=snapshot?candidatesToProcess(snapshot.listings,snapshot.processed).length:Math.max(0,candidates.length-work.length);
       status=!listingComplete||pending>0?"partial":candidates.length===0&&roles.length>0?"unchanged":roles.length>0?"ok":"empty";
-      if(status==="partial") errorMessage="Listings were checked; some processing is incomplete or the search covered only part of the source. Try again or review the saved roles.";
+      if(status==="partial") {
+        const remaining = pending > 0
+          ? `${pending} matching role${pending === 1 ? " still needs" : "s still need"} processing.` : null;
+        const unattempted = Math.max(0, candidates.length - work.length);
+        const deferred = unattempted > 0
+          ? `This check processes up to ${MAX_INGEST_READS} roles; ${unattempted} role${unattempted === 1 ? " was" : "s were"} left for another check.` : null;
+        const attemptedPending = Math.max(0, pending - unattempted);
+        const processing = attemptedPending > 0
+          ? `${attemptedPending} attempted role${attemptedPending === 1 ? " did" : "s did"} not finish detail collection, grading, or saving. A more specific processing failure was not recorded in this company check.` : null;
+        const coverage = !listingComplete ? (runMethod === "search"
+          ? "Web search cannot confirm that every opening was checked."
+          : "Only part of the careers page fit within this check's reading limit.") : null;
+        errorMessage=[remaining,deferred,processing,coverage].filter(Boolean).join(" ");
+      }
       closureEligible=directComplete&&runProvidesClosureEvidence(status==="unchanged"?"ok":status,salvaged,
         boardSource===null?undefined:{source:boardSource});
       if(snapshot&&!dryRun) {await saveCrawlSnapshot(tenantId,company,snapshot);snapshotPersisted=true;}

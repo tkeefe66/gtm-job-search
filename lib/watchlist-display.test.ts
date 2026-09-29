@@ -3,6 +3,27 @@ import { companyCostDisplay, crawlIssueDisplay, crawlOutcomeText, formatAICost }
 
 const legacyCreditError = '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"synthetic-request"}';
 
+// Mutation: repeat the old success-sounding policy message without explaining that listings were not read.
+test("legacy direct-only deferrals explain the limitation without inventing a source failure", () => {
+  const error = "Direct check finished. Choose Deep search to search beyond direct sources.";
+  const issue = crawlIssueDisplay("skipped", error);
+  expect(issue?.label).toBe("Direct source needs review");
+  expect(issue?.explanation).toContain("could not obtain readable listings");
+  expect(issue?.explanation).toContain("exact source problem was not recorded");
+  expect(issue?.nextStep).toContain("careers URL");
+  expect(issue?.nextStep).toContain("5 paid searches");
+  expect(crawlOutcomeText({ status: "skipped", rolesFound: 0, newRoles: 0, error })).not.toContain("Direct check finished");
+});
+
+// Mutation: prescribe a blind retry for every partial result, including incomplete source coverage.
+test("partial checks distinguish unfinished roles, source coverage, and older unknown reasons", () => {
+  expect(crawlIssueDisplay("partial", "2 matching roles still need processing. Details were not saved.")?.nextStep).toContain("Check now");
+  expect(crawlIssueDisplay("partial", "Only part of the careers page fit within this check's reading limit.")?.nextStep).toContain("job-board URL");
+  const legacy = crawlIssueDisplay("partial", "Listings were checked; some processing is incomplete or the search covered only part of the source. Try again or review the saved roles.");
+  expect(legacy?.explanation).toContain("did not record which step");
+  expect(legacy?.nextStep).toContain("Check now");
+});
+
 // Mutation caught: treating a historical credit refusal as a missing job board or showing raw SDK JSON.
 test("explains legacy credit refusals and current billing refusals without asserting today's balance", () => {
   const legacy = crawlIssueDisplay("error", legacyCreditError);

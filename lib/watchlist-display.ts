@@ -21,6 +21,35 @@ function knownCrawlIssue(error: string | null | undefined): CrawlIssue | null {
     const cause = knownCrawlIssue(message.slice(0, saveFailure));
     return cause ? { ...cause, explanation: `${cause.explanation}${message.slice(saveFailure)}` } : null;
   }
+  if (message === "Direct check finished. Choose Deep search to search beyond direct sources.") return {
+    label: "Direct source needs review",
+    explanation: "The direct check could not obtain readable listings, and paid web search was not used. The exact source problem was not recorded for this older check.",
+    nextStep: "Review or add the careers URL, then use Save and check. If the listings still cannot be read, choose Deep search (up to 5 paid searches).",
+  };
+  if (message.startsWith("No careers URL is saved")) return {
+    label: "Needs a careers URL", explanation: message,
+    nextStep: "Add the company's careers or job-board URL, then choose Save and check. Deep search can also look for it (up to 5 paid searches).",
+  };
+  if (message.startsWith("The direct reader could not extract listings")) return {
+    label: "Direct reader could not read listings", explanation: message,
+    nextStep: "Open the careers page and copy its direct job-board URL into this company's careers URL. Use Save and check, or choose Deep search (up to 5 paid searches).",
+  };
+  if (message.startsWith("The careers page could not be downloaded") || message.startsWith("The site's automated-access rules")) return {
+    label: "Careers page could not be read", explanation: message,
+    nextStep: "Open the careers link to check it. Correct it if needed, then use Check now. If direct access remains blocked, choose Deep search (up to 5 paid searches).",
+  };
+  if (message.includes("Only part of the careers page") || message.includes("Web search cannot confirm")) return {
+    label: "Source coverage incomplete", explanation: message,
+    nextStep: "Review the roles already saved in Roles. Add a direct job-board URL and use Save and check to try a more complete source.",
+  };
+  if (/^\d+ matching roles? still needs? processing\./.test(message)) return {
+    label: "Processing incomplete", explanation: message,
+    nextStep: "Review the roles already saved in Roles. Use Check now to retry unfinished processing; AI work uses your spending limits.",
+  };
+  if (message.startsWith("Listings were checked; some processing is incomplete")) return {
+    label: "Incomplete check", explanation: "Some role processing or source coverage was incomplete. This older check did not record which step was unfinished or how many roles were affected.",
+    nextStep: "Review saved roles in Roles, then use Check now to retry and get a more specific result. If source coverage is still incomplete, review the careers URL.",
+  };
   const lowCredits = /credit balance is too low/i.test(message);
   if (lowCredits || /^(Anthropic|OpenAI|Google): billing allowance exhausted\./.test(message)) {
     return {
