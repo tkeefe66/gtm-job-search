@@ -26,7 +26,7 @@ export default function WatchlistBatchResults({ progress, onReview }: {
       {progress.completed} of {progress.total} checks returned · {newRoles} new role{newRoles === 1 ? "" : "s"}
     </p>
     {progress.interrupted && <p className="mt-1 text-sm text-[#92400E]">The last request may still finish. Reload to see saved results before retrying.</p>}
-    {progress.stopped && <p className="mt-1 text-sm text-ink/70">{progress.total - progress.completed} companies were not checked. Completed results are saved.</p>}
+    {progress.stopped && <p className="mt-1 text-sm text-ink/70">{progress.total - progress.completed} {progress.total - progress.completed === 1 ? "company was" : "companies were"} not checked. Completed results are saved.</p>}
 
     {followUps.length > 0 ? <section className="mt-5" aria-label="Companies needing a next step">
       <h4 className="text-sm font-semibold">{followUps.length} {followUps.length === 1 ? "company needs" : "companies need"} a next step</h4>

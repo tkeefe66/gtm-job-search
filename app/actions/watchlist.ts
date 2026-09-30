@@ -680,6 +680,23 @@ export async function setTracking(
   return { error: error?.message };
 }
 
+/** Reversible removal from active tracking; saved roles and company history remain. */
+export async function stopTrackingCompanies(companies: string[]): Promise<{removed: string[]; error?: string}> {
+  const actor = await requireActor();
+  if (!Array.isArray(companies) || companies.length > 500 || companies.some(name => typeof name !== "string" || !name.trim()))
+    return {removed: [], error: "Select up to 500 named companies from your watchlist."};
+  const names = Array.from(new Set(companies));
+  if (names.length === 0) return {removed: []};
+  const {data, error} = await rawQuery<{company: string}>(`
+    update watchlist set tracking_enabled=false, failing_since=null
+    where tenant_id=$1 and company=any($2::text[]) and tracking_enabled=true
+    returning company
+  `, [actor.tenantId, names], actor.tenantId);
+  if (error !== null) return {removed: [], error: error.message};
+  console.info("watchlist: stopped selected companies", {count: data.length});
+  return {removed: data.map(row => row.company)};
+}
+
 export async function setIgnoreLocationRule(
   company: string,
   ignore: boolean

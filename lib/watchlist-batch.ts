@@ -50,11 +50,12 @@ export function watchlistCheckCandidates(companies: TrackedCompany[], now: Date 
   return Array.from(selected);
 }
 
-/** One direct check per selected company. An unconfirmed RPC stops the queue, never retries. */
+/** One check per selected company. An unconfirmed RPC stops the queue, never retries. */
 export async function runWatchlistChecks(
   companies: string[],
   options: {
-    check: (company: string, trigger: "check") => Promise<CrawlOutcome>;
+    trigger?: "check" | "deep";
+    check: (company: string, trigger: "check" | "deep") => Promise<CrawlOutcome>;
     shouldStop: () => boolean;
     onProgress: (progress: WatchlistBatchProgress) => void;
   },
@@ -78,7 +79,7 @@ export async function runWatchlistChecks(
     progress = { ...progress, currentCompany: company };
     emit();
     try {
-      const outcome = await requestWithDeadline(options.check(company, "check"));
+      const outcome = await requestWithDeadline(options.check(company, options.trigger ?? "check"));
       progress = {
         ...progress,
         completed: progress.completed + 1,

@@ -2,13 +2,15 @@ import type { TrackedCompany } from "@/lib/types";
 import { crawlIssueDisplay } from "@/lib/watchlist-display";
 import type { WatchlistBatchProgress } from "@/lib/watchlist-batch";
 import WatchlistCheckGroups from "./WatchlistCheckGroups";
+import type {CompanyGroupSelection} from "./WatchlistCheckGroups";
 
-export default function WatchlistCheckSelection({ companies, onReview, previousBatch }: {
+export default function WatchlistCheckSelection({ companies, onReview, previousBatch, selection }: {
   companies: TrackedCompany[];
   onReview: (company: string) => void;
   previousBatch?: WatchlistBatchProgress | null;
+  selection?: CompanyGroupSelection;
 }) {
-  const groups = <WatchlistCheckGroups onReview={onReview} items={companies.map(company => ({
+  const groups = <WatchlistCheckGroups onReview={onReview} selection={selection} items={companies.map(company => ({
     company: company.company,
     issue: crawlIssueDisplay(company.last_crawl_status, company.last_crawl_error) ??
       (company.consecutive_failures >= 3 ? {
@@ -24,7 +26,7 @@ export default function WatchlistCheckSelection({ companies, onReview, previousB
   // Keep the current selection inspectable after a batch, including companies
   // left unchecked by Stop and companies tracked after those results were saved.
   return previousBatch ? <details open={previousBatch.stopped || previousBatch.interrupted} className="pt-3">
-    <summary className="cursor-pointer text-sm font-medium">{companies.length} {companies.length === 1 ? "company selected" : "companies selected"} for the next check</summary>
+    <summary className="cursor-pointer text-sm font-medium">{companies.length} {companies.length === 1 ? "company still needs" : "companies still need"} a check</summary>
     {groups}
   </details> : groups;
 }

@@ -63,7 +63,7 @@ test("after a batch, current candidates remain inspectable and a stopped batch e
   const companies = [company("Not checked", null, null), company("Newly added", null, null)];
   const stopped = renderToStaticMarkup(createElement(WatchlistCheckSelection, { companies, previousBatch, onReview: () => {} }));
   expect(stopped).toMatch(/<details[^>]*open=""/);
-  expect(stopped).toContain("2 companies selected for the next check");
+  expect(stopped).toContain("2 companies still need a check");
   expect(stopped).toContain('aria-label="Review Not checked"');
   expect(stopped).toContain('aria-label="Review Newly added"');
   const finished = renderToStaticMarkup(createElement(WatchlistCheckSelection, { companies, previousBatch: { ...previousBatch, stopped: false }, onReview: () => {} }));

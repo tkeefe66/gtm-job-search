@@ -79,6 +79,7 @@ import {
   renameTrackedCompany,
   setIgnoreLocationRule,
   setTracking,
+  stopTrackingCompanies,
   setCrawlInterval,
   setAutomaticPaidSearch,
   trackCompanyByName,
@@ -494,4 +495,32 @@ test("acknowledgement cannot bypass an account block or an empty-message evidenc
   vi.mocked(loadDeepSearchAdvice).mockResolvedValue({advice:[],error:""});
   expect((await checkCompanyNow("Synthetic Co","deep","latest-result")).error).toContain("Could not check Deep search readiness");
   expect(crawl).not.toHaveBeenCalled();
+});
+
+// Mutation: omit tenant or selection predicates, or delete instead of stopping tracking.
+test("bulk removal only stops selected tracked rows in the signed-in tenant",async()=>{
+  const {PGlite}=await import("@electric-sql/pglite");
+  const db=new PGlite();
+  try {
+    await db.exec(`create table watchlist(tenant_id text, company text, tracking_enabled boolean, failing_since timestamptz, signal text);
+      insert into watchlist values ('test-user','A',true,now(),'keep'),('test-user','B',true,null,'keep'),
+      ('test-user','Unselected',true,null,'keep'),('other','A',true,null,'keep');`);
+    query.mockImplementation(async(sql,params)=>({data:(await db.query(sql,params)).rows,error:null}) as never);
+    const result=await stopTrackingCompanies(["A","B","A","Missing"]);
+    expect(result.error).toBeUndefined();expect(result.removed.sort()).toEqual(["A","B"]);
+    const rows=(await db.query<{tenant_id:string;company:string;tracking_enabled:boolean;failing_since:string|null;signal:string}>("select * from watchlist order by tenant_id,company")).rows;
+    expect(rows).toHaveLength(4);
+    expect(rows.filter(row=>!row.tracking_enabled).map(row=>row.company)).toEqual(["A","B"]);
+    expect(rows.every(row=>row.signal==="keep")).toBe(true);
+    expect(rows.find(row=>row.tenant_id==="other")?.tracking_enabled).toBe(true);
+    expect(rows.find(row=>row.tenant_id==="test-user"&&row.company==="A")?.failing_since).toBeNull();
+  } finally {await db.close();}
+});
+// Mutation: an empty database error becomes apparent bulk success.
+test("bulk removal reports empty-message failures and rejects malformed selections",async()=>{
+  query.mockResolvedValue({data:[],error:{message:""}} as never);
+  expect((await stopTrackingCompanies(["A"])).error).toBe("");
+  query.mockClear();
+  expect((await stopTrackingCompanies([123] as never)).error).toContain("Select");
+  expect(query).not.toHaveBeenCalled();
 });

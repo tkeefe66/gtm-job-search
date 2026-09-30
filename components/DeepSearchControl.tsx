@@ -4,7 +4,7 @@ import { useState } from "react";
 import { searchAttemptDuration, type DeepSearchAdvice, type SearchAttempt } from "@/lib/deep-search-advice";
 import { crawlIssueDisplay, formatAICost } from "@/lib/watchlist-display";
 
-function Attempt({ attempt }: { attempt: SearchAttempt }) {
+export function SearchAttemptSummary({ attempt }: { attempt: SearchAttempt }) {
   const result = !attempt.finishedAt || attempt.status === "running" ? "Outcome not confirmed"
     : attempt.status === "error" ? "Failed" : attempt.status === "needs_url" ? "No careers page found"
     : attempt.status === "skipped" ? "Stopped before completion" : attempt.status === "partial" ? "Partial results"
@@ -38,7 +38,7 @@ export default function DeepSearchControl({ advice, error, busy, onSearch, onRef
         {advice?.requiresAcknowledgement ? "Retry Deep search" : "Run Deep search"}
       </button>
     </div>
-    {last && <div className="mt-2"><Attempt attempt={last} /></div>}
+    {last && <div className="mt-2"><SearchAttemptSummary attempt={last} /></div>}
     {issue && <details className="mt-2 text-xs text-ink/70">
       <summary className="cursor-pointer">Last search details</summary>
       <p className="mt-1 max-w-prose break-words">{issue.explanation}</p>
@@ -46,7 +46,7 @@ export default function DeepSearchControl({ advice, error, busy, onSearch, onRef
     </details>}
     {advice && advice.attempts.length > 1 && <details className="mt-2 text-xs text-ink/70">
       <summary className="cursor-pointer">Earlier searches ({advice.attempts.length - 1})</summary>
-      <ul className="mt-2 space-y-2">{advice.attempts.slice(1).map(attempt => <li key={attempt.id}><Attempt attempt={attempt} /></li>)}</ul>
+      <ul className="mt-2 space-y-2">{advice.attempts.slice(1).map(attempt => <li key={attempt.id}><SearchAttemptSummary attempt={attempt} /></li>)}</ul>
     </details>}
     {advice?.requiresAcknowledgement && !advice.blocked && <label className="mt-3 flex items-start gap-2 text-sm text-ink/80">
       <input type="checkbox" className="mt-1" checked={acknowledged} disabled={busy} onChange={event => setAcknowledged(event.target.checked)} />

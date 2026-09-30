@@ -5,6 +5,7 @@ import {
   checkCompanyNow,
   getCompanySpendSummaries,
   getDeepSearchAdvice,
+  stopTrackingCompanies,
   getTrackedCompanies,
   renameTrackedCompany,
   setCareersUrl,
@@ -28,6 +29,9 @@ import CompanyCheckDetails from "./CompanyCheckDetails";
 import WatchlistBatchResults from "./WatchlistBatchResults";
 import WatchlistCheckSelection from "./WatchlistCheckSelection";
 import DeepSearchControl from "./DeepSearchControl";
+import CompanySelectionCheckbox from "./CompanySelectionCheckbox";
+import WatchlistBulkReview from "./WatchlistBulkReview";
+import {selectedTrackedCompanies, toggleCompanySelection} from "@/lib/watchlist-selection";
 import type { DeepSearchAdvice } from "@/lib/deep-search-advice";
 import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
 import { describeWriteFailure } from "@/lib/write-failure";
@@ -98,6 +102,10 @@ export default function Watchlist() {
   const [costError, setCostError] = useState<string | null>(null);
   const [searchAdvice, setSearchAdvice] = useState<DeepSearchAdvice[]>([]);
   const [searchAdviceError, setSearchAdviceError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkReview, setBulkReview] = useState<{kind: "deep" | "remove"; names: string[]} | null>(null);
+  const [bulkBusy, setBulkBusy] = useState<"preparing" | "removing" | null>(null);
+  const [batchMode, setBatchMode] = useState<"check" | "deep">("check");
   const [loading, setLoading] = useState(true);
   const [newCompany, setNewCompany] = useState("");
   const [tracking, setTrackingBusy] = useState(false);
@@ -173,6 +181,21 @@ export default function Watchlist() {
   }, [reviewTarget]);
 
   useEffect(() => {
+    if (bulkReview) document.getElementById("watchlist-bulk-review")?.scrollIntoView({block: "start"});
+  }, [bulkReview]);
+
+  useEffect(() => {
+    if (bulkReview && bulkReview.names.some(name => !companies.some(item => item.company === name && item.tracking_enabled))) {
+      setBulkReview(null);
+      setNotice("The selection changed because a company was renamed or stopped tracking. Review the selected companies again before continuing.");
+    }
+  }, [companies, bulkReview]);
+
+  useEffect(() => {
+    if (batchRunning) document.getElementById("watchlist-batch")?.scrollIntoView({block: "start"});
+  }, [batchRunning]);
+
+  useEffect(() => {
     mounted.current = true;
     load();
     return () => { mounted.current = false; stopBatch.current = true; };
@@ -191,7 +214,10 @@ export default function Watchlist() {
       else {
         const failure = describeWriteFailure(list.value.error, "load your list");
         if (failure !== undefined) setNotice(failure);
-        else setCompanies(list.value.companies);
+        else {
+          setCompanies(list.value.companies);
+          setSelected(previous => new Set(selectedTrackedCompanies(previous, list.value.companies)));
+        }
       }
       if (spending.status === "rejected") { setCosts([]); setCostError("Could not load company costs. Refresh to try again."); }
       else {
@@ -276,6 +302,8 @@ export default function Watchlist() {
       // Keep its Review links valid after a confirmed rename.
       if (res.company) {
         const renamed = res.company;
+        setSelected(previous => { const next = new Set(previous); if (next.delete(from)) next.add(renamed); return next; });
+        setBulkReview(null);
         setBatchProgress(prev => prev ? { ...prev, results: prev.results.map(result =>
           result.company === from ? { ...result, company: renamed,
             outcome: result.outcome ? { ...result.outcome, company: renamed } : undefined } : result) } : prev);
@@ -306,9 +334,11 @@ export default function Watchlist() {
     }
   }
 
-  async function handleBatchCheck() {
-    if (loading || tracking || busyRows.size > 0 || !checkLock.current.tryStart()) return;
+  async function handleBatchCheck(names?: string[], trigger: "check" | "deep" = "check", acknowledgements: Record<string, string> = {}) {
+    if (loading || tracking || bulkBusy || busyRows.size > 0 || !checkLock.current.tryStart()) return;
     stopBatch.current = false;
+    setBulkReview(null);
+    setBatchMode(trigger);
     setBatchRunning(true);
     setBatchStopping(false);
     setBatchProgress(null);
@@ -322,8 +352,15 @@ export default function Watchlist() {
       if (failure !== undefined) { if (mounted.current) setNotice(failure); return; }
       if (!mounted.current) return;
       setCompanies(fresh.companies);
-      const result = await runWatchlistChecks(watchlistCheckCandidates(fresh.companies), {
-        check: checkCompanyNow,
+      const queue = names ? selectedTrackedCompanies(new Set(names), fresh.companies) : watchlistCheckCandidates(fresh.companies);
+      if (names && queue.length !== new Set(names).size) {
+        setSelected(previous => new Set(selectedTrackedCompanies(previous, fresh.companies)));
+        setNotice(`No checks started. These selected companies are no longer tracked under that name: ${names.filter(name => !queue.includes(name)).join(", ")}. Review the selection and try again.`);
+        return;
+      }
+      const result = await runWatchlistChecks(queue, {
+        trigger,
+        check: (company, mode) => checkCompanyNow(company, mode, acknowledgements[company]),
         shouldStop: () => stopBatch.current || !mounted.current,
         onProgress: (progress) => {
           if (!mounted.current) return;
@@ -345,6 +382,43 @@ export default function Watchlist() {
         setBatchRunning(false);
       }
     }
+  }
+
+  function toggleSelection(names: string[]) {
+    setBulkReview(null);
+    const active = new Set(companies.filter(item => item.tracking_enabled).map(item => item.company));
+    setSelected(previous => toggleCompanySelection(previous, names.filter(name => active.has(name))));
+  }
+
+  async function prepareBulkAction(kind: "deep" | "remove") {
+    const names = selectedTrackedCompanies(selected, companies);
+    if (names.length === 0 || loading || tracking || checking || batchRunning || bulkBusy || busyRows.size > 0 || checkUnconfirmed) return;
+    if (kind === "remove") { setBulkReview({kind, names}); return; }
+    setBulkBusy("preparing"); setNotice(null); setBulkReview(null);
+    try {
+      const result = await requestWithDeadline(getDeepSearchAdvice(), 15_000);
+      const failure = describeWriteFailure(result.error, "review selected Deep searches");
+      if (failure !== undefined) { setNotice(failure); return; }
+      setSearchAdvice(result.advice); setSearchAdviceError(null);
+      setBulkReview({kind, names});
+    } catch { setNotice("Could not load current search recommendations. Try Deep search again to refresh them."); }
+    finally { setBulkBusy(null); }
+  }
+
+  async function removeSelectedCompanies(names: string[]) {
+    if (bulkBusy || batchRunning || checking || tracking || busyRows.size > 0 || !checkLock.current.tryStart()) return;
+    setBulkBusy("removing"); setNotice(null);
+    try {
+      const result = await requestWithDeadline(stopTrackingCompanies(names), 15_000);
+      const failure = describeWriteFailure(result.error, "remove companies from your watchlist");
+      if (failure !== undefined) { setNotice(failure); return; }
+      setCompanies(previous => previous.map(item => result.removed.includes(item.company) ? {...item, tracking_enabled: false} : item));
+      setSelected(previous => new Set(Array.from(previous).filter(name => !names.includes(name))));
+      setBulkReview(null);
+      setNotice(`Removed ${result.removed.length} ${result.removed.length === 1 ? "company" : "companies"} from your watchlist. Saved roles and history are kept. Restore them under Not tracked using Resume.${result.removed.length < names.length ? " Some selected companies were already untracked or are no longer listed under that name." : ""}`);
+      await load(true);
+    } catch { setNotice("Could not confirm removal completed. Reload your watchlist to see which companies are still tracked."); }
+    finally { checkLock.current.release(); setBulkBusy(null); }
   }
 
   async function handleSetTracking(company: string, enabled: boolean) {
@@ -450,6 +524,8 @@ export default function Watchlist() {
   const attentionCount = tracked.filter((c) => needsYou(stateOf(c))).length;
   const dueCount = tracked.filter((c) => stateOf(c) === "due").length;
   const batchCandidates = watchlistCheckCandidates(companies);
+  const selectedNames = selectedTrackedCompanies(selected, companies);
+  const selectionBusy = loading || tracking || !!checking || batchRunning || !!bulkBusy || busyRows.size > 0 || checkUnconfirmed;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -499,7 +575,7 @@ export default function Watchlist() {
     const issue = crawlIssueDisplay(c.last_crawl_status, c.last_crawl_error);
     const due = nextCheckDue(c.last_attempted_at ?? c.last_checked_at, c.crawl_interval_days, c.next_attempt_at);
     const open = openRows.has(c.company);
-    const busy = busyRows.has(c.company) || batchRunning || checkUnconfirmed;
+    const busy = busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed;
     // Whatever the tenant's own hiringSignal.extraFields named — contract_value
     // and awarding_agency for a defence contractor, bed_count for a hospital.
     const extras = displayableExtras(c.extras);
@@ -513,12 +589,15 @@ export default function Watchlist() {
 
     return (
       <div key={c.company} id={`watchlist-company-${encodeURIComponent(c.company)}`} tabIndex={-1}
-        className={`scroll-mt-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink ${i > 0 ? "border-t border-slate" : ""}`}>
+        className={`scroll-mt-48 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink sm:scroll-mt-28 ${selected.has(c.company) ? "bg-canvas" : ""} ${i > 0 ? "border-t border-slate" : ""}`}>
         <div
           onClick={() => toggleRow(c.company)}
           className="grid cursor-pointer grid-cols-[1fr_auto] items-center gap-x-4 px-4 py-2.5 transition hover:bg-canvas sm:grid-cols-[1fr_auto_7rem_4rem]"
         >
           <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+            <label className="flex self-stretch items-center py-1 pr-1" onClick={event => event.stopPropagation()}>
+              <CompanySelectionCheckbox label={`Select ${c.company}`} checked={selected.has(c.company)} disabled={selectionBusy} onChange={() => toggleSelection([c.company])} />
+            </label>
             <span
               className={`h-[7px] w-[7px] flex-none rounded-full ${style.dot}`}
               title={issue?.explanation ?? style.legend}
@@ -781,7 +860,7 @@ export default function Watchlist() {
         </span>
         <button
           onClick={() => handleSetTracking(c.company, true)}
-          disabled={busyRows.has(c.company) || batchRunning || checkUnconfirmed}
+          disabled={busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed}
           className="rounded-md border border-slate px-2.5 py-1 text-xs font-medium text-ink/60 transition hover:border-ink hover:text-ink disabled:opacity-50"
         >
           Resume
@@ -819,13 +898,13 @@ export default function Watchlist() {
             type="text"
             value={newCompany}
             onChange={(e) => setNewCompany(e.target.value)}
-            disabled={tracking || batchRunning || checkUnconfirmed}
+            disabled={tracking || batchRunning || !!bulkBusy || checkUnconfirmed}
             placeholder="Track a company by name…"
             className="w-56 rounded-md border border-slate bg-white px-3 py-1.5 text-sm disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={tracking || batchRunning || checkUnconfirmed || !newCompany.trim()}
+            disabled={tracking || batchRunning || !!bulkBusy || checkUnconfirmed || !newCompany.trim()}
             className="rounded-md border border-ink bg-ink px-4 py-1.5 text-sm font-medium text-white transition hover:bg-ink/90 disabled:opacity-50"
           >
             Track
@@ -915,14 +994,43 @@ export default function Watchlist() {
         </div>
       )}
 
+      {tracked.length > 0 && <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-slate bg-white px-4 py-3" role="region" aria-label="Selected company actions">
+        <label className="flex items-center gap-2 py-1 text-sm">
+          <CompanySelectionCheckbox label={`Select all ${tracked.length} tracked companies`} checked={selectedNames.length === tracked.length}
+            mixed={selectedNames.length > 0 && selectedNames.length < tracked.length} disabled={selectionBusy} onChange={() => toggleSelection(tracked.map(item => item.company))} />
+          Select all {tracked.length}
+        </label>
+        <span className="text-sm font-semibold" role="status">{selectedNames.length} selected</span>
+        {selectedNames.some(name => !visible.some(item => item.company === name)) && <span className="text-xs text-ink/70">{selectedNames.filter(name => !visible.some(item => item.company === name)).length} hidden by filters</span>}
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <button type="button" disabled={selectionBusy || selectedNames.length === 0} onClick={() => void handleBatchCheck(selectedNames)} className="rounded-md border border-ink bg-ink px-3 py-2 text-sm font-medium text-white disabled:opacity-50">Check now</button>
+          <button type="button" disabled={selectionBusy || selectedNames.length === 0} onClick={() => void prepareBulkAction("deep")} className="rounded-md border border-slate px-3 py-2 text-sm font-medium hover:border-ink disabled:opacity-50">Deep search…</button>
+          <button type="button" disabled={selectionBusy || selectedNames.length === 0} onClick={() => void prepareBulkAction("remove")} className="rounded-md border border-slate px-3 py-2 text-sm font-medium hover:border-ink disabled:opacity-50">Remove…</button>
+          {selectedNames.length > 0 && <button type="button" disabled={selectionBusy} onClick={() => {setSelected(new Set()); setBulkReview(null);}} className="px-1 py-2 text-sm underline underline-offset-2 disabled:opacity-50">Clear</button>}
+        </div>
+        {bulkBusy && <p className="w-full text-sm text-ink/70" role="status">{bulkBusy === "preparing" ? "Loading current Deep search recommendations…" : "Removing selected companies…"}</p>}
+      </div>}
+      {notice && !tracking && <div className="mb-4 rounded-md border border-slate bg-white p-3 text-sm text-ink/70" role="status">{notice}</div>}
+      {bulkReview && <div id="watchlist-bulk-review" className="scroll-mt-48 sm:scroll-mt-28">
+        <WatchlistBulkReview key={`${bulkReview.kind}:${JSON.stringify(bulkReview.names)}`} kind={bulkReview.kind} names={bulkReview.names}
+          advice={searchAdvice} busy={selectionBusy} onCancel={() => setBulkReview(null)} onReview={reviewCompany}
+          onRemove={() => void removeSelectedCompanies(bulkReview.names)}
+          onSearch={ready => void handleBatchCheck(ready.map(item => item.company), "deep", Object.fromEntries(ready.map(item => [item.company, item.acknowledgementKey ?? ""])))} />
+      </div>}
+
       {(tracked.length > 0 || batchProgress) && (
-        <section className="mb-4 rounded-lg border border-slate bg-white p-4" aria-label="Watchlist batch check">
+        <section id="watchlist-batch" className="mb-4 scroll-mt-48 rounded-lg border border-slate bg-white p-4 sm:scroll-mt-28" aria-label="Watchlist batch check">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold">{batchCandidates.length} {batchCandidates.length === 1 ? "company to check" : "companies to check"}</h3>
               <p className="mt-1 max-w-prose text-sm text-ink/70">
-                Select a company to review its careers link and check options, or check all of them at once.
+                Tick companies or a whole group, then choose an action above. Click a company name to view its details.
               </p>
+              {batchCandidates.length > 0 && <label className="mt-2 flex items-center gap-2 text-sm">
+                <CompanySelectionCheckbox label={`Select all ${batchCandidates.length} companies to check`} checked={batchCandidates.every(name => selected.has(name))}
+                  mixed={batchCandidates.some(name => selected.has(name)) && !batchCandidates.every(name => selected.has(name))} disabled={selectionBusy} onChange={() => toggleSelection(batchCandidates)} />
+                Select these {batchCandidates.length}
+              </label>}
               <details className="mt-2 text-xs text-ink/60">
                 <summary className="cursor-pointer">How the batch check works</summary>
                 <p className="mt-1 max-w-prose">Checks due and unresolved companies one at a time. Keep this page open until it finishes. AI processing uses your spending limits; paid Deep search is not included. Unreadable sources may need a new careers link or Deep search.</p>
@@ -935,25 +1043,20 @@ export default function Watchlist() {
               </button>
             ) : (
               <button type="button" onClick={() => void handleBatchCheck()}
-                disabled={checkUnconfirmed || loading || tracking || !!checking || busyRows.size > 0 || batchCandidates.length === 0}
+                disabled={selectionBusy || batchCandidates.length === 0}
                 className="rounded-md border border-ink bg-ink px-3 py-2 text-sm font-medium text-white hover:bg-ink/90 disabled:opacity-50">
-                Check {batchCandidates.length} {batchCandidates.length === 1 ? "company" : "companies"}
+                Check all {batchCandidates.length}
               </button>
             )}
           </div>
           {batchRunning && !batchProgress && <p className="mt-3 text-sm text-ink/60" role="status">Preparing checks…</p>}
           {checkUnconfirmed && <p className="mt-3 text-xs text-[#92400E]" role="alert">Checks are disabled because the last request may still be running. Reload to inspect saved results before retrying.</p>}
-          {batchProgress && <WatchlistBatchResults progress={batchProgress} onReview={reviewCompany} />}
+          {batchProgress && <><p className="mt-3 text-sm font-semibold">{batchMode === "deep" ? "Deep search results" : "Direct check results"}</p><WatchlistBatchResults progress={batchProgress} onReview={reviewCompany} /></>}
           {!batchRunning && batchCandidates.length > 0 && <div className="mt-4 border-t border-slate">
-            <WatchlistCheckSelection companies={batchCandidates.map(name => companies.find(item => item.company === name)!)} onReview={reviewCompany} previousBatch={batchProgress} />
+            <WatchlistCheckSelection companies={batchCandidates.map(name => companies.find(item => item.company === name)!)} onReview={reviewCompany} previousBatch={batchProgress}
+              selection={{selected, disabled: selectionBusy, onToggle: toggleSelection}} />
           </div>}
         </section>
-      )}
-
-      {notice && !tracking && (
-        <div className="mb-4 rounded-md border border-slate bg-white p-3 text-sm text-ink/70">
-          {notice}
-        </div>
       )}
 
       {loading && <div className="py-12 text-center text-sm text-ink/40">Loading…</div>}
@@ -1028,7 +1131,11 @@ export default function Watchlist() {
 
           <div className="overflow-hidden rounded-lg border border-slate bg-white">
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 border-b border-slate px-4 py-2 text-[11px] font-medium text-ink/40 sm:grid-cols-[1fr_auto_7rem_4rem]">
-              <span>Company</span>
+              <label className="flex items-center gap-2 text-ink/70">
+                <CompanySelectionCheckbox label={`Select all ${visible.length} visible companies`} checked={visible.length > 0 && visible.every(item => selected.has(item.company))}
+                  mixed={visible.some(item => selected.has(item.company)) && !visible.every(item => selected.has(item.company))} disabled={selectionBusy || visible.length === 0} onChange={() => toggleSelection(visible.map(item => item.company))} />
+                Select shown ({visible.length})
+              </label>
               <span>Checked</span>
               <span className="hidden text-right sm:block">Next check</span>
               <span className="hidden sm:block" />
