@@ -10,13 +10,13 @@ import { readCompanySearchEvidence } from "./deep-search-store";
 
 beforeAll(async () => {
   db = new PGlite();
-  await db.exec(`create table watchlist(tenant_id text,company text,model_retry_after timestamptz);
-    create table crawl_runs(id text,tenant_id text,company text,method text,status text,started_at timestamptz,finished_at timestamptz,roles_found int default 0,new_roles int default 0,error text);
+  await db.exec(`create table watchlist(tenant_id text,company text,model_retry_after timestamptz,source_revision int default 0);
+    create table crawl_runs(id text,tenant_id text,company text,method text,status text,started_at timestamptz,finished_at timestamptz,roles_found int default 0,new_roles int default 0,error text,source_revision int default 0,source_url text);
     create table ai_usage_requests(tenant_id text,company text,crawl_run_id text,kind text,state text,cost_microusd bigint);`);
 });
 beforeEach(async () => {
   await db.exec("truncate watchlist,crawl_runs,ai_usage_requests");
-  await db.query("insert into watchlist values ('a','Example',null),('b','Example',null)");
+  await db.query("insert into watchlist(tenant_id,company,model_retry_after) values ('a','Example',null),('b','Example',null)");
 });
 afterAll(async () => {await db.close();});
 async function run(id:string,status="partial",tenant="a",method:string|null="search",finished=true) {

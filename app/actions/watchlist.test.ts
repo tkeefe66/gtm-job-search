@@ -37,17 +37,19 @@ vi.mock("@/lib/metered", () => ({
 const h = vi.hoisted(() => {
   const state = {
     result: { data: [] as unknown, error: null as { message: string } | null },
-    writes: [] as { table: string; op: string; payload: Record<string, unknown> }[],
+    writes: [] as { table: string; op: string; payload: Record<string, unknown>; filters: Record<string, unknown> }[],
   };
   const makeBuilder = (table: string) => {
     const b: Record<string, unknown> = {};
+    const filters: Record<string, unknown> = {};
     const chain = () => b;
     for (const m of ["select", "eq", "neq", "order", "limit", "single", "maybeSingle", "delete"]) {
       b[m] = chain;
     }
+    b.eq = (key: string, value: unknown) => {filters[key] = value; return b;};
     for (const op of ["insert", "update", "upsert"]) {
       b[op] = (payload: Record<string, unknown>) => {
-        state.writes.push({ table, op, payload });
+        state.writes.push({ table, op, payload, filters });
         return b;
       };
     }
@@ -76,10 +78,12 @@ import {
   addToWatchlist,
   checkCompanyNow,
   getWatchedCompanyKeys,
+  getTrackedCompanies,
   renameTrackedCompany,
   setIgnoreLocationRule,
   setTracking,
   stopTrackingCompanies,
+  restoreTrackedCompany,
   setCrawlInterval,
   setAutomaticPaidSearch,
   trackCompanyByName,
@@ -88,6 +92,7 @@ import { crawlCompany } from "@/lib/crawler";
 import { rawQuery } from "@/lib/supabase";
 import { loadDeepSearchAdvice } from "@/lib/deep-search-store";
 import type { Startup } from "@/lib/types";
+import {restorationNotice} from "@/lib/watchlist-removal";
 
 const query = vi.mocked(rawQuery);
 const crawl = vi.mocked(crawlCompany);
@@ -106,7 +111,7 @@ const STARTUP: Startup = {
 };
 
 /** The watchlist read succeeding, with these rows. */
-function readOk(rows: { company: string; careers_url: string | null }[] = []) {
+function readOk(rows: import("@/lib/watchlist-removal").RemovalRecord[] = []) {
   query.mockResolvedValue({ data: rows, error: null } as never);
 }
 
@@ -130,6 +135,67 @@ beforeEach(() => {
   } as never);
   h.state.result = { data: [], error: null };
   h.state.writes = [];
+});
+
+// Mutation: either re-add entry point silently restores a stopped employer or bills a crawl.
+test("manual and Discover re-adds return the remembered removal without writing or crawling", async () => {
+  readOk([{company:"Clay",careers_url:"https://old.example/jobs",tracking_enabled:false,removal_reason:"not_interested",removed_at:"2026-09-30T10:00:00Z"}]);
+  expect((await addToWatchlist({...STARTUP,company:"clay"})).restore).toMatchObject({company:"Clay",reason:"not_interested",careersUrl:"https://old.example/jobs"});
+  expect((await trackCompanyByName("CLAY")).restore?.company).toBe("Clay");
+  expect((await setTracking("clay",true)).restore?.reason).toBe("not_interested");
+  expect(h.state.writes).toEqual([]); expect(crawl).not.toHaveBeenCalled();
+});
+
+// Mutation: UPSERT explicitly sets tracking_enabled=true and undoes a concurrent removal.
+test("re-add payloads cannot overwrite a concurrent removal", async () => {
+  readOk([]);
+  await addToWatchlist(STARTUP); await trackCompanyByName("Clay");
+  expect(h.state.writes).toHaveLength(2);
+  for (const write of h.state.writes) expect(write.payload).not.toHaveProperty("tracking_enabled");
+});
+
+// Mutation: restore ignores changed reason/date/source, bypassing the user's latest removal.
+test("stale restoration acknowledgement is refused before any write", async () => {
+  readOk([{company:"Clay",careers_url:"https://new.example/jobs",tracking_enabled:false,removal_reason:"source_problem",removed_at:"2026-09-30T12:00:00Z"}]);
+  const result = await restoreTrackedCompany("clay","old-acknowledgement");
+  expect(result.restore?.careersUrl).toBe("https://new.example/jobs");
+  expect(result.error).toContain("changed"); expect(h.state.writes).toEqual([]);
+});
+
+// Mutation: a stale Discover unstar overwrites another tab's not-interested choice.
+test("legacy stop only writes currently tracked rows", async () => {
+  readOk([{company:"Clay",careers_url:null,tracking_enabled:false,removal_reason:"not_interested"}]);
+  await setTracking("Clay",false);
+  expect(h.state.writes[0].filters).toMatchObject({company:"Clay",tracking_enabled:true});
+});
+
+// Mutation: restore loses the tenant/acknowledgement predicate, or enables paid search.
+test("explicit restore updates only the acknowledged tenant row and respects a racing removal", async () => {
+  const {PGlite} = await import("@electric-sql/pglite");
+  const db = new PGlite();
+  try {
+    await db.exec(`create table watchlist(tenant_id text,company text,careers_url text,tracking_enabled boolean,removal_reason text,removed_at timestamptz,consecutive_failures int,failing_since timestamptz,allow_paid_search boolean);
+      insert into watchlist values ('test-user','Clay','https://old.example/jobs',false,'not_interested','2026-09-30T12:30:20.123456Z',2,null,true),('other','Clay','https://old.example/jobs',false,'not_interested','2026-09-30T12:30:20.123456Z',2,null,true);
+      alter table watchlist add column added_at timestamptz default now();
+      create table users(id text,crawl_quota int); create table platform_settings(key text,value jsonb);`);
+    query.mockImplementation(async(sql,params)=>({data:(await db.query(sql,params)).rows,error:null}) as never);
+    const row = (await getTrackedCompanies()).companies[0];
+    const notice = restorationNotice(row)!;
+    const result = await restoreTrackedCompany("CLAY",notice.acknowledgementKey,"https://new.example/careers");
+    expect(result).toEqual({});
+    const rows=(await db.query("select * from watchlist order by tenant_id")).rows;
+    expect(rows[0]).toMatchObject({tenant_id:"other",tracking_enabled:false,careers_url:"https://old.example/jobs"});
+    expect(rows[1]).toMatchObject({tenant_id:"test-user",tracking_enabled:true,careers_url:"https://new.example/careers",allow_paid_search:false});
+    // Change removal after lookup but before UPDATE, so the SQL guard (not JS) has to catch it.
+    await db.exec("update watchlist set tracking_enabled=false, removal_reason='source_problem',removed_at=now() where tenant_id='test-user'");
+    const fresh=restorationNotice((await db.query<import("@/lib/watchlist-removal").RemovalRecord>("select *, removed_at::text as removed_at from watchlist where tenant_id='test-user'")).rows[0])!;
+    query.mockImplementation(async(sql,params)=>{
+      if(sql.includes("update watchlist set tracking_enabled=true")) await db.exec("update watchlist set removal_reason='not_interested' where tenant_id='test-user'");
+      return {data:(await db.query(sql,params)).rows,error:null};
+    });
+    expect((await restoreTrackedCompany("Clay",fresh.acknowledgementKey)).error).toContain("changed");
+    expect((await db.query("select tracking_enabled from watchlist where tenant_id='test-user'")).rows[0].tracking_enabled).toBe(false);
+  } finally {await db.close();}
 });
 
 describe("addToWatchlist refuses to write on an unverified name", () => {
@@ -502,8 +568,8 @@ test("bulk removal only stops selected tracked rows in the signed-in tenant",asy
   const {PGlite}=await import("@electric-sql/pglite");
   const db=new PGlite();
   try {
-    await db.exec(`create table watchlist(tenant_id text, company text, tracking_enabled boolean, failing_since timestamptz, signal text);
-      insert into watchlist values ('test-user','A',true,now(),'keep'),('test-user','B',true,null,'keep'),
+    await db.exec(`create table watchlist(tenant_id text, company text, tracking_enabled boolean, failing_since timestamptz, signal text, removal_reason text, removed_at timestamptz);
+      insert into watchlist(tenant_id,company,tracking_enabled,failing_since,signal) values ('test-user','A',true,now(),'keep'),('test-user','B',true,null,'keep'),
       ('test-user','Unselected',true,null,'keep'),('other','A',true,null,'keep');`);
     query.mockImplementation(async(sql,params)=>({data:(await db.query(sql,params)).rows,error:null}) as never);
     const result=await stopTrackingCompanies(["A","B","A","Missing"]);

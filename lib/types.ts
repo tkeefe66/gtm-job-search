@@ -225,6 +225,9 @@ export interface TrackedCompany {
   added_at: string;
   last_checked_at: string | null;
   tracking_enabled: boolean;
+  removal_reason?: import("./watchlist-removal").RemovalReason | null;
+  removed_at?: string | null;
+  source_revision?: number;
   crawl_method: CrawlMethod | null;
   crawl_interval_days: number;
   last_crawl_status: CrawlStatus | null;

@@ -27,6 +27,9 @@ import { normalizeCompanyName } from "@/lib/role-key";
 import { isCompanyWatched } from "@/lib/watched-companies";
 import RoleSearchPanel from "./RoleSearchPanel";
 import { Spinner, Tag } from "./ui";
+import RestoreCompanyReview from "./RestoreCompanyReview";
+import type {RestoreNotice} from "@/lib/watchlist-removal";
+import {describeWriteFailure} from "@/lib/write-failure";
 
 // The window lists and the invariants between them live in
 // lib/discovery-windows.ts so they can be tested — this component has no test
@@ -54,6 +57,8 @@ export default function Discover({ initialMode = "company" }: { initialMode?: "c
   // never compared against a differently-cased key.
   const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
   const [watchingCompany, setWatchingCompany] = useState<string | null>(null);
+  const [restoreNotice, setRestoreNotice] = useState<RestoreNotice | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   // Purely a view filter over what is already loaded. It does NOT decide what
   // a search fetches — the Discover buttons each carry their own window and
   // are unaffected by this. Defaults to "all" so the initial view shows every
@@ -89,6 +94,7 @@ export default function Discover({ initialMode = "company" }: { initialMode?: "c
       setFetchedAt(res.fetchedAt);
       setWatchedKeys(watchedKeysResult.keys);
       setSignal(signalResult.signal);
+      if (res.error !== undefined) setError(describeWriteFailure(res.error, "load Discover suggestions") ?? null);
       // Presence, not truthiness. An empty key set means "nothing is watched",
       // which is a plausible answer and therefore hides the failure completely:
       // every company would render un-starred with a live Track button. Saying
@@ -115,6 +121,7 @@ export default function Discover({ initialMode = "company" }: { initialMode?: "c
     const res = await discoverStartups(undefined, range);
     if (res.error) setError(res.error);
     const all = await getAllDiscoveredStartups();
+    if (all.error !== undefined) setError(describeWriteFailure(all.error, "load Discover suggestions") ?? null);
     setStartups(all.startups);
     setFetchedAt(new Date().toISOString());
     setRunningRange(null);
@@ -170,16 +177,19 @@ export default function Discover({ initialMode = "company" }: { initialMode?: "c
         // don't pretend the write happened): the star must not flip and the
         // row must not reappear when nothing was actually written.
         const res = await setTracking(startup.company, false);
-        if (res.error) {
-          setError(`Couldn't stop watching ${startup.company}: ${res.error}`);
+        const failure = describeWriteFailure(res.error, "stop watching this company");
+        if (failure !== undefined) {
+          setError(failure);
           return;
         }
         setWatchedKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
         setStartups((prev) => [...prev, startup]);
       } else {
         const res = await addToWatchlist(startup);
-        if (res.error) {
-          setError(`Couldn't watch ${startup.company}: ${res.error}`);
+        if (res.restore) {setRestoreNotice(res.restore); return;}
+        const failure = describeWriteFailure(res.error, "watch this company");
+        if (failure !== undefined) {
+          setError(failure);
           return;
         }
         setWatchedKeys((prev) => new Set(prev).add(key));
@@ -318,6 +328,14 @@ export default function Discover({ initialMode = "company" }: { initialMode?: "c
             </div>
           )}
 
+          {restoreMessage && <p role="status" className="mb-4 text-sm text-ink/70">{restoreMessage}</p>}
+          {restoreNotice && <RestoreCompanyReview key={restoreNotice.acknowledgementKey} notice={restoreNotice} onCancel={() => setRestoreNotice(null)} onRestored={message => {
+            const key = normalizeCompanyName(restoreNotice.company);
+            setWatchedKeys(previous => new Set(previous).add(key));
+            setStartups(previous => previous.filter(item => normalizeCompanyName(item.company) !== key));
+            setRestoreNotice(null);
+            setRestoreMessage(message);
+          }} />}
           {error && !busy && (
             <div className="rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">
               {error}

@@ -3,11 +3,13 @@ export interface SearchAttempt {
   rolesFound: number; newRoles: number; costMicrousd: number | null; costComplete: boolean;
   costStatus: "complete" | "unknown" | "running" | "unrecorded";
   error: string | null;
+  sourceUrl?: string | null; sourceRevision?: number; previousSource?: boolean;
 }
 export interface CompanySearchEvidence {
   company: string; modelRetryAfter: string | null;
   latestCheck: { method: string | null; status: string; startedAt: string } | null;
   attempts: SearchAttempt[];
+  sourceRevision?: number;
 }
 export interface PaidSearchAvailability { blocked?: string; availableCents?: number | null }
 export interface DeepSearchAdvice {
@@ -20,14 +22,17 @@ export interface DeepSearchAdvice {
 
 /** Evidence-based guidance, never a promise of jobs or a success probability. */
 export function deepSearchAdvice(evidence: CompanySearchEvidence, availability: PaidSearchAvailability, now = new Date()): DeepSearchAdvice {
-  const last = evidence.attempts[0];
-  const acknowledgementKey = JSON.stringify([last ?? null, evidence.modelRetryAfter, evidence.latestCheck]);
+  const last = evidence.attempts.find(attempt => !attempt.previousSource);
+  const acknowledgementKey = JSON.stringify([last ?? null, evidence.modelRetryAfter, evidence.latestCheck, evidence.sourceRevision]);
   const result = (state: DeepSearchAdvice["state"], label: string, reason: string, blocked = false, requiresAcknowledgement = false): DeepSearchAdvice =>
     ({ company: evidence.company, state, label, reason, blocked, requiresAcknowledgement, acknowledgementKey, attempts: evidence.attempts });
   if (availability.blocked !== undefined) return result("blocked", "Paid search is blocked", availability.blocked, true);
+  const running = evidence.attempts.find(attempt => (!attempt.finishedAt || attempt.status === "running") && now.getTime() - Date.parse(attempt.startedAt) < 30 * 60 * 1000);
   const unfinished = last && (!last.finishedAt || last.status === "running");
-  if (unfinished && now.getTime() - Date.parse(last.startedAt) < 30 * 60 * 1000)
+  if (running || evidence.latestCheck?.status === "running")
     return result("running", "Search already running", "Wait for this search to finish, then refresh its results before starting another.", true);
+  if ((evidence.sourceRevision ?? 0) > 0 && !evidence.latestCheck)
+    return result("direct", "Check the new careers page first", "The careers URL changed. Use Check now to test the new page before paying for Deep search. Earlier searches belong to the previous source.", true);
   const failed = last && (unfinished || !["ok", "partial", "empty", "unchanged"].includes(last.status));
   const paused = evidence.modelRetryAfter !== null && Date.parse(evidence.modelRetryAfter) > now.getTime();
   const direct = evidence.latestCheck?.method === "fetch" && ["ok", "empty", "unchanged"].includes(evidence.latestCheck.status);

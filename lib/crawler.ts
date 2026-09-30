@@ -660,10 +660,11 @@ export async function crawlCompany(
   // (the closing update below is itself dryRun-guarded), leaving a permanent
   // orphaned "running" row behind.
   let runId: string | null = null;
+  let sourceRevision = tracked.source_revision ?? 0;
   if (!dryRun) {
     const { data: runRows, error: crawlRunInsertError } = await supabase.forTenant(await resolveTenantId())
       .from("crawl_runs")
-      .insert({ company, status: "running" })
+      .insert({ company, status: "running", source_url: tracked.careers_url, source_revision: sourceRevision })
       .select()
       .single();
     if (crawlRunInsertError) {
@@ -701,6 +702,7 @@ export async function crawlCompany(
   let criteriaHash:string|null=null;
   let closureEligible=false;
   let modelAttempt:"none"|"success"|"failure"="none";
+  let careersUrl=tracked.careers_url;
   let snapshot:CrawlSnapshot|null=null;
   let snapshotPersisted=false;
   const listingModel=async <T,>(fn:()=>Promise<T>):Promise<T>=>{
@@ -713,7 +715,6 @@ export async function crawlCompany(
   };
   try {
     await withAIAttribution({company,crawlRunId:runId??undefined,trigger:aiAttribution().trigger??(trigger==="automatic"?"scheduled":"manual"),phase:"company_check"},async()=>{
-      let careersUrl=tracked.careers_url;
       const criteria=criteriaForCompany(ctx.criteria,tracked.ignore_location_rule);
       criteriaHash=criteriaFingerprint({criteria,fitInputs:ctx.fitInputs,profile:ctx.profile});
       const paid=paidSearchDecision({trigger,allowPaidSearch:tracked.allow_paid_search??false,modelRetryAfter:tracked.model_retry_after??null});
@@ -754,9 +755,12 @@ export async function crawlCompany(
         if(!careersUrl) {
           careersUrl=await useSearch(2,cap=>resolveCareersUrl(company,cap),"No careers URL is saved, and no usable job board was found by the direct check.");
           if(careersUrl&&!dryRun) {
-            const saved=await supabase.forTenant(tenantId).from("watchlist").update({careers_url:careersUrl}).eq("company",company);
+            const saved=await rawQuery<{source_revision: number}>(`update watchlist set careers_url=$3
+              where tenant_id=$1 and company=$2 and source_revision=$4 returning source_revision`,[tenantId,company,careersUrl,sourceRevision],tenantId);
             const failure=describeWriteFailure(saved.error?.message,"remember the careers URL");
             if(failure!==undefined) throw new Error(failure);
+            if (!saved.data.length) throw new Error("The careers page changed during this check. Run Check now for the current page.");
+            sourceRevision=saved.data[0].source_revision;
           }
         }
         if(!careersUrl) {status="needs_url";errorMessage=`Could not find a careers page for "${company}". Add one on the Watchlist.`;return;}
@@ -878,6 +882,8 @@ export async function crawlCompany(
           source_key:sourceKey,
           criteria_fingerprint:criteriaHash,
           error: errorMessage ?? null,
+          source_url: careersUrl,
+          source_revision: sourceRevision,
         })
         .eq("id", runId);
       if (crawlRunUpdateError) {
@@ -900,8 +906,8 @@ export async function crawlCompany(
               last_crawl_error = $4,
               consecutive_failures = case when $5 then 0 else consecutive_failures end,
               failing_since = case when $5 then null else failing_since end
-        where company = $1 and tenant_id = $6`,
-      [company, learnedMethod, status, errorMessage ?? null, healthy, await resolveTenantId()],
+        where company = $1 and tenant_id = $6 and source_revision = $7`,
+      [company, learnedMethod, status, errorMessage ?? null, healthy, await resolveTenantId(), sourceRevision],
       await resolveTenantId()
     );
     if (watchlistUpdateError) {
@@ -919,7 +925,7 @@ export async function crawlCompany(
         ? `${errorMessage} (also failed to record the crawl on the watchlist: ${watchlistUpdateError.message})`
         : `Crawl finished as "${priorStatus}" but the watchlist record could not be updated — ${watchlistUpdateError.message}. last_checked_at was not advanced; this company may be re-crawled prematurely.`;
     }
-    const policy=await crawlPolicyOutcome(tenantId,company,{trigger,modelAttempt,status});
+    const policy=await crawlPolicyOutcome(tenantId,company,{trigger,modelAttempt,status,sourceRevision});
     if(policy.error!==undefined) {status="error";errorMessage=policy.error;}
   }
 

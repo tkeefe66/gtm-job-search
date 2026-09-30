@@ -40,7 +40,7 @@ beforeAll(async () => {
   await db.exec(readFileSync("db/migrations/004_metering.sql", "utf8"));
   await db.exec(readFileSync("db/migrations/007_provider_routing.sql", "utf8"));
   await db.exec(readFileSync("db/migrations/028_ai_request_ledger.sql", "utf8"));
-  await db.exec(`create table watchlist(tenant_id uuid references users(id),company text,last_checked_at timestamptz,crawl_interval_days integer default 7,primary key(tenant_id,company));
+  await db.exec(`create table watchlist(tenant_id uuid references users(id),company text,source_revision int default 0,last_checked_at timestamptz,crawl_interval_days integer default 7,primary key(tenant_id,company));
     grant select,insert,update,delete on watchlist to app_rw;`);
   await db.exec(readFileSync("db/migrations/027_background_crawl_policy.sql", "utf8"));
   await db.exec(`create table app_settings (tenant_id uuid references users(id), key text, value jsonb not null, primary key(tenant_id,key));

@@ -26,5 +26,7 @@ test("eligible selections can start without an unnecessary retry checkbox",()=>{
 test("removal review names exact companies and explains reversible tracking removal",()=>{
   const html=render("remove",[advice("First"),advice("Second")]);
   expect(html).toContain("First, Second");expect(html).toContain("Remove 2 companies");
-  expect(html).toContain("Saved roles and history stay available");expect(html).toContain("Resume");
+  expect(html).toContain("Saved roles and history stay available");expect(html).toContain("Not tracked");
+  expect(html).toContain("Not interested");expect(html).toContain("Careers page problem");
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Remove 2 companies/);
 });

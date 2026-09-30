@@ -7,12 +7,14 @@ import { deepSearchAdvice, type CompanySearchEvidence, type DeepSearchAdvice } f
  * runs remain visible with unrecorded cost; request-linked runs carry measured cost. */
 export async function readCompanySearchEvidence(tenantId: string, company?: string): Promise<{ evidence: CompanySearchEvidence[]; error?: string }> {
   const { data, error } = await rawQuery<CompanySearchEvidence>(`
-    select w.company, w.model_retry_after as "modelRetryAfter",
+    select w.company, w.model_retry_after as "modelRetryAfter", w.source_revision as "sourceRevision",
       (select jsonb_build_object('method', c.method, 'status', c.status, 'startedAt', c.started_at)
-       from crawl_runs c where c.tenant_id=$1 and c.company=w.company order by c.started_at desc limit 1) as "latestCheck",
+       from crawl_runs c where c.tenant_id=$1 and c.company=w.company and c.source_revision=w.source_revision order by c.started_at desc limit 1) as "latestCheck",
       coalesce((select jsonb_agg(history.item order by history.started_at desc) from (
         select c.started_at, jsonb_build_object(
           'id', c.id, 'startedAt', c.started_at, 'finishedAt', c.finished_at, 'status', c.status,
+          'sourceUrl', c.source_url, 'sourceRevision', c.source_revision,
+          'previousSource', c.source_revision <> w.source_revision,
           'rolesFound', c.roles_found, 'newRoles', c.new_roles, 'error', c.error,
           'costStatus', case
             when not exists(select 1 from ai_usage_requests r where r.tenant_id=$1 and r.crawl_run_id=c.id and r.company=w.company) then 'unrecorded'

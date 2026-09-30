@@ -12,7 +12,9 @@ import { groupRolesByCompany } from "@/lib/group-by-company";
 import { shouldReplaceRoleView } from "@/lib/role-search-cache";
 import { describeTrackOutcome } from "@/lib/track-outcome";
 import type { RoleMatch, RoleSearchFamily } from "@/lib/types";
-import { UNDESCRIBED_DB_ERROR } from "@/lib/write-failure";
+import { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
+import RestoreCompanyReview from "./RestoreCompanyReview";
+import type {RestoreNotice} from "@/lib/watchlist-removal";
 import { Spinner, Tag } from "./ui";
 import { requestWithDeadline } from "@/lib/client-request";
 
@@ -30,6 +32,8 @@ export default function RoleSearchPanel() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trackingCompany, setTrackingCompany] = useState<string | null>(null);
+  const [restoreNotice, setRestoreNotice] = useState<RestoreNotice | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   // Maps company -> the crawl outcome trackCompanyByName produced, so the
   // badge can distinguish a clean track from one that needs attention (see
   // describeTrackOutcome). `null` means we know it succeeded but have no
@@ -130,8 +134,10 @@ export default function RoleSearchPanel() {
     setTrackError(null);
     try {
       const res = await trackCompanyByName(company);
-      if (res.error) {
-        setTrackError({ company, message: res.error });
+      if (res.restore) {setRestoreNotice(res.restore); return;}
+      const failure = describeWriteFailure(res.error, "track this company");
+      if (failure !== undefined) {
+        setTrackError({ company, message: failure });
         return;
       }
       setJustTracked((prev) => new Map(prev).set(company, res.outcome ?? null));
@@ -217,6 +223,10 @@ export default function RoleSearchPanel() {
         </div>
       )}
 
+      {restoreMessage && <p role="status" className="mb-4 text-sm text-ink/70">{restoreMessage}</p>}
+      {restoreNotice && <RestoreCompanyReview key={restoreNotice.acknowledgementKey} notice={restoreNotice} onCancel={() => setRestoreNotice(null)} onRestored={message => {
+        setJustTracked(previous => new Map(previous).set(restoreNotice.company, null)); setRestoreNotice(null);setRestoreMessage(message);
+      }} />}
       {error && !busy && (
         <div className="rounded-md border border-slate bg-white p-4 text-sm text-[#92400E]">
           {error}

@@ -16,6 +16,7 @@ import { hiringSignalSystem, buildHiringSignalPrompt } from "@/lib/hiring-signal
 import { legacySignalFrom } from "@/lib/legacy-signal";
 import { normalizeCompanyName } from "@/lib/role-key";
 import { mergeDiscoveredStartups } from "@/lib/discovered-merge";
+import {readSuppressedCompanyKeys} from "@/lib/watchlist-removal-store";
 import type { DateRange, DiscoveredStartup } from "@/lib/discovered-merge";
 
 export type { DateRange } from "@/lib/discovered-merge";
@@ -117,6 +118,8 @@ export async function getAllDiscoveredStartups(): Promise<{
 
   if (error) return { startups: [], fetchedAt: null, error: error.message };
   if (!data || data.length === 0) return { startups: [], fetchedAt: null };
+  const suppressed = await readSuppressedCompanyKeys(await resolveTenantId());
+  if (suppressed.error !== undefined) return {startups: [], fetchedAt: null, error: suppressed.error};
 
   // Ordered fetched_at DESC above, which mergeDiscoveredStartups requires:
   // the first occurrence of a key wins the card's core fields.
@@ -126,7 +129,7 @@ export async function getAllDiscoveredStartups(): Promise<{
         startups: row.startups as Startup[],
         date_range: row.date_range as string,
       }))
-    ),
+    ).filter(startup => ![startup.company, ...(startup.alsoKnownAs ?? [])].some(name => suppressed.keys.has(normalizeCompanyName(name)))),
     fetchedAt: data[0].fetched_at,
   };
 }

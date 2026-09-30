@@ -15,6 +15,7 @@ export function SearchAttemptSummary({ attempt }: { attempt: SearchAttempt }) {
   return <p className="text-xs text-ink/70">
     <time dateTime={attempt.startedAt}>{new Date(attempt.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time>
     {` · ${result} · ${attempt.newRoles} new role${attempt.newRoles === 1 ? "" : "s"} · ${searchAttemptDuration(attempt)} · ${cost}`}
+    <span className="mt-1 block break-all">{attempt.previousSource ? "Previous careers page · " : ""}{attempt.sourceUrl ?? "Careers URL was not recorded for this search"}</span>
   </p>;
 }
 

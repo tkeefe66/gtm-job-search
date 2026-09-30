@@ -31,6 +31,8 @@ import WatchlistCheckSelection from "./WatchlistCheckSelection";
 import DeepSearchControl from "./DeepSearchControl";
 import CompanySelectionCheckbox from "./CompanySelectionCheckbox";
 import WatchlistBulkReview from "./WatchlistBulkReview";
+import RestoreCompanyReview from "./RestoreCompanyReview";
+import {restorationNotice, removalReasonLabel, type RestoreNotice, type RemovalReason} from "@/lib/watchlist-removal";
 import {selectedTrackedCompanies, toggleCompanySelection} from "@/lib/watchlist-selection";
 import type { DeepSearchAdvice } from "@/lib/deep-search-advice";
 import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
@@ -109,6 +111,7 @@ export default function Watchlist() {
   const [loading, setLoading] = useState(true);
   const [newCompany, setNewCompany] = useState("");
   const [tracking, setTrackingBusy] = useState(false);
+  const [restoreNotice, setRestoreNotice] = useState<RestoreNotice | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState<WatchlistBatchProgress | null>(null);
@@ -261,6 +264,7 @@ export default function Watchlist() {
     setNotice(null);
     try {
       const res = await trackCompanyByName(name, careersUrl);
+      if (res.restore) {setRestoreNotice(res.restore); return;}
       const failure = describeWriteFailure(res.error, "track this company");
       if (failure !== undefined) setNotice(failure);
       else if (res.outcome) setNotice(`${name} is tracked. ${describe(res.outcome)}`);
@@ -405,26 +409,28 @@ export default function Watchlist() {
     finally { setBulkBusy(null); }
   }
 
-  async function removeSelectedCompanies(names: string[]) {
+  async function removeSelectedCompanies(names: string[], reason: RemovalReason) {
     if (bulkBusy || batchRunning || checking || tracking || busyRows.size > 0 || !checkLock.current.tryStart()) return;
     setBulkBusy("removing"); setNotice(null);
     try {
-      const result = await requestWithDeadline(stopTrackingCompanies(names), 15_000);
+      const result = await requestWithDeadline(stopTrackingCompanies(names, reason), 15_000);
       const failure = describeWriteFailure(result.error, "remove companies from your watchlist");
       if (failure !== undefined) { setNotice(failure); return; }
       setCompanies(previous => previous.map(item => result.removed.includes(item.company) ? {...item, tracking_enabled: false} : item));
       setSelected(previous => new Set(Array.from(previous).filter(name => !names.includes(name))));
       setBulkReview(null);
-      setNotice(`Removed ${result.removed.length} ${result.removed.length === 1 ? "company" : "companies"} from your watchlist. Saved roles and history are kept. Restore them under Not tracked using Resume.${result.removed.length < names.length ? " Some selected companies were already untracked or are no longer listed under that name." : ""}`);
+      setNotice(`Removed ${result.removed.length} ${result.removed.length === 1 ? "company" : "companies"}. ${reason === "not_interested" ? "Hidden from Discover suggestions. " : ""}Saved roles and history are kept. Restore under Not tracked.${result.removed.length < names.length ? " Some companies were already untracked or renamed." : ""}`);
       await load(true);
     } catch { setNotice("Could not confirm removal completed. Reload your watchlist to see which companies are still tracked."); }
     finally { checkLock.current.release(); setBulkBusy(null); }
   }
 
   async function handleSetTracking(company: string, enabled: boolean) {
+    if (!enabled) {setBulkReview({kind: "remove", names: [company]}); return;}
     setRowBusy(company, true);
     try {
       const res = await setTracking(company, enabled);
+      if (res.restore) setRestoreNotice(res.restore);
       const failure = describeWriteFailure(res.error, "change tracking");
       if (failure !== undefined) setNotice(failure);
       await load();
@@ -575,7 +581,7 @@ export default function Watchlist() {
     const issue = crawlIssueDisplay(c.last_crawl_status, c.last_crawl_error);
     const due = nextCheckDue(c.last_attempted_at ?? c.last_checked_at, c.crawl_interval_days, c.next_attempt_at);
     const open = openRows.has(c.company);
-    const busy = busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed;
+    const busy = tracking || busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed;
     // Whatever the tenant's own hiringSignal.extraFields named — contract_value
     // and awarding_agency for a defence contractor, bed_count for a hospital.
     const extras = displayableExtras(c.extras);
@@ -856,14 +862,14 @@ export default function Watchlist() {
             ? `${stoppedTrackingReason(c.consecutive_failures)}${
                 c.last_crawl_error ? ` Last error: ${c.last_crawl_error}` : ""
               }`
-            : "You switched checking off."}
+            : `${removalReasonLabel(c.removal_reason)}${c.removed_at ? ` · ${new Date(c.removed_at).toLocaleDateString()}` : " · Removal date not recorded"}`}
         </span>
         <button
-          onClick={() => handleSetTracking(c.company, true)}
-          disabled={busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed}
+          onClick={() => setRestoreNotice(restorationNotice(c) ?? null)}
+          disabled={tracking || busyRows.has(c.company) || batchRunning || !!bulkBusy || checkUnconfirmed}
           className="rounded-md border border-slate px-2.5 py-1 text-xs font-medium text-ink/60 transition hover:border-ink hover:text-ink disabled:opacity-50"
         >
-          Resume
+          Restore…
         </button>
       </div>
     );
@@ -1011,10 +1017,11 @@ export default function Watchlist() {
         {bulkBusy && <p className="w-full text-sm text-ink/70" role="status">{bulkBusy === "preparing" ? "Loading current Deep search recommendations…" : "Removing selected companies…"}</p>}
       </div>}
       {notice && !tracking && <div className="mb-4 rounded-md border border-slate bg-white p-3 text-sm text-ink/70" role="status">{notice}</div>}
+      {restoreNotice && <RestoreCompanyReview key={restoreNotice.acknowledgementKey} notice={restoreNotice} onBusyChange={setTrackingBusy} onCancel={() => setRestoreNotice(null)} onRestored={message => {setRestoreNotice(null); setNotice(message); setNewCompany(""); setPendingUrl(null); void load(true);}} />}
       {bulkReview && <div id="watchlist-bulk-review" className="scroll-mt-48 sm:scroll-mt-28">
         <WatchlistBulkReview key={`${bulkReview.kind}:${JSON.stringify(bulkReview.names)}`} kind={bulkReview.kind} names={bulkReview.names}
           advice={searchAdvice} busy={selectionBusy} onCancel={() => setBulkReview(null)} onReview={reviewCompany}
-          onRemove={() => void removeSelectedCompanies(bulkReview.names)}
+          onRemove={reason => void removeSelectedCompanies(bulkReview.names, reason)}
           onSearch={ready => void handleBatchCheck(ready.map(item => item.company), "deep", Object.fromEntries(ready.map(item => [item.company, item.acknowledgementKey ?? ""])))} />
       </div>}
 

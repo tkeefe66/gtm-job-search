@@ -26,7 +26,7 @@ export function modelBackoff(failures: number, retryAfter: string | null, attemp
 
 /** Model backoff never blocks direct collection and never changes page-health evidence. */
 export async function crawlPolicyOutcome(tenantId: string, company: string, input: {
-  trigger: CrawlTrigger; modelAttempt: ModelAttempt; status: CrawlStatus; now?: Date;
+  trigger: CrawlTrigger; modelAttempt: ModelAttempt; status: CrawlStatus; now?: Date; sourceRevision?: number;
 }): Promise<{ error?: string }> {
   const now = input.now ?? new Date();
   const successful = input.status === "ok" || input.status === "empty" || input.status === "unchanged";
@@ -40,6 +40,6 @@ export async function crawlPolicyOutcome(tenantId: string, company: string, inpu
            when consecutive_model_failures + 1 = 2 then $3::timestamptz + interval '7 days'
            when consecutive_model_failures + 1 = 3 then $3::timestamptz + interval '14 days'
            else $3::timestamptz + interval '30 days' end else model_retry_after end
-    where tenant_id = $1 and company = $2`, [tenantId, company, now.toISOString(), successful, input.modelAttempt], tenantId);
+    where tenant_id = $1 and company = $2 and ($6::integer is null or source_revision=$6)`, [tenantId, company, now.toISOString(), successful, input.modelAttempt, input.sourceRevision ?? null], tenantId);
   return { error: describeWriteFailure(error?.message, "record the company's next check") };
 }

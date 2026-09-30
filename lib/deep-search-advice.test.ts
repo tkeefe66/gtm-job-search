@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import { deepSearchAdvice, type CompanySearchEvidence, type SearchAttempt } from "./deep-search-advice";
 
+// Mutation: a new-source direct check's running row counts as a completed assessment.
+test("Deep waits for an in-progress direct check on a changed careers page", () => {
+  expect(deepSearchAdvice({company:"Example",modelRetryAfter:null,sourceRevision:1,attempts:[],latestCheck:{method:null,status:"running",startedAt:new Date().toISOString()}},{})).toMatchObject({state:"running",blocked:true});
+});
+
 const now = new Date("2026-09-30T15:00:00Z");
 const attempt = (changes: Partial<SearchAttempt> = {}): SearchAttempt => ({
   id: "run", startedAt: "2026-09-30T14:00:00Z", finishedAt: "2026-09-30T14:02:00Z",

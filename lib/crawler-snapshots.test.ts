@@ -2,7 +2,7 @@ import {beforeEach,expect,test,vi} from "vitest";
 const state=vi.hoisted(()=>({tracked:{company:"Example",careers_url:"https://example.test/careers",tracking_enabled:true,ignore_location_rule:false,allow_paid_search:false},
   writes:[] as {table:string;patch:Record<string,unknown>;filters:Record<string,unknown>}[],scope:{searches:0}}));
 vi.mock("./tenant",()=>({resolveTenantId:async()=>"tenant"}));
-vi.mock("./supabase",()=>({rawQuery:vi.fn(async()=>({data:[],error:null})),supabase:{forTenant:()=>({from:(table:string)=>{
+vi.mock("./supabase",()=>({rawQuery:vi.fn(async(sql:string)=>({data:sql.includes("returning source_revision")?[{source_revision:1}]:[],error:null})),supabase:{forTenant:()=>({from:(table:string)=>{
   let patch:Record<string,unknown>|undefined; const filters:Record<string,unknown>={};
   const chain:any={select:()=>chain,insert:(value:Record<string,unknown>)=>{state.writes.push({table,patch:value,filters});return chain;},
     update:(value:Record<string,unknown>)=>{patch=value;return chain;},eq:(key:string,value:unknown)=>{filters[key]=value;return chain;},
@@ -59,7 +59,7 @@ beforeEach(()=>{
     const snapshot=snapshots.slice().reverse().find(item=>(!source||item.sourceKey===source)&&(!criteria||item.criteriaHash===criteria));
     return snapshot?structuredClone(snapshot):null;
   });
-  vi.mocked(rawQuery).mockResolvedValue({data:[],error:null});
+  vi.mocked(rawQuery).mockImplementation(async(sql:string)=>({data:sql.includes("returning source_revision")?[{source_revision:1}]:[],error:null}));
   vi.mocked(saveCrawlSnapshot).mockImplementation(async(_t,_c,snapshot)=>{snapshots.push(structuredClone(snapshot));});
 });
 

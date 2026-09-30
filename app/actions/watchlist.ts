@@ -21,6 +21,7 @@ import { withBudget } from "@/lib/metered";
 import { rawQuery, supabase } from "@/lib/supabase";
 import { UNDESCRIBED_DB_ERROR, describeWriteFailure } from "@/lib/write-failure";
 import type { Startup, TrackedCompany } from "@/lib/types";
+import { restorationNotice, validRemovalReason, type RemovalRecord, type RemovalReason, type RestoreNotice } from "@/lib/watchlist-removal";
 
 // Company identity across this file is resolved case-insensitively using a
 // SINGLE normalizer — normalizeCompanyName (lib/role-key.ts) — for every
@@ -45,10 +46,7 @@ import type { Startup, TrackedCompany } from "@/lib/types";
 // is the same normalizer every other TS-side company-identity comparison in
 // this codebase uses. Do not "optimize" this back into a `lower()` query —
 // that reintroduces the exact bug this comment describes.
-interface ExistingCompanyRow {
-  company: string;
-  careers_url: string | null;
-}
+interface ExistingCompanyRow extends RemovalRecord {}
 
 interface ResolvedCompany {
   row: ExistingCompanyRow;
@@ -76,7 +74,7 @@ interface ResolvedCompany {
 async function resolveExistingCompany(name: string): Promise<ResolvedCompany> {
   const trimmed = name.trim();
   const { data, error } = await rawQuery<ExistingCompanyRow>(
-    `select company, careers_url from watchlist where tenant_id = $1`,
+    `select company, careers_url, tracking_enabled, removal_reason, removed_at::text as removed_at from watchlist where tenant_id = $1`,
     [await resolveTenantId()],
     await resolveTenantId()
   );
@@ -220,7 +218,7 @@ async function quotaBlocks(): Promise<string | null> {
   return verdict.allow ? null : (verdict.reason ?? "Tracking limit reached.");
 }
 
-export async function addToWatchlist(startup: Startup): Promise<{ error?: string }> {
+export async function addToWatchlist(startup: Startup): Promise<{ error?: string; restore?: RestoreNotice }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
@@ -242,6 +240,8 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   if (readFailed) {
     return { error: readFailureError(startup.company.trim(), "watching") };
   }
+  const restore = restorationNotice(existing);
+  if (restore) return {restore};
 
   // Discover's prompt (app/actions/discover.ts:82) explicitly allows an
   // empty string for careers_url ("best guess ... or empty string"), and
@@ -286,7 +286,8 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
     signal,
     extras,
     source: "discover",
-    tracking_enabled: true,
+    // INSERT defaults to active; an UPSERT must never reactivate a stopped row,
+    // including a removal racing this request. Only restoreTrackedCompany may.
     consecutive_failures: 0,
   };
   if (careersUrl !== undefined) {
@@ -296,7 +297,10 @@ export async function addToWatchlist(startup: Startup): Promise<{ error?: string
   }
 
   const { error } = await supabase.forTenant(await resolveTenantId()).from("watchlist").upsert(payload, { onConflict: "tenant_id,company" });
-  return { error: error?.message };
+  if (error) return {error: error.message};
+  const current = await resolveExistingCompany(existing.company);
+  if (current.readFailed) return {error: "Could not confirm tracking. Reload your watchlist before trying again."};
+  return {restore: restorationNotice(current.row)};
 }
 
 // Exported as the explicit hard-delete (setTracking(company, false) is the
@@ -384,10 +388,12 @@ export async function getTrackedCompanies(): Promise<{
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
-  const { data, error } = await supabase.forTenant(await resolveTenantId())
-    .from("watchlist")
-    .select("*")
-    .order("added_at", { ascending: false });
+  const tenantId = await resolveTenantId();
+  // Use the same full-precision token as resolveExistingCompany; the default
+  // timestamp parser discards PostgreSQL microseconds and breaks restore CAS.
+  const { data, error } = await rawQuery<TrackedCompany>(
+    `select w.*, removed_at::text as removed_at from watchlist w where tenant_id=$1 order by added_at desc`,
+    [tenantId], tenantId);
   if (error) return { companies: [], error: error.message };
   return { companies: (data ?? []) as TrackedCompany[] };
 }
@@ -406,7 +412,7 @@ export async function trackCompanyByName(
    * like every other careers_url write: a URL already stored wins.
    */
   careersUrl?: string
-): Promise<{ outcome?: CrawlOutcome; error?: string }> {
+): Promise<{ outcome?: CrawlOutcome; error?: string; restore?: RestoreNotice }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
@@ -463,6 +469,8 @@ export async function trackCompanyByName(
   if (readFailed) {
     return { error: readFailureError(trimmed, "tracking") };
   }
+  const restore = restorationNotice(existingRow);
+  if (restore) return {restore};
 
   // Same precedence every other careers_url write obeys: a URL already stored
   // was very possibly typed by hand to rescue a broken crawl, and must not be
@@ -477,7 +485,7 @@ export async function trackCompanyByName(
     {
       company,
       source: "manual",
-      tracking_enabled: true,
+      // Default true on insert, preserved on conflict. Re-add never restores.
       consecutive_failures: 0,
       // Spread, not a null: omitting the column leaves a stored URL alone,
       // where writing undefined/null would erase it.
@@ -498,6 +506,10 @@ export async function trackCompanyByName(
   if (error) {
     return { error: `Could not track "${company}" — ${error.message}` };
   }
+  const current = await resolveExistingCompany(company);
+  if (current.readFailed) return {error: "Could not confirm tracking. Reload your watchlist before trying again."};
+  const stopped = restorationNotice(current.row);
+  if (stopped) return {restore: stopped};
 
   // Metered for the same reason checkCompanyNow is: tracking a company runs a
   // full crawl immediately, and an unmetered one bills the platform key.
@@ -653,7 +665,7 @@ export async function renameTrackedCompany(
 export async function setTracking(
   company: string,
   enabled: boolean
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; restore?: RestoreNotice }> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   await requireActor();
@@ -666,7 +678,16 @@ export async function setTracking(
   }
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
+  if (enabled) {
+    const current = await resolveExistingCompany(company);
+    if (current.readFailed) return {error: readFailureError(company, "restoring")};
+    const restore = restorationNotice(current.row);
+    if (restore) return {restore};
+    return {};
+  }
   const patch: Record<string, unknown> = { tracking_enabled: enabled };
+  patch.removal_reason = "stopped";
+  patch.removed_at = new Date().toISOString();
   if (enabled) patch.consecutive_failures = 0;
   // Cleared whichever way the switch went. Turning tracking ON restarts from a
   // clean slate; turning it OFF by hand must not leave the row looking like one
@@ -676,25 +697,56 @@ export async function setTracking(
   const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update(patch)
-    .eq("company", target.company);
+    .eq("company", target.company)
+    .eq("tracking_enabled", true);
   return { error: error?.message };
 }
 
 /** Reversible removal from active tracking; saved roles and company history remain. */
-export async function stopTrackingCompanies(companies: string[]): Promise<{removed: string[]; error?: string}> {
+export async function stopTrackingCompanies(companies: string[], reason: RemovalReason = "stopped"): Promise<{removed: string[]; error?: string}> {
   const actor = await requireActor();
+  if (!validRemovalReason(reason)) return {removed: [], error: "Choose why you are removing these companies."};
   if (!Array.isArray(companies) || companies.length > 500 || companies.some(name => typeof name !== "string" || !name.trim()))
     return {removed: [], error: "Select up to 500 named companies from your watchlist."};
   const names = Array.from(new Set(companies));
   if (names.length === 0) return {removed: []};
   const {data, error} = await rawQuery<{company: string}>(`
-    update watchlist set tracking_enabled=false, failing_since=null
+    update watchlist set tracking_enabled=false, failing_since=null, removal_reason=$3, removed_at=now()
     where tenant_id=$1 and company=any($2::text[]) and tracking_enabled=true
     returning company
-  `, [actor.tenantId, names], actor.tenantId);
+  `, [actor.tenantId, names, reason], actor.tenantId);
   if (error !== null) return {removed: [], error: error.message};
   console.info("watchlist: stopped selected companies", {count: data.length});
   return {removed: data.map(row => row.company)};
+}
+
+/** Explicit restoration after reviewing the current removal, with optional source repair. */
+export async function restoreTrackedCompany(company: string, acknowledgementKey: string, careersUrl?: string): Promise<{error?: string; restore?: RestoreNotice}> {
+  const actor = await requireActor();
+  const current = await resolveExistingCompany(company);
+  if (current.readFailed) return {error: readFailureError(company, "restoring")};
+  if (!current.found) return {error: "This company is no longer on your watchlist. Refresh the list."};
+  const notice = restorationNotice(current.row);
+  if (!notice) return {error: "This company is already being tracked. Refresh the list to edit its current careers page."};
+  if (notice.acknowledgementKey !== acknowledgementKey) return {restore: notice, error: "This company's removal or careers URL changed. Review it again before restoring."};
+  const blocked = await quotaBlocks();
+  if (blocked) return {error: blocked};
+  const url = careersUrl?.trim();
+  if (url !== undefined && !/^https?:\/\//i.test(url)) return {error: "Enter a full careers URL starting with http:// or https://."};
+  const {data, error} = await rawQuery<{company: string}>(`
+    update watchlist set tracking_enabled=true,
+      consecutive_failures=0, failing_since=null, allow_paid_search=false,
+      careers_url=coalesce($6::text,careers_url)
+    where tenant_id=$1 and company=$2 and tracking_enabled=false
+      and removal_reason is not distinct from $3::text
+      and removed_at is not distinct from $4::timestamptz
+      and careers_url is not distinct from $5::text
+    returning company
+  `, [actor.tenantId, current.row.company, notice.reason, notice.removedAt, notice.careersUrl, url ?? null], actor.tenantId);
+  if (error) return {error: error.message};
+  if (!data.length) return {error: "The company changed while restoring. Refresh and review it again."};
+  console.info("watchlist: restored company", {company: current.row.company, sourceUpdated: url !== undefined && url !== notice.careersUrl});
+  return {};
 }
 
 export async function setIgnoreLocationRule(
@@ -728,6 +780,7 @@ export async function setCareersUrl(
   }
   const target = await resolveWriteTarget(company);
   if (target.error) return { error: target.error };
+  if (target.careers_url === trimmed) return {};
   const { error } = await supabase.forTenant(await resolveTenantId())
     .from("watchlist")
     .update({
