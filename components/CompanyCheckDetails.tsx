@@ -28,7 +28,7 @@ export default function CompanyCheckDetails({ company, summary, costError }: {
       <p className="mt-1">{issue.explanation}</p>
       <p className="mt-1"><span className="font-medium">Next step: </span>{issue.nextStep}</p>
     </div>}
-    {company.model_retry_after && new Date(company.model_retry_after).getTime() > Date.now() && <p className="mt-2 text-[#92400E]">Automatic paid search is waiting until {date(company.model_retry_after)} after unsuccessful attempts. Direct checks continue; Deep search can retry now.</p>}
+    {company.model_retry_after && new Date(company.model_retry_after).getTime() > Date.now() && <p className="mt-2 text-[#92400E]">Automatic paid search is waiting until {date(company.model_retry_after)} after unsuccessful attempts. Review the Deep search recommendation below before retrying.</p>}
     {costError ? <p className="mt-2 text-[#92400E]" role="alert">{costError}</p> : costs.uncertainty && <p className="mt-2 text-[#92400E]">{costs.uncertainty}</p>}
     <p className="mt-2 text-ink/40">Costs cover requests recorded with this company. Earlier checks without cost records are not shown as free.</p>
   </div>;

@@ -70,6 +70,7 @@ vi.mock("@/lib/supabase", () => ({
   },
 }));
 vi.mock("@/lib/crawler", () => ({ crawlCompany: vi.fn() }));
+vi.mock("@/lib/deep-search-store", () => ({ loadDeepSearchAdvice: vi.fn() }));
 
 import {
   addToWatchlist,
@@ -84,6 +85,7 @@ import {
 } from "./watchlist";
 import { crawlCompany } from "@/lib/crawler";
 import { rawQuery } from "@/lib/supabase";
+import { loadDeepSearchAdvice } from "@/lib/deep-search-store";
 import type { Startup } from "@/lib/types";
 
 const query = vi.mocked(rawQuery);
@@ -468,9 +470,28 @@ test("automatic paid-search setting reports an empty-message database failure",a
 
 // Mutation: manual ordinary checks or initial tracking inherit Deep search permission.
 test("check and deep actions pass distinct explicit modes to the crawler",async()=>{
+  vi.mocked(loadDeepSearchAdvice).mockResolvedValue({advice:[{company:"Synthetic Co",state:"untested",label:"Untested fallback",reason:"No history",blocked:false,requiresAcknowledgement:false,acknowledgementKey:"untested",attempts:[]}]});
   crawl.mockResolvedValue({company:"Synthetic Co",method:null,status:"skipped",rolesFound:0,newRoles:0});
   await checkCompanyNow("Synthetic Co");
   expect(crawl).toHaveBeenLastCalledWith("Synthetic Co",{trigger:"check"});
   await checkCompanyNow("Synthetic Co","deep");
   expect(crawl).toHaveBeenLastCalledWith("Synthetic Co",{trigger:"deep"});
+});
+
+// Mutation: the UI checkbox exists but the RPC still dispatches paid work without it.
+test("Deep search requires acknowledgement of the latest result and refuses stale approval", async () => {
+  vi.mocked(loadDeepSearchAdvice).mockResolvedValue({advice:[{company:"Synthetic Co",state:"retry",label:"Retry not recommended",reason:"Last search failed.",blocked:false,requiresAcknowledgement:true,acknowledgementKey:"latest-result",attempts:[]}]});
+  expect((await checkCompanyNow("Synthetic Co","deep")).error).toContain("retry checkbox");
+  expect((await checkCompanyNow("Synthetic Co","deep","older-result")).error).toContain("latest recommendation");
+  expect(crawl).not.toHaveBeenCalled();
+  await checkCompanyNow("Synthetic Co","deep","latest-result");
+  expect(crawl).toHaveBeenCalledWith("Synthetic Co",{trigger:"deep"});
+});
+
+test("acknowledgement cannot bypass an account block or an empty-message evidence failure", async () => {
+  vi.mocked(loadDeepSearchAdvice).mockResolvedValue({advice:[{company:"Synthetic Co",state:"blocked",label:"Blocked",reason:"Daily allowance reached.",blocked:true,requiresAcknowledgement:false,acknowledgementKey:"latest-result",attempts:[]}]});
+  expect((await checkCompanyNow("Synthetic Co","deep","latest-result")).error).toContain("Daily allowance");
+  vi.mocked(loadDeepSearchAdvice).mockResolvedValue({advice:[],error:""});
+  expect((await checkCompanyNow("Synthetic Co","deep","latest-result")).error).toContain("Could not check Deep search readiness");
+  expect(crawl).not.toHaveBeenCalled();
 });

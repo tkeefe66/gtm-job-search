@@ -13,6 +13,7 @@ import type { Completion } from "@/lib/providers/types";
 import { SearchUnavailableError, SpendLimitReachedError } from "@/lib/model-call";
 import { aiAttribution } from "./ai-attribution";
 import { AIBillingPersistenceError, beginAIRequest, finishAIRequest, markAIRequestUnknown, exactCompletionCost, recoverStaleAIOperations } from "./ai-ledger";
+import type { PaidSearchAvailability } from "./deep-search-advice";
 
 export interface MeteredResult<T> { result?: T; capped?: string; error?: string }
 interface BudgetOptions<T> {
@@ -23,6 +24,30 @@ function limitMessage(tier: Tier, scope: "overall"|"background", reason:"daily"|
   return scope === "background"
     ? `Paid background work is paused by the $${(ceiling/100).toFixed(2)} ${reason} background allowance. Change it in Settings or wait until ${resetsOn(reason,now)} (UTC). Direct checks remain available.`
     : cappedMessage({tier,reason,ceilingCents:ceiling,resetsOn:resetsOn(reason,now)});
+}
+
+/** Read the current key and allowance without reserving money or calling a provider. */
+export async function readPaidSearchAvailability(tenantId: string, isAdmin: boolean, now = new Date()): Promise<PaidSearchAvailability & { error?: string }> {
+  const lookup = await loadTenantKey(tenantId);
+  if (!lookup.ok) return { error: lookup.error };
+  const tier = resolveTier({ isAdmin, hasOwnKey: lookup.key !== null });
+  if (tier === "none" || (tier === "admin" && lookup.key === null && !process.env.ANTHROPIC_API_KEY))
+    return { blocked: "Add a usable AI provider key in Settings before running paid search." };
+  const current = await readSpendLimits(tenantId, tier === "admin");
+  if (current.error !== undefined) return { error: current.error };
+  let available = Infinity;
+  for (const window of ["daily", "monthly"] as const) {
+    const ceiling = window === "daily" ? current.limits.dailyCents : current.limits.monthlyCents;
+    if (ceiling === null) continue;
+    const spent = await readSpent(tenantId, now, window);
+    const error = describeWriteFailure(spent.error, "check your spending allowance");
+    if (error !== undefined) return { error };
+    available = Math.min(available, ceiling - spent.spentCents!);
+    // Match the 10-cent initial reservation in checkCompanyNow; this is not a price quote.
+    if (spent.spentCents! + 10 > ceiling)
+      return { blocked: limitMessage(tier, "overall", window, ceiling, now), availableCents: Math.max(0, available) };
+  }
+  return { availableCents: available === Infinity ? null : Math.max(0, available) };
 }
 
 export async function withBudget<T>(opts: BudgetOptions<T>): Promise<MeteredResult<T>> {

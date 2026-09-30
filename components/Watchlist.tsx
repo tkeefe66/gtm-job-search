@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   checkCompanyNow,
   getCompanySpendSummaries,
+  getDeepSearchAdvice,
   getTrackedCompanies,
   renameTrackedCompany,
   setCareersUrl,
@@ -26,6 +27,8 @@ import { Spinner, Tag } from "./ui";
 import CompanyCheckDetails from "./CompanyCheckDetails";
 import WatchlistBatchResults from "./WatchlistBatchResults";
 import WatchlistCheckSelection from "./WatchlistCheckSelection";
+import DeepSearchControl from "./DeepSearchControl";
+import type { DeepSearchAdvice } from "@/lib/deep-search-advice";
 import { crawlIssueDisplay, crawlOutcomeText } from "@/lib/watchlist-display";
 import { describeWriteFailure } from "@/lib/write-failure";
 import { requestWithDeadline } from "@/lib/client-request";
@@ -93,6 +96,8 @@ export default function Watchlist() {
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
   const [costs, setCosts] = useState<CompanySpendSummary[]>([]);
   const [costError, setCostError] = useState<string | null>(null);
+  const [searchAdvice, setSearchAdvice] = useState<DeepSearchAdvice[]>([]);
+  const [searchAdviceError, setSearchAdviceError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [newCompany, setNewCompany] = useState("");
   const [tracking, setTrackingBusy] = useState(false);
@@ -176,9 +181,10 @@ export default function Watchlist() {
   async function load(quiet = false) {
     if (!quiet) setLoading(true);
     try {
-      const [list, spending] = await Promise.allSettled([
+      const [list, spending, readiness] = await Promise.allSettled([
         requestWithDeadline(getTrackedCompanies(), 15_000),
         requestWithDeadline(getCompanySpendSummaries(), 15_000),
+        requestWithDeadline(getDeepSearchAdvice(), 15_000),
       ]);
       if (!mounted.current) return;
       if (list.status === "rejected") setNotice("Could not load your list. Refresh and try again.");
@@ -192,6 +198,14 @@ export default function Watchlist() {
         const failure = describeWriteFailure(spending.value.error, "load company costs");
         setCostError(failure ?? null);
         setCosts(failure === undefined ? spending.value.summaries : []);
+      }
+      if (readiness.status === "rejected") {
+        setSearchAdvice([]);
+        setSearchAdviceError("Could not load search history and allowance. Refresh the recommendation before paid search.");
+      } else {
+        const failure = describeWriteFailure(readiness.value.error, "load Deep search recommendations");
+        setSearchAdviceError(failure ?? null);
+        setSearchAdvice(failure === undefined ? readiness.value.advice : []);
       }
     } finally { if (mounted.current && !quiet) setLoading(false); }
   }
@@ -274,12 +288,12 @@ export default function Watchlist() {
     }
   }
 
-  async function handleCheckNow(company: string, trigger: "check" | "deep" = "check") {
+  async function handleCheckNow(company: string, trigger: "check" | "deep" = "check", acknowledgementKey?: string) {
     if (!checkLock.current.tryStart()) return;
     setChecking(company);
     setNotice(null);
     try {
-      const outcome = await requestWithDeadline(checkCompanyNow(company, trigger));
+      const outcome = await requestWithDeadline(checkCompanyNow(company, trigger, acknowledgementKey));
       setNotice(`${company}: ${describe(outcome)}`);
       await load();
     } catch {
@@ -479,6 +493,7 @@ export default function Watchlist() {
 
   /** The one line every tracked company gets. */
   function renderRow(c: TrackedCompany, i: number) {
+    const advice = searchAdvice.find(item => item.company === c.company);
     const state = stateOf(c);
     const style = STATE_STYLE[state];
     const issue = crawlIssueDisplay(c.last_crawl_status, c.last_crawl_error);
@@ -707,10 +722,6 @@ export default function Watchlist() {
               >
                 {checking === c.company ? "Checking…" : "Check now"}
               </button>
-              <button onClick={() => void handleCheckNow(c.company, "deep")} disabled={!!checking || busy}
-                className="rounded-md border border-slate px-3 py-1.5 text-sm font-medium transition hover:border-ink disabled:opacity-50">
-                Deep search · up to 5 paid searches
-              </button>
               {c.careers_url && (
                 <a
                   href={c.careers_url}
@@ -730,7 +741,12 @@ export default function Watchlist() {
                 Stop tracking
               </button>
             </div>
-            <p className="mt-2 text-xs text-ink/45">Check now reads direct sources. Deep search can use paid web search when needed. Processing new or changed listings may use AI.</p>
+            <p className="mt-2 text-xs text-ink/60">Check now reads direct sources. Processing new or changed listings may use AI.</p>
+            <DeepSearchControl
+              key={`${c.company}:${advice?.acknowledgementKey}:${advice?.state}:${searchAdviceError}`}
+              advice={advice} error={searchAdviceError}
+              busy={!!checking || busy || checkUnconfirmed || loading}
+              onSearch={acknowledged => void handleCheckNow(c.company, "deep", acknowledged)} onRefresh={() => void load(true)} />
           </div>
         )}
       </div>

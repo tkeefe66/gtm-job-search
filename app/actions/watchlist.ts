@@ -13,6 +13,8 @@ import { normalizeCompanyName, companyIdentityKey } from "@/lib/role-key";
 import { watchlistSignalFields } from "@/lib/watchlist-signal";
 import { withAIAttribution } from "@/lib/ai-attribution";
 import { readCompanySpendSummaries, type CompanySpendSummary } from "@/lib/ai-ledger";
+import { loadDeepSearchAdvice } from "@/lib/deep-search-store";
+import type { DeepSearchAdvice } from "@/lib/deep-search-advice";
 import type { CrawlTrigger } from "@/lib/crawl-policy";
 export type { CompanySpendSummary } from "@/lib/ai-ledger";
 import { withBudget } from "@/lib/metered";
@@ -745,12 +747,23 @@ export async function setCareersUrl(
  * `estimateCents: 10` matches the per-company figure the cron route uses
  * (`10 * slice.limit` for a batch).
  */
-export async function checkCompanyNow(company: string, trigger: "check" | "deep" = "check"): Promise<CrawlOutcome> {
+export async function checkCompanyNow(company: string, trigger: "check" | "deep" = "check", acknowledgementKey?: string): Promise<CrawlOutcome> {
   // Session required. Server Actions are RPC endpoints addressed by an ID that
   // ships in the client bundle, so a page-level check does not cover them.
   const actor = await requireActor();
 
   const mode: CrawlTrigger = trigger === "deep" ? "deep" : "check";
+  if (mode === "deep") {
+    const readiness = await loadDeepSearchAdvice(actor.tenantId, actor.isAdmin, company);
+    const failure = describeWriteFailure(readiness.error, "check Deep search readiness");
+    if (failure !== undefined) return refusedCrawl(company, failure);
+    const advice = readiness.advice[0];
+    if (!advice) return refusedCrawl(company, "Refresh the watchlist before starting a Deep search for this company.");
+    if (advice.blocked || (advice.requiresAcknowledgement && acknowledgementKey !== advice.acknowledgementKey)) {
+      console.info("watchlist.deep: request paused before paid work", { company, state: advice.state });
+      return refusedCrawl(company, `${advice.reason}${advice.requiresAcknowledgement ? " Review the latest recommendation and select the retry checkbox to continue." : ""}`);
+    }
+  }
   const budget = await withAIAttribution({company,trigger:"manual"}, () => withBudget({
     action: "crawl-now",
     allowFreeWork: true,
@@ -883,4 +896,9 @@ export async function setAutomaticPaidSearch(company:string, enabled:boolean):Pr
 export async function getCompanySpendSummaries():Promise<{summaries:CompanySpendSummary[];error?:string}> {
   const actor=await requireActor();
   return readCompanySpendSummaries(actor.tenantId);
+}
+
+export async function getDeepSearchAdvice(): Promise<{ advice: DeepSearchAdvice[]; error?: string }> {
+  const actor = await requireActor();
+  return loadDeepSearchAdvice(actor.tenantId, actor.isAdmin);
 }
